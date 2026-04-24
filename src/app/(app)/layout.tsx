@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Menu } from 'lucide-react';
 import Sidebar from '@/components/layout/Sidebar';
 import GlobalSearch from '@/components/shared/GlobalSearch';
+import ChatAssistant from '@/components/shared/ChatAssistant';
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -50,6 +51,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           {children}
         </main>
       </div>
+
+      <ChatAssistant />
     </div>
   );
 }
