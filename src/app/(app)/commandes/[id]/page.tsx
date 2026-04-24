@@ -331,6 +331,43 @@ export default function CommandeDetailPage() {
     onError: (e: Error) => toast.error(e.message),
   });
 
+  const fillPrixMutation = useMutation({
+    mutationFn: async () => {
+      const { data: sansPrix } = await supabase
+        .from('lignes_commande')
+        .select('id, reference_article, quantite_commandee')
+        .eq('commande_id', id)
+        .is('pu_commande', null)
+        .not('reference_article', 'is', null);
+
+      let remplis = 0;
+      const fournPrefix = (commande?.fournisseur ?? '').slice(0, 6);
+      for (const ligne of sansPrix ?? []) {
+        const { data: prix } = await supabase
+          .from('prix_reference')
+          .select('pu_last')
+          .eq('reference_article', ligne.reference_article)
+          .ilike('fournisseur', `%${fournPrefix}%`)
+          .maybeSingle();
+        if (prix) {
+          await supabase.from('lignes_commande').update({
+            pu_commande: prix.pu_last,
+            montant_ht_commande: ligne.quantite_commandee * prix.pu_last,
+          }).eq('id', ligne.id);
+          remplis++;
+        }
+      }
+      return remplis;
+    },
+    onSuccess: (n) => {
+      qc.invalidateQueries({ queryKey: ['lignes_commande', id] });
+      qc.invalidateQueries({ queryKey: ['commande', id] });
+      if (n > 0) toast.success(`${n} prix complété${n > 1 ? 's' : ''} depuis le catalogue`);
+      else toast.info('Aucun prix trouvé dans le catalogue pour les lignes sans prix');
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
   const linkBEMutation = useMutation({
     mutationFn: async (beId: string) => {
       const r = await fetch('/api/link-be-commande', {
@@ -647,6 +684,18 @@ export default function CommandeDetailPage() {
                 HT €
               </button>
             </div>
+            {lignes.some(l => l.pu_commande == null) && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="text-indigo-600 border-indigo-200 hover:bg-indigo-50"
+                onClick={() => fillPrixMutation.mutate()}
+                disabled={fillPrixMutation.isPending}
+                title="Remplir les prix manquants depuis le catalogue"
+              >
+                {fillPrixMutation.isPending ? 'Complétion…' : '✦ Compléter les prix'}
+              </Button>
+            )}
             <Button size="sm" variant="outline" onClick={() => setShowAddLine(v => !v)}>
               <Plus className="w-3.5 h-3.5 mr-1" /> Ajouter
             </Button>

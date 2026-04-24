@@ -88,20 +88,36 @@ async function importCommande(
 
   // Lignes
   if (parsed.lignes.length > 0) {
-    await sb.from('lignes_commande').insert(
+    const { data: insertedLines } = await sb.from('lignes_commande').insert(
       parsed.lignes.map((l, i) => ({
         commande_id: cmd.id,
         ligne_no: i + 1,
         reference_article: l.reference_article,
         designation: l.designation,
         quantite_commandee: l.quantite_commandee,
-        pu_commande: l.pu_commande,
+        pu_commande: l.pu_commande ?? null,
         quantite_receptionnee_reelle: 0,
         quantite_facturee: 0,
         quantite_restante_a_recevoir: l.quantite_commandee,
         quantite_restante_a_facturer: l.quantite_commandee,
       })),
-    );
+    ).select('id, reference_article, quantite_commandee, pu_commande');
+
+    // Compléter les prix manquants depuis le catalogue
+    const sansPrix = (insertedLines ?? []).filter(l => l.pu_commande == null && l.reference_article);
+    for (const ligne of sansPrix) {
+      const { data: prix } = await sb.from('prix_reference')
+        .select('pu_last')
+        .eq('reference_article', ligne.reference_article)
+        .ilike('fournisseur', `%${(parsed.fournisseur ?? '').slice(0, 6)}%`)
+        .maybeSingle();
+      if (prix) {
+        await sb.from('lignes_commande').update({
+          pu_commande: prix.pu_last,
+          montant_ht_commande: ligne.quantite_commandee * prix.pu_last,
+        }).eq('id', ligne.id);
+      }
+    }
   }
 
   await sb.from('journal_activite').insert({
