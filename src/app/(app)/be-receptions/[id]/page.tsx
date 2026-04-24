@@ -13,7 +13,7 @@ import { formatEur, formatDate, cn } from '@/utils';
 import {
   ArrowLeft, ExternalLink, Edit2, Save, X, MessageSquare,
   Link2, Unlink, Plus, FileText, ShoppingCart, AlertTriangle,
-  Mail, Trash2, UserPlus, Send, History
+  Mail, Trash2, UserPlus, Send, History, Ban, RotateCcw
 } from 'lucide-react';
 import PDFViewerPanel from '@/components/shared/PDFViewerPanel';
 import { toast } from 'sonner';
@@ -197,9 +197,10 @@ export default function BEDetailPage() {
 
   // ── KPIs ──────────────────────────────────────────────────────────────────
   const kpis = useMemo(() => {
-    const qteRecue = lignes.reduce((s, l) => s + (l.quantite_receptionnee ?? 0), 0);
-    const qteFact = lignes.reduce((s, l) => s + (l.quantite_facturee ?? 0), 0);
-    const qteReste = lignes.reduce((s, l) => s + (l.quantite_restante_a_facturer ?? 0), 0);
+    const lignesActives = lignes.filter(l => !l.hors_systeme);
+    const qteRecue = lignesActives.reduce((s, l) => s + (l.quantite_receptionnee ?? 0), 0);
+    const qteFact = lignesActives.reduce((s, l) => s + (l.quantite_facturee ?? 0), 0);
+    const qteReste = lignesActives.reduce((s, l) => s + (l.quantite_restante_a_facturer ?? 0), 0);
     return { qteRecue, qteFact, qteReste };
   }, [lignes]);
 
@@ -345,6 +346,18 @@ export default function BEDetailPage() {
       if (error) throw error;
     },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['lignes_be', id] }); setEditingLineNotes(null); },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const toggleHorsSystemeMutation = useMutation({
+    mutationFn: async ({ ligneId, value }: { ligneId: string; value: boolean }) => {
+      const { error } = await supabase.from('lignes_be').update({ hors_systeme: value }).eq('id', ligneId);
+      if (error) throw error;
+    },
+    onSuccess: (_d, { value }) => {
+      qc.invalidateQueries({ queryKey: ['lignes_be', id] });
+      toast.success(value ? 'Ligne marquée hors système' : 'Ligne réintégrée');
+    },
     onError: (e: Error) => toast.error(e.message),
   });
 
@@ -735,11 +748,11 @@ export default function BEDetailPage() {
               </thead>
               <tbody className="divide-y divide-gray-50">
                 {[...lignes].sort((a, b) => (a.reference_article ?? '').localeCompare(b.reference_article ?? '')).map((l, idx, arr) => {
-                  const isLibre = !l.ligne_commande_id;
+                  const isLibre = !l.ligne_commande_id && !l.hors_systeme;
                   const prevRef = idx > 0 ? arr[idx - 1].reference_article : null;
                   const isFirstOfRef = l.reference_article !== prevRef;
                   return (
-                  <tr key={l.id} className={cn('hover:bg-gray-50/50', isLibre ? 'opacity-60' : '', isFirstOfRef && idx > 0 ? 'border-t-2 border-gray-100' : '')}>
+                  <tr key={l.id} className={cn('hover:bg-gray-50/50', l.hors_systeme ? 'opacity-40' : isLibre ? 'opacity-60' : '', isFirstOfRef && idx > 0 ? 'border-t-2 border-gray-100' : '')}>
                     <td className="px-4 py-2.5 text-xs text-gray-400">{l.ligne_no}</td>
                     <td className="px-4 py-2.5 font-mono text-xs font-medium">{l.reference_article}</td>
                     <td className="px-4 py-2.5 text-xs text-gray-600 max-w-[200px] truncate">{l.designation}</td>
@@ -815,10 +828,32 @@ export default function BEDetailPage() {
                         })}>
                           {{ a_retourner: 'À retourner', retourne: 'Retourné', avoir_demande: 'Avoir demandé', avoir_recu: 'Avoir reçu ✓' }[l.statut_retour]}
                         </span>
+                      ) : l.hors_systeme ? (
+                        <div className="flex items-center gap-1 group/hs">
+                          <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 border border-gray-200 px-2 py-0.5 text-xs font-medium text-gray-400">
+                            <Ban className="w-3 h-3" /> Hors système
+                          </span>
+                          <button
+                            onClick={() => toggleHorsSystemeMutation.mutate({ ligneId: l.id, value: false })}
+                            className="opacity-0 group-hover/hs:opacity-100 p-0.5 rounded hover:bg-gray-100 text-gray-300 hover:text-gray-600 transition-all"
+                            title="Réintégrer dans le suivi"
+                          >
+                            <RotateCcw className="w-3 h-3" />
+                          </button>
+                        </div>
                       ) : (
-                        <span className="inline-flex items-center rounded-full bg-gray-50 border border-gray-200 px-2 py-0.5 text-xs font-medium text-gray-400">
-                          Libre
-                        </span>
+                        <div className="flex items-center gap-1 group/libre">
+                          <span className="inline-flex items-center rounded-full bg-gray-50 border border-gray-200 px-2 py-0.5 text-xs font-medium text-gray-400">
+                            Libre
+                          </span>
+                          <button
+                            onClick={() => toggleHorsSystemeMutation.mutate({ ligneId: l.id, value: true })}
+                            className="opacity-0 group-hover/libre:opacity-100 p-0.5 rounded hover:bg-amber-50 text-gray-300 hover:text-amber-600 transition-all"
+                            title="Marquer comme reçu hors système (commande absente du logiciel)"
+                          >
+                            <Ban className="w-3 h-3" />
+                          </button>
+                        </div>
                       )}
                     </td>
                     <td className="px-4 py-2.5"><StatusBadge status={l.statut_ligne_be} /></td>

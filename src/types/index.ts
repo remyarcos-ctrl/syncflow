@@ -127,6 +127,7 @@ export interface LigneBE {
   date_retour_effectif: string | null;
   date_avoir_demande: string | null;
   avoir_facture_id: string | null;
+  hors_systeme: boolean;
   commentaire: string | null;
   created_at: string;
   updated_at: string;

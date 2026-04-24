@@ -8,7 +8,7 @@ const supabase = createClient(
 
 const BASE_URL = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000';
 
-const SYSTEM = `Tu es l'assistant IA de SyncFlow, logiciel de rapprochement de factures fournisseurs.
+const SYSTEM = `Tu es Teddy, l'assistant IA de SyncFlow, logiciel de rapprochement de factures fournisseurs.
 Tu peux consulter les données ET exécuter des actions (suppressions, matching, validations).
 Réponds toujours en français. Sois concis et direct.
 
@@ -242,27 +242,46 @@ async function executeTool(name: string, input: ToolInput): Promise<string> {
 
     if (name === 'get_kpis') {
       const [
-        { count: totalFactures },
-        { data: facturesParStatut },
-        { count: exceptionsOuvertes },
-        { count: besNonFactures },
-        { data: tauxData },
+        resFactures,
+        resParStatut,
+        resExceptions,
+        resBes,
+        resTaux,
+        resCommandes,
       ] = await Promise.all([
         supabase.from('factures').select('id', { count: 'exact', head: true }),
         supabase.from('factures').select('statut_facture'),
         supabase.from('exceptions').select('id', { count: 'exact', head: true }).in('statut_exception', ['ouverte', 'en cours']),
         supabase.from('be_receptions').select('id', { count: 'exact', head: true }).in('statut_be', ['reçu', 'partiellement facturé']),
         supabase.from('factures').select('taux_rapprochement'),
+        supabase.from('commandes').select('id', { count: 'exact', head: true }),
       ]);
+
+      // Surface Supabase errors explicitly so Claude doesn't confuse them with empty data
+      const errors: string[] = [];
+      if (resFactures.error) errors.push(`factures: ${resFactures.error.message}`);
+      if (resParStatut.error) errors.push(`statuts: ${resParStatut.error.message}`);
+      if (resExceptions.error) errors.push(`exceptions: ${resExceptions.error.message}`);
+      if (resBes.error) errors.push(`bes: ${resBes.error.message}`);
+      if (errors.length > 0) return JSON.stringify({ erreur_base_de_donnees: errors.join('; ') });
+
       const statutCounts: Record<string, number> = {};
-      for (const f of (facturesParStatut ?? [])) {
+      for (const f of (resParStatut.data ?? [])) {
         const s = (f as { statut_facture: string }).statut_facture;
         statutCounts[s] = (statutCounts[s] ?? 0) + 1;
       }
-      const tauxMoyen = tauxData && tauxData.length > 0
+      const tauxData = resTaux.data ?? [];
+      const tauxMoyen = tauxData.length > 0
         ? Math.round(tauxData.reduce((s, f) => s + ((f as { taux_rapprochement: number }).taux_rapprochement ?? 0), 0) / tauxData.length)
         : 0;
-      return JSON.stringify({ total_factures: totalFactures, par_statut: statutCounts, taux_rapprochement_moyen: `${tauxMoyen}%`, exceptions_actives: exceptionsOuvertes, bes_en_attente_facturation: besNonFactures });
+      return JSON.stringify({
+        total_factures: resFactures.count ?? 0,
+        total_commandes: resCommandes.count ?? 0,
+        par_statut_facture: statutCounts,
+        taux_rapprochement_moyen: `${tauxMoyen}%`,
+        exceptions_actives: resExceptions.count ?? 0,
+        bes_en_attente_facturation: resBes.count ?? 0,
+      });
     }
 
     if (name === 'list_factures') {

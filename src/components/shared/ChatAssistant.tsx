@@ -71,7 +71,7 @@ export default function ChatAssistant() {
               <Sparkles className="w-4 h-4 text-white" />
             </div>
             <div className="flex-1">
-              <p className="text-sm font-semibold text-white">Assistant SyncFlow</p>
+              <p className="text-sm font-semibold text-white">Teddy</p>
               <p className="text-xs text-indigo-200">Posez vos questions sur vos données</p>
             </div>
             <div className="flex items-center gap-1">
@@ -179,7 +179,7 @@ export default function ChatAssistant() {
             : 'bg-gradient-to-br from-indigo-500 to-purple-600 hover:scale-105 hover:shadow-indigo-200 hover:shadow-xl'
         )}
         style={{ width: 52, height: 52 }}
-        title="Assistant IA"
+        title="Teddy — Assistant IA"
       >
         {open
           ? <X className="w-5 h-5 text-white" />
