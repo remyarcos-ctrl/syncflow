@@ -37,6 +37,7 @@ export default function CommandesPage() {
   const [newLigne, setNewLigne] = useState({ reference_article: '', designation: '', quantite_commandee: '', pu_commande: '' });
   const [confirmDelete, setConfirmDelete] = useState<Commande | null>(null);
   const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
+  const [prixSuggere, setPrixSuggere] = useState<{ pu: number; designation: string | null } | null>(null);
 
   const { data: commandes = [] } = useQuery<Commande[]>({
     queryKey: ['commandes'],
@@ -165,10 +166,31 @@ export default function CommandesPage() {
     onError: (e: Error) => toast.error(e.message),
   });
 
+  const lookupPrix = async (ref: string, fournisseur: string) => {
+    if (!ref.trim() || !fournisseur) { setPrixSuggere(null); return; }
+    const { data } = await supabase
+      .from('prix_reference')
+      .select('pu_last, designation')
+      .eq('reference_article', ref.trim())
+      .ilike('fournisseur', `%${fournisseur.slice(0, 5)}%`)
+      .maybeSingle();
+    if (data) {
+      setPrixSuggere({ pu: data.pu_last, designation: data.designation });
+      setNewLigne(prev => ({
+        ...prev,
+        pu_commande: prev.pu_commande || String(data.pu_last),
+        designation: prev.designation || data.designation || '',
+      }));
+    } else {
+      setPrixSuggere(null);
+    }
+  };
+
   const handleAddLigne = () => {
     if (!newLigne.reference_article.trim()) return;
     setLignesForm([...lignesForm, newLigne]);
     setNewLigne({ reference_article: '', designation: '', quantite_commandee: '', pu_commande: '' });
+    setPrixSuggere(null);
   };
 
   return (
@@ -358,11 +380,34 @@ export default function CommandesPage() {
                   </table>
                 )}
                 <div className="grid grid-cols-4 gap-2">
-                  <Input value={newLigne.reference_article} onChange={e => setNewLigne({ ...newLigne, reference_article: e.target.value })} placeholder="Réf. *" className="text-xs h-8" />
+                  <Input
+                    value={newLigne.reference_article}
+                    onChange={e => { setNewLigne({ ...newLigne, reference_article: e.target.value }); setPrixSuggere(null); }}
+                    onBlur={e => lookupPrix(e.target.value, form.fournisseur)}
+                    placeholder="Réf. *"
+                    className="text-xs h-8"
+                  />
                   <Input value={newLigne.designation} onChange={e => setNewLigne({ ...newLigne, designation: e.target.value })} placeholder="Désignation" className="text-xs h-8" />
                   <Input type="number" value={newLigne.quantite_commandee} onChange={e => setNewLigne({ ...newLigne, quantite_commandee: e.target.value })} placeholder="Qté" className="text-xs h-8" />
-                  <Input type="number" step="0.01" value={newLigne.pu_commande} onChange={e => setNewLigne({ ...newLigne, pu_commande: e.target.value })} placeholder="PU €" className="text-xs h-8" />
+                  <div className="relative">
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={newLigne.pu_commande}
+                      onChange={e => setNewLigne({ ...newLigne, pu_commande: e.target.value })}
+                      placeholder="PU €"
+                      className={`text-xs h-8 ${prixSuggere && newLigne.pu_commande && parseFloat(newLigne.pu_commande) !== prixSuggere.pu ? 'border-amber-400 focus:ring-amber-400' : ''}`}
+                    />
+                  </div>
                 </div>
+                {prixSuggere && (
+                  <p className="text-xs mt-1 text-gray-400">
+                    Dernier prix connu : <span className="font-semibold text-gray-600">{prixSuggere.pu.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })}</span>
+                    {newLigne.pu_commande && parseFloat(newLigne.pu_commande) !== prixSuggere.pu && (
+                      <span className="ml-2 text-amber-600 font-medium">⚠ prix modifié</span>
+                    )}
+                  </p>
+                )}
                 <Button type="button" variant="outline" size="sm" onClick={handleAddLigne} className="w-full mt-2 text-xs h-7">
                   <Plus className="w-3 h-3" /> Ajouter une ligne
                 </Button>

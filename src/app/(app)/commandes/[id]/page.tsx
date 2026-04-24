@@ -49,6 +49,7 @@ export default function CommandeDetailPage() {
 
   const [showAddLine, setShowAddLine] = useState(false);
   const [lineForm, setLineForm] = useState({ reference_article: '', designation: '', quantite_commandee: '', pu_commande: '' });
+  const [prixSuggere, setPrixSuggere] = useState<{ pu: number; designation: string | null } | null>(null);
   const [editingPU, setEditingPU] = useState<{ id: string; value: string } | null>(null);
   const [showLinkBE, setShowLinkBE] = useState(false);
   const [selectedBEId, setSelectedBEId] = useState('');
@@ -282,6 +283,26 @@ export default function CommandeDetailPage() {
     },
     onError: (e: Error) => toast.error(e.message),
   });
+
+  const lookupPrix = async (ref: string) => {
+    if (!ref.trim() || !commande?.fournisseur) { setPrixSuggere(null); return; }
+    const { data } = await supabase
+      .from('prix_reference')
+      .select('pu_last, designation')
+      .eq('reference_article', ref.trim())
+      .ilike('fournisseur', `%${commande.fournisseur.slice(0, 5)}%`)
+      .maybeSingle();
+    if (data) {
+      setPrixSuggere({ pu: data.pu_last, designation: data.designation });
+      setLineForm(prev => ({
+        ...prev,
+        pu_commande: prev.pu_commande || String(data.pu_last),
+        designation: prev.designation || data.designation || '',
+      }));
+    } else {
+      setPrixSuggere(null);
+    }
+  };
 
   const addLineMutation = useMutation({
     mutationFn: async () => {
@@ -633,11 +654,32 @@ export default function CommandeDetailPage() {
         {showAddLine && (
           <div className="px-5 pb-4">
             <div className="grid grid-cols-4 gap-2 p-3 bg-gray-50 rounded-lg">
-              <Input value={lineForm.reference_article} onChange={e => setLineForm({ ...lineForm, reference_article: e.target.value })} placeholder="Réf. *" className="text-xs h-8" />
+              <Input
+                value={lineForm.reference_article}
+                onChange={e => { setLineForm({ ...lineForm, reference_article: e.target.value }); setPrixSuggere(null); }}
+                onBlur={e => lookupPrix(e.target.value)}
+                placeholder="Réf. *"
+                className="text-xs h-8"
+              />
               <Input value={lineForm.designation} onChange={e => setLineForm({ ...lineForm, designation: e.target.value })} placeholder="Désignation" className="text-xs h-8" />
               <Input type="number" value={lineForm.quantite_commandee} onChange={e => setLineForm({ ...lineForm, quantite_commandee: e.target.value })} placeholder="Qté" className="text-xs h-8" />
-              <Input type="number" step="0.01" value={lineForm.pu_commande} onChange={e => setLineForm({ ...lineForm, pu_commande: e.target.value })} placeholder="PU €" className="text-xs h-8" />
+              <Input
+                type="number"
+                step="0.01"
+                value={lineForm.pu_commande}
+                onChange={e => setLineForm({ ...lineForm, pu_commande: e.target.value })}
+                placeholder="PU €"
+                className={`text-xs h-8 ${prixSuggere && lineForm.pu_commande && parseFloat(lineForm.pu_commande) !== prixSuggere.pu ? 'border-amber-400 focus:ring-amber-400' : ''}`}
+              />
             </div>
+            {prixSuggere && (
+              <p className="text-xs mt-1 px-1 text-gray-400">
+                Dernier prix connu : <span className="font-semibold text-gray-600">{prixSuggere.pu.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })}</span>
+                {lineForm.pu_commande && parseFloat(lineForm.pu_commande) !== prixSuggere.pu && (
+                  <span className="ml-2 text-amber-600 font-medium">⚠ prix modifié</span>
+                )}
+              </p>
+            )}
             <div className="flex justify-end gap-2 mt-2">
               <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setShowAddLine(false)}>Annuler</Button>
               <Button size="sm" className="h-7 text-xs" onClick={() => addLineMutation.mutate()} disabled={addLineMutation.isPending || !lineForm.reference_article}>
