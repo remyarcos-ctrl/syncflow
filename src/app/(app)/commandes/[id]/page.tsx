@@ -12,8 +12,9 @@ import StatusBadge from '@/components/shared/StatusBadge';
 import { formatEur, formatDate, cn } from '@/utils';
 import {
   ArrowLeft, Plus, Package, Link2, Unlink,
-  Edit2, Save, X, MessageSquare, CheckCircle2, Search, FileText
+  Edit2, Save, X, MessageSquare, CheckCircle2, Search, FileText, History
 } from 'lucide-react';
+import ReferenceHistoryModal from '@/components/shared/ReferenceHistoryModal';
 import { toast } from 'sonner';
 import type { Commande, LigneCommande, BEReception, Facture, LiaisonBECommande, LiaisonFactureCommande, Rapprochement } from '@/types';
 
@@ -50,6 +51,7 @@ export default function CommandeDetailPage() {
   const [showAddLine, setShowAddLine] = useState(false);
   const [lineForm, setLineForm] = useState({ reference_article: '', designation: '', quantite_commandee: '', pu_commande: '' });
   const [prixSuggere, setPrixSuggere] = useState<{ pu: number; designation: string | null } | null>(null);
+  const [refHistory, setRefHistory] = useState<string | null>(null);
   const [editingPU, setEditingPU] = useState<{ id: string; value: string } | null>(null);
   const [showLinkBE, setShowLinkBE] = useState(false);
   const [selectedBEId, setSelectedBEId] = useState('');
@@ -713,7 +715,20 @@ export default function CommandeDetailPage() {
                   return (
                   <tr key={l.id} className="hover:bg-gray-50/50">
                     <td className="px-4 py-2.5 text-xs text-gray-400">{l.ligne_no}</td>
-                    <td className="px-4 py-2.5 font-mono text-xs font-medium">{l.reference_article}</td>
+                    <td className="px-4 py-2.5">
+                      {l.reference_article ? (
+                        <button
+                          onClick={() => setRefHistory(l.reference_article)}
+                          className="group/ref flex items-center gap-1 font-mono text-xs font-medium text-gray-800 hover:text-indigo-600 transition-colors"
+                          title="Voir l'historique de cette référence"
+                        >
+                          {l.reference_article}
+                          <History className="w-3 h-3 opacity-0 group-hover/ref:opacity-100 text-indigo-400 shrink-0" />
+                        </button>
+                      ) : (
+                        <span className="font-mono text-xs text-gray-400">—</span>
+                      )}
+                    </td>
                     <td className="px-4 py-2.5 text-xs text-gray-600 max-w-[180px] truncate">{l.designation}</td>
                     <td className="px-4 py-2.5 text-right font-mono text-xs">{l.quantite_commandee}</td>
                     <td className="px-4 py-2.5 text-right font-mono text-xs">
@@ -843,6 +858,14 @@ export default function CommandeDetailPage() {
           </div>
         </CardContent>
       </Card>
+
+      {refHistory && (
+        <ReferenceHistoryModal
+          reference={refHistory}
+          fournisseur={commande?.fournisseur}
+          onClose={() => setRefHistory(null)}
+        />
+      )}
     </div>
   );
 }
