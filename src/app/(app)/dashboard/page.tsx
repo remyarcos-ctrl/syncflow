@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useEffect } from 'react';
+import { useMemo, useEffect, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -82,33 +82,46 @@ const isAvoir = (f: { total_ht: number | null; numero_facture: string }) =>
 export default function DashboardPage() {
   const STALE = { staleTime: 30_000 };
   const qc = useQueryClient();
+  const debounceTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   // IMPORTANT : activer la Replication Supabase pour chaque table dans
   // Database → Replication du dashboard Supabase (sinon les events ne sont pas émis).
   useEffect(() => {
+    const invalidate = (key: string, queryKey: unknown[]) => {
+      const existing = debounceTimers.current.get(key);
+      if (existing) clearTimeout(existing);
+      debounceTimers.current.set(key, setTimeout(() => {
+        void qc.invalidateQueries({ queryKey });
+        debounceTimers.current.delete(key);
+      }, 200));
+    };
+
     const channel = supabase
       .channel('dashboard-realtime')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'factures' }, () => {
-        void qc.invalidateQueries({ queryKey: ['factures'] });
+        invalidate('factures', ['factures']);
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'be_receptions' }, () => {
-        void qc.invalidateQueries({ queryKey: ['bes'] });
+        invalidate('bes', ['bes']);
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'commandes' }, () => {
-        void qc.invalidateQueries({ queryKey: ['commandes'] });
+        invalidate('commandes', ['commandes']);
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'rapprochements' }, () => {
-        void qc.invalidateQueries({ queryKey: ['rapprochements'] });
+        invalidate('rapprochements', ['rapprochements']);
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lignes_be' }, () => {
-        void qc.invalidateQueries({ queryKey: ['dashboard-retours'] });
+        invalidate('dashboard-retours', ['dashboard-retours']);
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'exceptions' }, () => {
-        void qc.invalidateQueries({ queryKey: ['exceptions'] });
+        invalidate('exceptions', ['exceptions']);
       })
       .subscribe();
 
-    return () => { void supabase.removeChannel(channel); };
+    return () => {
+      void supabase.removeChannel(channel);
+      debounceTimers.current.forEach(t => clearTimeout(t));
+    };
   }, [qc]);
 
   const { data: commandes = [] } = useQuery<Commande[]>({

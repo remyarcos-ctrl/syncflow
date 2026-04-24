@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
@@ -26,7 +26,7 @@ export default function FactureDetailPage() {
   const { id } = useParams<{ id: string }>();
   const qc = useQueryClient();
 
-  const [matching, setMatching] = useState(false);
+  const [isMatching, setIsMatching] = useState(false);
   const [editingNotes, setEditingNotes] = useState(false);
   const [notes, setNotes] = useState('');
   const [editingLineNotes, setEditingLineNotes] = useState<{ id: string; value: string } | null>(null);
@@ -41,7 +41,7 @@ export default function FactureDetailPage() {
   const [manualLigneBEId, setManualLigneBEId] = useState('');
 
   // ── Données ───────────────────────────────────────────────────────────────
-  const { data: facture } = useQuery<Facture>({
+  const { data: facture, isLoading: isLoadingFacture } = useQuery<Facture>({
     queryKey: ['facture', id],
     queryFn: async () => {
       const { data } = await supabase.from('factures').select('*').eq('id', id).single();
@@ -59,7 +59,7 @@ export default function FactureDetailPage() {
     enabled: !!id, staleTime: 30_000,
   });
 
-  const { data: rapprochements = [] } = useQuery<Rapprochement[]>({
+  const { data: rapprochements = [], isLoading: isLoadingRaps } = useQuery<Rapprochement[]>({
     queryKey: ['raps_facture', id],
     queryFn: async () => {
       const { data } = await supabase.from('rapprochements').select('*').eq('facture_id', id);
@@ -167,25 +167,40 @@ export default function FactureDetailPage() {
 
   useEffect(() => { if (facture) setNotes(facture.commentaire ?? ''); }, [facture]);
 
+  // ── Debounced Realtime invalidation ──────────────────────────────────────
+  const debounceTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+
+  const debouncedInvalidate = useCallback((key: string, queryKey: unknown[]) => {
+    const existing = debounceTimers.current.get(key);
+    if (existing) clearTimeout(existing);
+    debounceTimers.current.set(key, setTimeout(() => {
+      qc.invalidateQueries({ queryKey });
+      debounceTimers.current.delete(key);
+    }, 200));
+  }, [qc]);
+
   // ── Realtime subscriptions ────────────────────────────────────────────────
   useEffect(() => {
     const channel = supabase
       .channel(`facture-detail-${id}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'factures' }, () => {
-        qc.invalidateQueries({ queryKey: ['facture', id] });
+        debouncedInvalidate('facture', ['facture', id]);
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'rapprochements' }, () => {
-        qc.invalidateQueries({ queryKey: ['raps_facture', id] });
+        debouncedInvalidate('raps_facture', ['raps_facture', id]);
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lignes_facture' }, () => {
-        qc.invalidateQueries({ queryKey: ['lignes_facture', id] });
+        debouncedInvalidate('lignes_facture', ['lignes_facture', id]);
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lignes_be' }, () => {
-        qc.invalidateQueries({ queryKey: ['lignes_be_facture', beIds.join()] });
+        debouncedInvalidate('lignes_be_facture', ['lignes_be_facture', beIds.join()]);
       })
       .subscribe();
-    return () => { supabase.removeChannel(channel); };
-  }, [id, qc, beIds]);
+    return () => {
+      void supabase.removeChannel(channel);
+      debounceTimers.current.forEach(t => clearTimeout(t));
+    };
+  }, [id, qc, beIds, debouncedInvalidate]);
 
   // ── Retours fournisseur en attente ────────────────────────────────────────
   const { data: retoursEnAttente = [] } = useQuery<{ id: string; reference_article: string | null; quantite_receptionnee: number; statut_retour: string; motif_retour: string | null; be_id: string }[]>({
@@ -412,22 +427,31 @@ export default function FactureDetailPage() {
   });
 
   const handleMatching = async () => {
-    setMatching(true);
+    setIsMatching(true);
+    const toastId = toast.loading('Analyse en cours...');
     try {
-      // Appel à l'API route de matching
       const res = await fetch('/api/matching', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ facture_id: id }),
+        body: JSON.stringify({ factureId: id }),
       });
-      const data = await res.json();
+      const json = await res.json() as { error?: string; rapprochements_crees?: number; exceptions_creees?: number };
+      if (!res.ok) throw new Error(json.error ?? 'Erreur matching');
+      toast.dismiss(toastId);
+      const nbRaps = json.rapprochements_crees ?? 0;
+      const nbExc = json.exceptions_creees ?? 0;
+      if (nbRaps === 0 && nbExc === 0) {
+        toast.info('Aucun rapprochement trouvé');
+      } else {
+        toast.success(`${nbRaps} rapprochement(s) créé(s)${nbExc > 0 ? `, ${nbExc} exception(s)` : ''}`);
+      }
       qc.invalidateQueries({ queryKey: ['raps_facture', id] });
       qc.invalidateQueries({ queryKey: ['facture', id] });
-      toast.success(`Matching terminé — ${data.matched ?? 0} rapprochement(s) créé(s)`);
-    } catch (err) {
-      toast.error('Erreur matching');
+    } catch (e) {
+      toast.dismiss(toastId);
+      toast.error((e as Error).message);
     } finally {
-      setMatching(false);
+      setIsMatching(false);
     }
   };
 
@@ -460,9 +484,9 @@ export default function FactureDetailPage() {
         </div>
         <StatusBadge status={facture.statut_facture} />
         <div className="ml-auto flex items-center gap-2">
-          <Button onClick={handleMatching} disabled={matching} size="sm" className="bg-blue-600 hover:bg-blue-700">
+          <Button onClick={handleMatching} disabled={isMatching} size="sm" className="bg-blue-600 hover:bg-blue-700">
             <Play className="w-3.5 h-3.5 mr-1.5" />
-            {matching ? 'Matching…' : 'Lancer matching'}
+            {isMatching ? 'Analyse en cours...' : 'Lancer matching'}
           </Button>
           {proposes > 0 && (
             <Button onClick={() => validateAllMutation.mutate()} disabled={validateAllMutation.isPending} size="sm" variant="outline" className="text-emerald-600 border-emerald-200">
@@ -510,16 +534,22 @@ export default function FactureDetailPage() {
         <Card>
           <CardContent className="pt-4 pb-3">
             <p className="text-xs text-gray-400">Rapprochement</p>
-            <p className={cn('text-lg font-bold mt-0.5', taux === 100 ? 'text-emerald-600' : taux > 0 ? 'text-amber-600' : 'text-gray-400')}>
-              {taux}%
-              <span className="text-xs font-normal text-gray-400 ml-1">lignes</span>
-            </p>
-            <p className={cn('text-xs font-medium mt-0.5', tauxMontant === 100 ? 'text-emerald-500' : tauxMontant > 0 ? 'text-amber-500' : 'text-gray-300')}>
-              {tauxMontant}% montant
-            </p>
-            <div className="h-1.5 rounded-full bg-gray-100 overflow-hidden mt-1.5">
-              <div className={cn('h-full rounded-full transition-all', taux === 100 ? 'bg-emerald-400' : taux > 50 ? 'bg-amber-400' : 'bg-red-300')} style={{ width: `${taux}%` }} />
-            </div>
+            {isLoadingFacture ? (
+              <div className="animate-pulse h-6 bg-gray-100 rounded w-16 mt-0.5" />
+            ) : (
+              <>
+                <p className={cn('text-lg font-bold mt-0.5', taux === 100 ? 'text-emerald-600' : taux > 0 ? 'text-amber-600' : 'text-gray-400')}>
+                  {taux}%
+                  <span className="text-xs font-normal text-gray-400 ml-1">lignes</span>
+                </p>
+                <p className={cn('text-xs font-medium mt-0.5', tauxMontant === 100 ? 'text-emerald-500' : tauxMontant > 0 ? 'text-amber-500' : 'text-gray-300')}>
+                  {tauxMontant}% montant
+                </p>
+                <div className="h-1.5 rounded-full bg-gray-100 overflow-hidden mt-1.5">
+                  <div className={cn('h-full rounded-full transition-all', taux === 100 ? 'bg-emerald-400' : taux > 50 ? 'bg-amber-400' : 'bg-red-300')} style={{ width: `${taux}%` }} />
+                </div>
+              </>
+            )}
           </CardContent>
         </Card>
         <Card>
@@ -693,7 +723,13 @@ export default function FactureDetailPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
-                {vue.map(({ lf, bestRap, qFact, puFact, totalFact, qCmd, puCmd, qRecue, ecartQte, ecartPrix, issues, etat }) => {
+                {isLoadingRaps ? (
+                  <tr><td colSpan={12} className="py-8 text-center">
+                    <div className="inline-block w-5 h-5 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                  </td></tr>
+                ) : vue.length === 0 ? (
+                  <tr><td colSpan={12} className="py-8 text-center text-xs text-gray-400">Aucune ligne de facture</td></tr>
+                ) : vue.map(({ lf, bestRap, qFact, puFact, totalFact, qCmd, puCmd, qRecue, ecartQte, ecartPrix, issues, etat }) => {
                   const rowBg = etat === 'anomalie' ? 'bg-red-50/30' : etat === 'ok' ? 'bg-emerald-50/20' : '';
                   return (
                     <tr key={lf.id} className={cn('hover:bg-gray-50/50', rowBg)}>
@@ -772,7 +808,6 @@ export default function FactureDetailPage() {
                 })}
               </tbody>
             </table>
-            {lignesFacture.length === 0 && <p className="text-xs text-gray-400 text-center py-10">Aucune ligne de facture</p>}
           </div>
         </CardContent>
       </Card>
@@ -833,6 +868,23 @@ export default function FactureDetailPage() {
                 )}
               </div>
             )}
+
+            {manualLigneBEId && (() => {
+              const lb = lignesBEDispo.find(l => l.id === manualLigneBEId);
+              const lf = manualTarget ? lignesFacture.find(l => l.id === manualTarget) : null;
+              if (!lb || !lf) return null;
+              const previewQty = Math.min(Number(lf.quantite_facturee ?? 0), Number(lb.quantite_receptionnee ?? 0));
+              const previewMontant = lf.pu_facture != null ? previewQty * Number(lf.pu_facture) : null;
+              return (
+                <div className="mt-3 p-3 bg-indigo-50 rounded-lg border border-indigo-100 text-sm space-y-1">
+                  <p className="font-medium text-indigo-800">Aperçu du rapprochement</p>
+                  <p className="text-indigo-700">Quantité : <span className="font-mono font-semibold">{previewQty}</span></p>
+                  {previewMontant != null && (
+                    <p className="text-indigo-700">Montant estimé : <span className="font-mono font-semibold">{previewMontant.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })}</span></p>
+                  )}
+                </div>
+              );
+            })()}
 
             <div className="flex justify-end gap-2 mt-2">
               <Button

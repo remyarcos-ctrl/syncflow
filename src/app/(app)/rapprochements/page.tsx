@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { supabase } from '@/lib/supabase';
@@ -41,6 +41,7 @@ export default function RapproPage() {
   const [page, setPage] = useState(1);
   const [filterStatut, setFilterStatut] = useState('all');
   const queryClient = useQueryClient();
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   // IMPORTANT : activer la Replication Supabase pour la table rapprochements dans
   // Database → Replication du dashboard Supabase (sinon les events ne sont pas émis).
@@ -48,21 +49,39 @@ export default function RapproPage() {
     const channel = supabase
       .channel('rapprochements-realtime')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'rapprochements' }, () => {
-        void queryClient.invalidateQueries({ queryKey: ['rapprochements'] });
+        clearTimeout(debounceRef.current);
+        debounceRef.current = setTimeout(() => queryClient.invalidateQueries({ queryKey: ['rapprochements'] }), 200);
       })
       .subscribe();
 
-    return () => { void supabase.removeChannel(channel); };
+    return () => {
+      clearTimeout(debounceRef.current);
+      void supabase.removeChannel(channel);
+    };
   }, [queryClient]);
 
-  const { data: raps = [] } = useQuery<Rapprochement[]>({
-    queryKey: ['rapprochements'],
+  const { data: rapsResult, isError } = useQuery<{ rapprochements: Rapprochement[]; total: number }>({
+    queryKey: ['rapprochements', page, filterStatut],
     queryFn: async () => {
-      const { data } = await supabase.from('rapprochements').select('*').order('created_at', { ascending: false }).limit(500);
-      return data ?? [];
+      let query = supabase
+        .from('rapprochements')
+        .select('*', { count: 'exact' })
+        .order('created_at', { ascending: false });
+
+      if (filterStatut !== 'all') {
+        query = query.eq('statut_validation', filterStatut);
+      }
+
+      query = query.range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1);
+
+      const { data, count } = await query;
+      return { rapprochements: data ?? [], total: count ?? 0 };
     },
     staleTime: 30_000,
   });
+
+  const raps = rapsResult?.rapprochements ?? [];
+  const total = rapsResult?.total ?? 0;
 
   const { data: factures = [] } = useQuery<Pick<Facture, 'id' | 'numero_facture' | 'fournisseur'>[]>({
     queryKey: ['factures-slim'],
@@ -137,25 +156,6 @@ export default function RapproPage() {
 
   const isMutating = validateMutation.isPending || rejectMutation.isPending || reviewMutation.isPending;
 
-  const filtered = useMemo(() => raps.filter(r => {
-    if (filterStatut !== 'all' && r.statut_validation !== filterStatut) return false;
-    return true;
-  }), [raps, filterStatut]);
-
-  const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
-
-  const montantValide = useMemo(
-    () => raps.filter(r => r.statut_validation === 'validé').reduce((acc, r) => acc + (r.montant_rapproche ?? 0), 0),
-    [raps],
-  );
-
-  const kpis = {
-    total: raps.length,
-    valides: raps.filter(r => r.statut_validation === 'validé').length,
-    proposes: raps.filter(r => r.statut_validation === 'proposé').length,
-    rejetes: raps.filter(r => r.statut_validation === 'rejeté').length,
-  };
-
   function formatScore(score: number | null): string | null {
     if (score === null) return null;
     if (score >= 1) return `${score}%`;
@@ -172,22 +172,13 @@ export default function RapproPage() {
 
   return (
     <div>
-      <PageHeader title="Rapprochements" subtitle={`${raps.length} rapprochement${raps.length > 1 ? 's' : ''}`} />
+      <PageHeader title="Rapprochements" subtitle={`${total} rapprochement${total > 1 ? 's' : ''}`} />
 
-      <div className="grid grid-cols-5 gap-4 mb-5">
-        {[
-          { label: 'Total', value: kpis.total, color: 'text-gray-900', display: String(kpis.total) },
-          { label: 'Validés', value: kpis.valides, color: 'text-emerald-600', display: String(kpis.valides) },
-          { label: 'Proposés', value: kpis.proposes, color: 'text-indigo-600', display: String(kpis.proposes) },
-          { label: 'Rejetés', value: kpis.rejetes, color: 'text-red-600', display: String(kpis.rejetes) },
-          { label: 'Montant validé', value: montantValide, color: 'text-emerald-700', display: formatEur(montantValide) },
-        ].map(k => (
-          <div key={k.label} className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
-            <p className="text-xs text-gray-500">{k.label}</p>
-            <p className={`text-2xl font-bold mt-1 ${k.color}`}>{k.display}</p>
-          </div>
-        ))}
-      </div>
+      {isError && (
+        <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+          Erreur lors du chargement des rapprochements.
+        </div>
+      )}
 
       <div className="flex gap-3 mb-4">
         {['all', 'proposé', 'validé', 'rejeté', 'à revoir'].map(s => (
@@ -220,7 +211,7 @@ export default function RapproPage() {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-50">
-            {paginated.map(r => (
+            {raps.map(r => (
               <tr key={r.id} className="hover:bg-gray-50/30">
                 <td className="px-4 py-3 text-xs">
                   {r.facture_id && factureMap[r.facture_id] && (
@@ -295,8 +286,8 @@ export default function RapproPage() {
             ))}
           </tbody>
         </table>
-        {filtered.length === 0 && <EmptyState icon={Link2} title="Aucun rapprochement" />}
-        <Pagination page={page} pageSize={PAGE_SIZE} total={filtered.length} onChange={setPage} />
+        {total === 0 && !isError && <EmptyState icon={Link2} title="Aucun rapprochement" />}
+        <Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={setPage} />
       </div>
     </div>
   );

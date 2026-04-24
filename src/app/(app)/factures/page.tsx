@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
@@ -10,12 +10,11 @@ import StatusBadge from '@/components/shared/StatusBadge';
 import EmptyState from '@/components/shared/EmptyState';
 import Pagination from '@/components/shared/Pagination';
 import PdfImportModal from '@/components/shared/PdfImportModal';
-import SortableHeader from '@/components/shared/SortableHeader';
 import { useTableFeatures } from '@/hooks/useTableFeatures';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { formatEur, formatDate, exportToCsv } from '@/utils';
-import { FileText, ChevronRight, Trash2, Download, Upload, Search, X } from 'lucide-react';
+import { FileText, ChevronRight, Trash2, Download, Upload, Search, X, AlertTriangle, Zap, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react';
 import { toast } from 'sonner';
 import type { Facture } from '@/types';
 
@@ -37,10 +36,13 @@ export default function FacturesPage() {
   const dateDebut = searchParams.get('debut') ?? '';
   const dateFin = searchParams.get('fin') ?? '';
   const page = parseInt(searchParams.get('page') ?? '1', 10);
+  const sortKey = searchParams.get('sortKey') ?? 'created_at';
+  const sortDir = searchParams.get('sortDir') ?? 'desc';
 
   const [confirmDelete, setConfirmDelete] = useState<Facture | null>(null);
   const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [isBulkMatching, setIsBulkMatching] = useState(false);
 
   const setFilter = useCallback((key: string, value: string) => {
     const params = new URLSearchParams(searchParams.toString());
@@ -57,28 +59,73 @@ export default function FacturesPage() {
     router.replace(`${pathname}?${params.toString()}`);
   }, [searchParams, pathname, router]);
 
-  const { data: factures = [] } = useQuery<Facture[]>({
-    queryKey: ['factures'],
+  const handleSortColumn = useCallback((field: string) => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete('page');
+    if (sortKey === field) {
+      // toggle direction
+      params.set('sortDir', sortDir === 'asc' ? 'desc' : 'asc');
+    } else {
+      params.set('sortKey', field);
+      params.set('sortDir', 'asc');
+    }
+    router.replace(`${pathname}?${params.toString()}`);
+  }, [searchParams, pathname, router, sortKey, sortDir]);
+
+  const { data: queryResult, isError } = useQuery({
+    queryKey: ['factures', page, filtreStatut, filtreFournisseur, search, dateDebut, dateFin, sortKey, sortDir],
     queryFn: async () => {
-      const { data } = await supabase.from('factures').select('*').order('created_at', { ascending: false }).limit(500);
-      return data ?? [];
+      let q = supabase.from('factures').select('*', { count: 'exact' });
+      if (filtreStatut !== 'all') q = q.eq('statut_facture', filtreStatut);
+      if (filtreFournisseur) q = q.ilike('fournisseur', `%${filtreFournisseur}%`);
+      if (search) q = q.ilike('numero_facture', `%${search}%`);
+      if (dateDebut) q = q.gte('date_facture', dateDebut);
+      if (dateFin) q = q.lte('date_facture', dateFin);
+      const sortField = sortKey || 'created_at';
+      const sortAsc = sortDir === 'asc';
+      q = q.order(sortField, { ascending: sortAsc });
+      q = q.range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1);
+      const { data, count } = await q;
+      return { factures: (data ?? []) as Facture[], total: count ?? 0 };
     },
-    refetchInterval: 5000,
+    staleTime: 30_000,
   });
 
-  const filtered = useMemo(() => factures.filter(f => {
-    if (filtreStatut !== 'all' && f.statut_facture !== filtreStatut) return false;
-    if (filtreFournisseur && !f.fournisseur?.toLowerCase().includes(filtreFournisseur.toLowerCase())) return false;
-    if (search && !f.numero_facture?.toLowerCase().includes(search.toLowerCase())) return false;
-    if (dateDebut && f.date_facture && f.date_facture < dateDebut) return false;
-    if (dateFin && f.date_facture && f.date_facture > dateFin) return false;
-    return true;
-  }), [factures, filtreStatut, filtreFournisseur, search, dateDebut, dateFin]);
+  const factures = queryResult?.factures ?? [];
+  const totalCount = queryResult?.total ?? 0;
 
-  const { sorted, sortKey, sortDir, toggleSort, selected, toggleOne, togglePage, clearSelection, isPageChecked, isPageIndeterminate } = useTableFeatures(filtered);
+  const { data: facturesAvecRetour = new Set<string>() } = useQuery<Set<string>>({
+    queryKey: ['factures_retours_actifs'],
+    queryFn: async () => {
+      const { data: raps } = await supabase
+        .from('rapprochements')
+        .select('facture_id, ligne_be_id')
+        .not('ligne_be_id', 'is', null);
+      if (!raps || raps.length === 0) return new Set<string>();
 
-  const paginated = sorted.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
-  const pageIds = paginated.map(f => f.id);
+      const ligneBEIds = [...new Set(raps.map(r => r.ligne_be_id as string))];
+      const { data: lignes } = await supabase
+        .from('lignes_be')
+        .select('id, statut_retour')
+        .in('id', ligneBEIds)
+        .not('statut_retour', 'is', null)
+        .neq('statut_retour', 'avoir_recu');
+
+      const withRetour = new Set((lignes ?? []).map((l: { id: string }) => l.id));
+      const facIds = new Set<string>();
+      for (const r of raps) {
+        if (r.ligne_be_id && withRetour.has(r.ligne_be_id)) {
+          facIds.add(r.facture_id);
+        }
+      }
+      return facIds;
+    },
+    staleTime: 30_000,
+  });
+
+  const { selected, toggleOne, togglePage, clearSelection, isPageChecked, isPageIndeterminate } = useTableFeatures(factures);
+
+  const pageIds = factures.map(f => f.id);
 
   const deleteMutation = useMutation({
     mutationFn: async (f: Facture) => {
@@ -115,11 +162,53 @@ export default function FacturesPage() {
     onError: (e: Error) => toast.error(e.message),
   });
 
+  const handleBulkMatch = async () => {
+    setIsBulkMatching(true);
+    let successCount = 0;
+    let errorCount = 0;
+    for (const id of Array.from(selected)) {
+      try {
+        const res = await fetch('/api/matching', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ factureId: id }),
+        });
+        if (res.ok) successCount++;
+        else errorCount++;
+      } catch {
+        errorCount++;
+      }
+    }
+    setIsBulkMatching(false);
+    qc.invalidateQueries({ queryKey: ['factures'] });
+    if (successCount > 0) toast.success(`Matching lancé pour ${successCount} facture(s)`);
+    if (errorCount > 0) toast.error(`Échec pour ${errorCount} facture(s)`);
+    clearSelection();
+  };
+
+  const SortTh = ({ field, label, align = 'left' }: { field: string; label: string; align?: 'left' | 'right' }) => {
+    const active = sortKey === field;
+    const asc = sortDir === 'asc';
+    return (
+      <th
+        onClick={() => handleSortColumn(field)}
+        className={`px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide cursor-pointer select-none group${active ? ' text-indigo-600' : ''}${align === 'right' ? ' text-right' : ' text-left'}`}
+      >
+        <span className={`inline-flex items-center gap-1${align === 'right' ? ' flex-row-reverse' : ''}`}>
+          {label}
+          {active
+            ? asc ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />
+            : <ChevronsUpDown className="w-3 h-3 opacity-0 group-hover:opacity-40" />}
+        </span>
+      </th>
+    );
+  };
+
   return (
     <div>
       <PageHeader
         title="Factures"
-        subtitle={`${factures.length} facture${factures.length > 1 ? 's' : ''}`}
+        subtitle={`${totalCount} facture${totalCount > 1 ? 's' : ''}`}
         actions={
           <div className="flex items-center gap-2">
             <Button size="sm" onClick={() => setShowImport(true)}>
@@ -138,6 +227,12 @@ export default function FacturesPage() {
           </div>
         }
       />
+
+      {isError && (
+        <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+          Erreur lors du chargement des factures. Vérifiez votre connexion.
+        </div>
+      )}
 
       <div className="flex gap-3 mb-4 flex-wrap items-center">
         <select
@@ -163,6 +258,13 @@ export default function FacturesPage() {
       {selected.size > 0 && (
         <div className="flex items-center gap-3 mb-3 px-4 py-2.5 bg-indigo-50 border border-indigo-100 rounded-xl text-sm">
           <span className="text-indigo-700 font-medium">{selected.size} sélectionné(s)</span>
+          <button
+            onClick={handleBulkMatch}
+            disabled={isBulkMatching}
+            className="flex items-center gap-1.5 text-indigo-600 hover:text-indigo-700 font-medium disabled:opacity-50"
+          >
+            <Zap className="w-4 h-4" /> {isBulkMatching ? 'Matching...' : 'Lancer matching'}
+          </button>
           <button onClick={() => setConfirmBulkDelete(true)} className="ml-auto flex items-center gap-1.5 text-red-600 hover:text-red-700 font-medium">
             <Trash2 className="w-4 h-4" /> Supprimer la sélection
           </button>
@@ -183,17 +285,17 @@ export default function FacturesPage() {
                   className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
                 />
               </th>
-              <SortableHeader label="N° facture" field="numero_facture" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-              <SortableHeader label="Fournisseur" field="fournisseur" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-              <SortableHeader label="Date" field="date_facture" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-              <SortableHeader label="Total HT" field="total_ht" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" />
-              <SortableHeader label="Rapproché" field="taux_rapprochement" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" />
-              <SortableHeader label="Statut" field="statut_facture" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+              <SortTh field="numero_facture" label="N° facture" />
+              <SortTh field="fournisseur" label="Fournisseur" />
+              <SortTh field="date_facture" label="Date" />
+              <SortTh field="total_ht" label="Total HT" align="right" />
+              <SortTh field="taux_rapprochement" label="Rapproché" align="right" />
+              <SortTh field="statut_facture" label="Statut" />
               <th className="px-4 py-3"></th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-50">
-            {paginated.map(f => {
+            {factures.map(f => {
               const taux = f.taux_rapprochement ?? 0;
               const isSelected = selected.has(f.id);
               const avoir = isAvoir(f);
@@ -228,6 +330,11 @@ export default function FacturesPage() {
                       ? <span className="inline-flex items-center rounded-full bg-teal-50 border border-teal-200 px-2 py-0.5 text-xs font-medium text-teal-700">Avoir</span>
                       : <StatusBadge status={f.statut_facture} />
                     }
+                    {facturesAvecRetour.has(f.id) && (
+                      <span title="Retour fournisseur en attente" className="inline-flex items-center gap-0.5 rounded-full bg-orange-50 border border-orange-200 px-1.5 py-0.5 text-xs text-orange-600 ml-1">
+                        <AlertTriangle className="w-3 h-3" /> Retour
+                      </span>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-end gap-1" onClick={e => e.stopPropagation()}>
@@ -244,8 +351,8 @@ export default function FacturesPage() {
             })}
           </tbody>
         </table>
-        {filtered.length === 0 && <EmptyState icon={FileText} title="Aucune facture" />}
-        <Pagination page={page} pageSize={PAGE_SIZE} total={sorted.length} onChange={setPage} />
+        {factures.length === 0 && <EmptyState icon={FileText} title="Aucune facture" />}
+        <Pagination page={page} pageSize={PAGE_SIZE} total={totalCount} onChange={setPage} />
       </div>
 
       <PdfImportModal

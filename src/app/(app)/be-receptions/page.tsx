@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
@@ -27,6 +27,7 @@ export default function BEReceptionsPage() {
   const searchParams = useSearchParams();
   const pathname = usePathname();
   const qc = useQueryClient();
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const search = searchParams.get('q') ?? '';
   const filtreStatut = searchParams.get('statut') ?? 'all';
@@ -55,14 +56,29 @@ export default function BEReceptionsPage() {
     router.replace(`${pathname}?${params.toString()}`);
   }, [searchParams, pathname, router]);
 
-  const { data: bes = [] } = useQuery<BEReception[]>({
-    queryKey: ['bes'],
+  const { data: besResult = { bes: [], total: 0 }, isError } = useQuery<{ bes: BEReception[]; total: number }>({
+    queryKey: ['bes', page, filtreStatut, filtreFournisseur, search, dateDebut, dateFin],
     queryFn: async () => {
-      const { data } = await supabase.from('be_receptions').select('*').order('created_at', { ascending: false }).limit(500);
-      return data ?? [];
+      let query = supabase
+        .from('be_receptions')
+        .select('*', { count: 'exact' })
+        .order('created_at', { ascending: false });
+
+      if (filtreStatut !== 'all') query = query.eq('statut_be', filtreStatut);
+      if (filtreFournisseur) query = query.ilike('fournisseur', `%${filtreFournisseur}%`);
+      if (search) query = query.ilike('numero_be', `%${search}%`);
+      if (dateDebut) query = query.gte('date_bl', dateDebut);
+      if (dateFin) query = query.lte('date_bl', dateFin);
+
+      query = query.range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1);
+
+      const { data, count } = await query;
+      return { bes: data ?? [], total: count ?? 0 };
     },
-    refetchInterval: 5000,
+    staleTime: 30_000,
   });
+
+  const { bes, total } = besResult;
 
   const { data: besIdAvecEcart = new Set<string>() } = useQuery<Set<string>>({
     queryKey: ['bes_ecarts'],
@@ -77,18 +93,28 @@ export default function BEReceptionsPage() {
       }
       return ids;
     },
-    refetchInterval: 10000,
+    staleTime: 60_000,
   });
 
-  const filtered = useMemo(() => bes.filter(b => {
-    if (filtreStatut !== 'all' && b.statut_be !== filtreStatut) return false;
-    if (filtreFournisseur && !b.fournisseur?.toLowerCase().includes(filtreFournisseur.toLowerCase())) return false;
-    if (search && !b.numero_be?.toLowerCase().includes(search.toLowerCase())) return false;
-    if (filtreEcart && !besIdAvecEcart.has(b.id)) return false;
-    if (dateDebut && b.date_bl && b.date_bl < dateDebut) return false;
-    if (dateFin && b.date_bl && b.date_bl > dateFin) return false;
-    return true;
-  }), [bes, filtreStatut, filtreFournisseur, search, filtreEcart, besIdAvecEcart, dateDebut, dateFin]);
+  useEffect(() => {
+    const channel = supabase
+      .channel('be-receptions-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'be_receptions' }, () => {
+        clearTimeout(debounceRef.current);
+        debounceRef.current = setTimeout(() => qc.invalidateQueries({ queryKey: ['bes'] }), 200);
+      })
+      .subscribe();
+    return () => {
+      clearTimeout(debounceRef.current);
+      void supabase.removeChannel(channel);
+    };
+  }, [qc]);
+
+  // Client-side ecart filter on the current page only
+  const pageData = useMemo(() => {
+    if (!filtreEcart) return bes;
+    return bes.filter(b => besIdAvecEcart.has(b.id));
+  }, [bes, filtreEcart, besIdAvecEcart]);
 
   const {
     sorted,
@@ -101,10 +127,9 @@ export default function BEReceptionsPage() {
     clearSelection,
     isPageChecked,
     isPageIndeterminate,
-  } = useTableFeatures(filtered);
+  } = useTableFeatures(pageData);
 
-  const paginated = sorted.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
-  const pageIds = paginated.map(b => b.id);
+  const pageIds = sorted.map(b => b.id);
 
   const deleteMutation = useMutation({
     mutationFn: async (be: BEReception) => {
@@ -145,7 +170,7 @@ export default function BEReceptionsPage() {
     <div>
       <PageHeader
         title="BE / Réceptions"
-        subtitle={`${bes.length} bordereau${bes.length > 1 ? 'x' : ''}`}
+        subtitle={`${total} bordereau${total > 1 ? 'x' : ''}`}
         actions={
           <div className="flex items-center gap-2">
             <Button size="sm" onClick={() => setShowImport(true)}>
@@ -162,6 +187,12 @@ export default function BEReceptionsPage() {
           </div>
         }
       />
+
+      {isError && (
+        <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+          Erreur lors du chargement des bons d&apos;entrée.
+        </div>
+      )}
 
       <div className="flex gap-3 mb-4 flex-wrap items-center">
         <select
@@ -184,6 +215,9 @@ export default function BEReceptionsPage() {
           <AlertTriangle className="w-3.5 h-3.5" />
           Écarts{besIdAvecEcart.size > 0 && <span className={`rounded-full px-1.5 py-0.5 text-xs font-semibold ${filtreEcart ? 'bg-white text-orange-600' : 'bg-orange-100 text-orange-700'}`}>{besIdAvecEcart.size}</span>}
         </button>
+        {filtreEcart && (
+          <span className="text-xs text-gray-400 italic">(filtre écarts appliqué sur la page courante uniquement)</span>
+        )}
         <input type="date" value={dateDebut} onChange={e => setFilter('debut', e.target.value)} className="h-9 rounded-lg border border-gray-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" title="Date BL depuis" />
         <input type="date" value={dateFin} onChange={e => setFilter('fin', e.target.value)} className="h-9 rounded-lg border border-gray-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" title="Date BL jusqu'à" />
         {(search || filtreStatut !== 'all' || filtreFournisseur || filtreEcart || dateDebut || dateFin) && (
@@ -223,7 +257,7 @@ export default function BEReceptionsPage() {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-50">
-            {paginated.map(be => (
+            {sorted.map(be => (
               <tr
                 key={be.id}
                 className={`hover:bg-gray-50/50 cursor-pointer ${selected.has(be.id) ? 'bg-indigo-50/30' : ''}`}
@@ -265,8 +299,8 @@ export default function BEReceptionsPage() {
             ))}
           </tbody>
         </table>
-        {filtered.length === 0 && <EmptyState icon={Package} title="Aucun bordereau de réception" />}
-        <Pagination page={page} pageSize={PAGE_SIZE} total={sorted.length} onChange={setPage} />
+        {sorted.length === 0 && <EmptyState icon={Package} title="Aucun bordereau de réception" />}
+        <Pagination page={page} pageSize={PAGE_SIZE} total={filtreEcart ? sorted.length : total} onChange={setPage} />
       </div>
 
       <PdfImportModal

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
 import Link from 'next/link';
@@ -36,6 +36,7 @@ const PRIORITE_CONFIG: Record<string, string> = {
 
 export default function ExceptionsPage() {
   const qc = useQueryClient();
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [page, setPage] = useState(1);
   const [filterStatut, setFilterStatut] = useState('actives');
   const [filterType, setFilterType] = useState('all');
@@ -44,14 +45,65 @@ export default function ExceptionsPage() {
   const [comment, setComment] = useState('');
   const [updating, setUpdating] = useState<string | null>(null);
 
-  const { data: exceptions = [] } = useQuery<Exception[]>({
-    queryKey: ['exceptions'],
+  const { data: exceptionsResult = { exceptions: [], total: 0 }, isError } = useQuery<{ exceptions: Exception[]; total: number }>({
+    queryKey: ['exceptions', page, filterStatut, filterType, filterPriorite],
     queryFn: async () => {
-      const { data } = await supabase.from('exceptions').select('*').order('created_at', { ascending: false }).limit(500);
-      return data ?? [];
+      let query = supabase
+        .from('exceptions')
+        .select('*', { count: 'exact' })
+        .order('created_at', { ascending: false });
+
+      if (filterStatut === 'actives') query = query.in('statut_exception', ['ouverte', 'en cours']);
+      else if (filterStatut === 'résolues') query = query.in('statut_exception', ['résolue', 'ignorée']);
+
+      if (filterType !== 'all') query = query.eq('type_exception', filterType);
+      if (filterPriorite !== 'all') query = query.eq('niveau_priorite', filterPriorite);
+
+      query = query.range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1);
+
+      const { data, count } = await query;
+      return { exceptions: data ?? [], total: count ?? 0 };
     },
-    refetchInterval: 5000,
+    staleTime: 30_000,
   });
+
+  const { exceptions, total } = exceptionsResult;
+
+  // Separate lightweight query for KPI counts (always active exceptions)
+  const { data: kpiData = { total: 0, haute: 0, prixEcart: 0, qteEcart: 0 } } = useQuery<{ total: number; haute: number; prixEcart: number; qteEcart: number }>({
+    queryKey: ['exceptions-kpis'],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from('exceptions')
+        .select('type_exception, niveau_priorite')
+        .in('statut_exception', ['ouverte', 'en cours']);
+      const rows = data ?? [];
+      return {
+        total: rows.length,
+        haute: rows.filter(e => ['haute', 'critique'].includes(e.niveau_priorite)).length,
+        prixEcart: rows.filter(e => e.type_exception === 'écart prix').length,
+        qteEcart: rows.filter(e => ['surfacturation quantité', 'réception incomplète', 'quantité incohérente'].includes(e.type_exception)).length,
+      };
+    },
+    staleTime: 30_000,
+  });
+
+  useEffect(() => {
+    const channel = supabase
+      .channel('exceptions-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'exceptions' }, () => {
+        clearTimeout(debounceRef.current);
+        debounceRef.current = setTimeout(() => {
+          void qc.invalidateQueries({ queryKey: ['exceptions'] });
+          void qc.invalidateQueries({ queryKey: ['exceptions-kpis'] });
+        }, 200);
+      })
+      .subscribe();
+    return () => {
+      clearTimeout(debounceRef.current);
+      void supabase.removeChannel(channel);
+    };
+  }, [qc]);
 
   const { data: factures = [] } = useQuery<Pick<Facture, 'id' | 'numero_facture'>[]>({
     queryKey: ['factures-slim'],
@@ -75,24 +127,6 @@ export default function ExceptionsPage() {
   const beMap = useMemo(() => Object.fromEntries(bes.map(b => [b.id, b])) as Record<string, Pick<BEReception, 'id' | 'numero_be'>>, [bes]);
   const cmdMap = useMemo(() => Object.fromEntries(commandes.map(c => [c.id, c])) as Record<string, Pick<Commande, 'id' | 'numero_commande_interne'>>, [commandes]);
 
-  const filtered = useMemo(() => exceptions.filter(e => {
-    if (filterStatut === 'actives' && !['ouverte', 'en cours'].includes(e.statut_exception)) return false;
-    if (filterStatut === 'résolues' && !['résolue', 'ignorée'].includes(e.statut_exception)) return false;
-    if (filterType !== 'all' && e.type_exception !== filterType) return false;
-    if (filterPriorite !== 'all' && e.niveau_priorite !== filterPriorite) return false;
-    return true;
-  }), [exceptions, filterStatut, filterType, filterPriorite]);
-
-  const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
-
-  const actives = exceptions.filter(e => ['ouverte', 'en cours'].includes(e.statut_exception));
-  const kpis = {
-    total: actives.length,
-    haute: actives.filter(e => ['haute', 'critique'].includes(e.niveau_priorite)).length,
-    prixEcart: actives.filter(e => e.type_exception === 'écart prix').length,
-    qteEcart: actives.filter(e => ['surfacturation quantité', 'réception incomplète', 'quantité incohérente'].includes(e.type_exception)).length,
-  };
-
   const updateStatut = async (exc: Exception, statut: Exception['statut_exception']) => {
     setUpdating(exc.id);
     try {
@@ -102,6 +136,7 @@ export default function ExceptionsPage() {
       }).eq('id', exc.id);
       if (error) throw error;
       qc.invalidateQueries({ queryKey: ['exceptions'] });
+      qc.invalidateQueries({ queryKey: ['exceptions-kpis'] });
       setShowDetail(null);
       setComment('');
       toast.success(`Exception ${statut}`);
@@ -117,16 +152,22 @@ export default function ExceptionsPage() {
     <div>
       <PageHeader
         title="Anomalies / Exceptions"
-        subtitle={`${actives.length} exception${actives.length > 1 ? 's' : ''} active${actives.length > 1 ? 's' : ''}`}
+        subtitle={`${kpiData.total} exception${kpiData.total > 1 ? 's' : ''} active${kpiData.total > 1 ? 's' : ''}`}
       />
+
+      {isError && (
+        <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+          Erreur lors du chargement des exceptions.
+        </div>
+      )}
 
       {/* KPIs */}
       <div className="grid grid-cols-4 gap-4 mb-5">
         {[
-          { label: 'Actives', value: kpis.total, color: 'text-gray-900' },
-          { label: 'Haute priorité', value: kpis.haute, color: 'text-red-600' },
-          { label: 'Écarts prix', value: kpis.prixEcart, color: 'text-amber-600' },
-          { label: 'Écarts quantité', value: kpis.qteEcart, color: 'text-orange-600' },
+          { label: 'Actives', value: kpiData.total, color: 'text-gray-900' },
+          { label: 'Haute priorité', value: kpiData.haute, color: 'text-red-600' },
+          { label: 'Écarts prix', value: kpiData.prixEcart, color: 'text-amber-600' },
+          { label: 'Écarts quantité', value: kpiData.qteEcart, color: 'text-orange-600' },
         ].map(k => (
           <div key={k.label} className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
             <p className="text-xs text-gray-500">{k.label}</p>
@@ -172,7 +213,7 @@ export default function ExceptionsPage() {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-50">
-            {paginated.map(exc => {
+            {exceptions.map(exc => {
               const tc = TYPE_CONFIG[exc.type_exception] ?? { color: 'text-gray-600 bg-gray-50', label: exc.type_exception };
               return (
                 <tr key={exc.id} className={cn('hover:bg-gray-50/50', ['haute', 'critique'].includes(exc.niveau_priorite) ? 'border-l-2 border-l-red-400' : exc.niveau_priorite === 'moyenne' ? 'border-l-2 border-l-orange-300' : '')}>
@@ -274,8 +315,8 @@ export default function ExceptionsPage() {
             })}
           </tbody>
         </table>
-        {filtered.length === 0 && <EmptyState icon={AlertTriangle} title="Aucune exception" description="Aucune anomalie détectée" />}
-        <Pagination page={page} pageSize={PAGE_SIZE} total={filtered.length} onChange={setPage} />
+        {exceptions.length === 0 && <EmptyState icon={AlertTriangle} title="Aucune exception" description="Aucune anomalie détectée" />}
+        <Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={setPage} />
       </div>
 
       {/* Modale détail */}
