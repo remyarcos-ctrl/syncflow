@@ -2,9 +2,14 @@ import { useState, useMemo, useCallback } from 'react';
 
 export type SortDir = 'asc' | 'desc';
 
-export function useTableFeatures<T extends { id: string }>(data: T[]) {
-  const [sortKey, setSortKey] = useState<string | null>(null);
-  const [sortDir, setSortDir] = useState<SortDir>('asc');
+interface TableFeaturesOptions {
+  initialSortKey?: string;
+  initialSortDir?: SortDir;
+}
+
+export function useTableFeatures<T extends { id: string }>(data: T[], options: TableFeaturesOptions = {}) {
+  const [sortKey, setSortKey] = useState<string | null>(options.initialSortKey ?? null);
+  const [sortDir, setSortDir] = useState<SortDir>(options.initialSortDir ?? 'asc');
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const toggleSort = useCallback((key: string) => {
@@ -12,7 +17,7 @@ export function useTableFeatures<T extends { id: string }>(data: T[]) {
       setSortDir(d => d === 'asc' ? 'desc' : 'asc');
     } else {
       setSortKey(key);
-      setSortDir('asc');
+      setSortDir('desc');
     }
   }, [sortKey]);
 

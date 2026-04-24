@@ -127,7 +127,7 @@ export default function BEReceptionsPage() {
     clearSelection,
     isPageChecked,
     isPageIndeterminate,
-  } = useTableFeatures(pageData);
+  } = useTableFeatures(pageData, { initialSortKey: 'date_bl', initialSortDir: 'desc' });
 
   const pageIds = sorted.map(b => b.id);
 

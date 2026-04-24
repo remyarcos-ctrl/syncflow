@@ -83,7 +83,7 @@ export default function CommandesPage() {
     clearSelection,
     isPageChecked,
     isPageIndeterminate,
-  } = useTableFeatures(filtered);
+  } = useTableFeatures(filtered, { initialSortKey: 'date_commande', initialSortDir: 'desc' });
 
   const paginated = sorted.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
   const pageIds = paginated.map(c => c.id);
@@ -267,7 +267,7 @@ export default function CommandesPage() {
                   className={`hover:bg-gray-50/50 cursor-pointer ${isSelected ? 'bg-indigo-50/30' : ''}`}
                   onClick={() => router.push(`/commandes/${cmd.id}`)}
                 >
-                  <td className="w-10 px-4 py-3" onClick={e => { e.stopPropagation(); toggleOne(cmd.id); }}>
+                  <td className="w-10 px-4 py-3" onClick={e => e.stopPropagation()}>
                     <input
                       type="checkbox"
                       checked={isSelected}
