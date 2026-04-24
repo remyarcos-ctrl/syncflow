@@ -109,7 +109,8 @@ async function importCommande(
       const { data: prix } = await sb.from('prix_reference')
         .select('pu_last')
         .eq('reference_article', ligne.reference_article)
-        .ilike('fournisseur', `%${(parsed.fournisseur ?? '').slice(0, 6)}%`)
+        .order('updated_at', { ascending: false })
+        .limit(1)
         .maybeSingle();
       if (prix) {
         await sb.from('lignes_commande').update({

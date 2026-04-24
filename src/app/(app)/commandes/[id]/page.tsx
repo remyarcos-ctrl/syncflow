@@ -341,13 +341,13 @@ export default function CommandeDetailPage() {
         .not('reference_article', 'is', null);
 
       let remplis = 0;
-      const fournPrefix = (commande?.fournisseur ?? '').slice(0, 6);
       for (const ligne of sansPrix ?? []) {
         const { data: prix } = await supabase
           .from('prix_reference')
           .select('pu_last')
           .eq('reference_article', ligne.reference_article)
-          .ilike('fournisseur', `%${fournPrefix}%`)
+          .order('updated_at', { ascending: false })
+          .limit(1)
           .maybeSingle();
         if (prix) {
           await supabase.from('lignes_commande').update({
