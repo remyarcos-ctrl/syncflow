@@ -242,6 +242,13 @@ export async function POST(req: NextRequest) {
       // Tenter un rapprochement automatique (résultats = 'proposé', à valider par l'utilisateur)
       await autoRapprocher(sb, factRecord.id, doc.data.fournisseur, lignesFactureInserted);
 
+      // Fire anomaly detection (non-blocking)
+      void fetch(`${process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000'}/api/anomalie-ia`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ factureId: factRecord.id }),
+      }).catch(() => null);
+
       result.factures_importees++;
       result.details.push(`✓ Facture ${doc.data.numero_facture} — ${lignes.length} ligne(s)`);
     }

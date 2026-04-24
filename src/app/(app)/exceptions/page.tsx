@@ -223,7 +223,24 @@ export default function ExceptionsPage() {
                   <td className="px-4 py-3">
                     <span className={cn('text-xs font-medium px-2 py-0.5 rounded-full border', PRIORITE_CONFIG[exc.niveau_priorite] ?? '')}>{exc.niveau_priorite}</span>
                   </td>
-                  <td className="px-4 py-3 text-xs text-gray-700 max-w-[200px] truncate">{exc.motif}</td>
+                  <td className="px-4 py-3 text-xs text-gray-700 max-w-[200px]">
+                    <div className="truncate">{exc.motif}</div>
+                    {exc.explication_ia && (
+                      <p className="text-xs text-gray-500 mt-0.5 max-w-xs truncate">{exc.explication_ia}</p>
+                    )}
+                    {!exc.explication_ia && !exc.suggestion_ia && (
+                      <button
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          await fetch('/api/exception-ia', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ exceptionId: exc.id }) });
+                          qc.invalidateQueries({ queryKey: ['exceptions'] });
+                        }}
+                        className="text-xs text-indigo-500 hover:text-indigo-700 underline"
+                      >
+                        Analyser avec IA
+                      </button>
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-xs">
                     {exc.facture_id && factureMap[exc.facture_id] && (
                       <Link href={`/factures/${exc.facture_id}`} className="text-indigo-600 hover:underline">{factureMap[exc.facture_id].numero_facture}</Link>
@@ -334,11 +351,17 @@ export default function ExceptionsPage() {
               {showDetail.be_id && beMap[showDetail.be_id] && <div><p className="text-gray-400">BE</p><Link href={`/be-receptions/${showDetail.be_id}`} className="text-indigo-600 hover:underline">{beMap[showDetail.be_id].numero_be}</Link></div>}
               {showDetail.commande_id && cmdMap[showDetail.commande_id] && <div><p className="text-gray-400">Commande</p><Link href={`/commandes/${showDetail.commande_id}`} className="text-indigo-600 hover:underline">{cmdMap[showDetail.commande_id].numero_commande_interne}</Link></div>}
             </div>
+            {showDetail.suggestion_ia && (
+              <div className="mt-3 p-3 bg-indigo-50 border border-indigo-100 rounded-lg">
+                <p className="text-xs font-medium text-indigo-700 mb-1">💡 Suggestion IA</p>
+                <p className="text-sm text-indigo-800">{showDetail.suggestion_ia}</p>
+              </div>
+            )}
             <textarea
               value={comment}
               onChange={e => setComment(e.target.value)}
               placeholder="Commentaire / note de résolution..."
-              className="w-full border border-gray-200 rounded-lg p-2 text-sm resize-none h-20 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              className="w-full border border-gray-200 rounded-lg p-2 text-sm resize-none h-20 focus:outline-none focus:ring-2 focus:ring-indigo-500 mt-3"
             />
             {['ouverte', 'en cours'].includes(showDetail.statut_exception) && (
               <div className="flex gap-2 mt-3">

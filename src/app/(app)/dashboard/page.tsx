@@ -10,7 +10,7 @@ import Link from 'next/link';
 import {
   ShoppingCart, Package, FileText, AlertTriangle,
   CheckCircle2, ArrowRight, RefreshCw, ChevronRight,
-  Clock, XCircle
+  Clock, XCircle, Sparkles
 } from 'lucide-react';
 import type { Commande, BEReception, Facture, Exception, Rapprochement } from '@/types';
 
@@ -182,6 +182,16 @@ export default function DashboardPage() {
     ...STALE,
   });
 
+  const { data: rapportData, isLoading: isLoadingRapport, refetch: refetchRapport } = useQuery<{ rapport: string; cached: boolean; generated_at: string }>({
+    queryKey: ['rapport-ia'],
+    queryFn: async () => {
+      const res = await fetch('/api/rapport-ia');
+      return res.json() as Promise<{ rapport: string; cached: boolean; generated_at: string }>;
+    },
+    staleTime: 10 * 60 * 1000, // 10min
+    retry: false,
+  });
+
   const pipeline = useMemo(() => {
     const cmdSoldees = commandes.filter(c => c.statut_commande === 'soldée').length;
     const cmdAnomalies = commandes.filter(c => c.statut_commande === 'en anomalie').length;
@@ -260,6 +270,40 @@ export default function DashboardPage() {
         <p className="text-sm text-gray-500 mt-0.5">
           {new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
         </p>
+      </div>
+
+      {/* Résumé IA */}
+      <div className="mb-6 p-4 bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-100 rounded-xl">
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex items-start gap-3 flex-1">
+            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shrink-0 mt-0.5">
+              <Sparkles className="w-4 h-4 text-white" />
+            </div>
+            <div className="flex-1">
+              <p className="text-xs font-medium text-indigo-600 mb-1">Résumé IA — {new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })}</p>
+              {isLoadingRapport ? (
+                <div className="space-y-1.5">
+                  <div className="animate-pulse h-3 bg-indigo-100 rounded w-full" />
+                  <div className="animate-pulse h-3 bg-indigo-100 rounded w-4/5" />
+                </div>
+              ) : rapportData?.rapport ? (
+                <p className="text-sm text-gray-700 leading-relaxed">{rapportData.rapport}</p>
+              ) : (
+                <p className="text-sm text-gray-500 italic">Résumé non disponible</p>
+              )}
+            </div>
+          </div>
+          <button
+            onClick={async () => {
+              await fetch('/api/rapport-ia', { method: 'DELETE' });
+              await refetchRapport();
+            }}
+            className="text-xs text-indigo-400 hover:text-indigo-600 shrink-0 mt-1"
+            title="Actualiser le résumé"
+          >
+            ↻
+          </button>
+        </div>
       </div>
 
       {/* Pipeline */}

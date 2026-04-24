@@ -5,12 +5,13 @@ import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard, Mail, ShoppingCart, Package, FileText,
   Link2, AlertTriangle, ClipboardList, Building2, Settings,
-  TrendingUp, X, PackageOpen, Upload
+  TrendingUp, X, PackageOpen, Upload, Bot
 } from 'lucide-react';
 import { cn } from '@/utils';
 
 const navItems = [
   { label: 'Dashboard',       href: '/dashboard',         icon: LayoutDashboard },
+  { label: 'Assistant IA',    href: '/assistant',         icon: Bot },
   { label: 'Emails',          href: '/emails',            icon: Mail },
   { label: 'Commandes',       href: '/commandes',         icon: ShoppingCart },
   { label: 'BE / Réceptions', href: '/be-receptions',     icon: Package },

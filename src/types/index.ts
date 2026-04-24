@@ -157,6 +157,7 @@ export interface Facture {
   email_source_id: string | null;
   message_id: string | null;
   commentaire: string | null;
+  anomalie_ia: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -228,6 +229,8 @@ export interface Exception {
   valeur_obtenue: number | null;
   ecart: number | null;
   commentaire: string | null;
+  explication_ia: string | null;
+  suggestion_ia: string | null;
   resolu_par: string | null;
   date_resolution: string | null;
   created_at: string;

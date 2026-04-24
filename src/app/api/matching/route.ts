@@ -275,6 +275,19 @@ export async function POST(req: NextRequest) {
           console.error('[matching] Erreur insertion exceptions:', excError);
         } else {
           exceptionsCreees = insertedExc?.length ?? 0;
+
+          // Générer explications IA pour les nouvelles exceptions (fire and forget)
+          if (insertedExc && insertedExc.length > 0) {
+            void Promise.all(
+              (insertedExc as { id: string }[]).map((exc) =>
+                fetch(`${process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000'}/api/exception-ia`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ exceptionId: exc.id }),
+                }).catch(() => null) // Never block matching on AI failure
+              )
+            );
+          }
         }
       } catch (excErr) {
         console.error('[matching] Erreur insertion exceptions:', excErr);
