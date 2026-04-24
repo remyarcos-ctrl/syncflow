@@ -21,6 +21,7 @@ function adminSb() {
 interface SyncResult {
   commandes_importees: number;
   doublons_ignores: number;
+  filtres_ignores: number;
   erreurs: string[];
   details: string[];
 }
@@ -45,6 +46,7 @@ async function importCommande(
   token: string,
   message: GmailMessage,
   result: SyncResult,
+  filtresFournisseurs: string[],
 ) {
   const { text } = extractMessageParts(message);
   if (!text) { result.erreurs.push(`Message ${message.id}: pas de texte`); return; }
@@ -54,6 +56,17 @@ async function importCommande(
 
   const parsed = await parseCommandeFromEmail(text, subject, from);
   if (!parsed) { result.erreurs.push(`Message ${message.id}: parsing commande échoué`); return; }
+
+  // Filtre fournisseur — si la liste est vide, tout passe
+  if (filtresFournisseurs.length > 0 && parsed.fournisseur) {
+    const fournNorm = parsed.fournisseur.toLowerCase();
+    const match = filtresFournisseurs.some(f => fournNorm.includes(f.toLowerCase()));
+    if (!match) {
+      result.filtres_ignores++;
+      result.details.push(`⏭ Ignoré (hors filtre) : ${parsed.numero_commande_interne} — ${parsed.fournisseur}`);
+      return;
+    }
+  }
 
   // Doublon
   if (await isDuplicate(sb, 'commandes', 'numero_commande_interne', parsed.numero_commande_interne)) {
@@ -112,10 +125,12 @@ export async function POST() {
 
   const { token, config } = auth;
   const sb = adminSb();
+  const filtresFournisseurs = config.filtres_fournisseurs ?? [];
 
   const result: SyncResult = {
     commandes_importees: 0,
     doublons_ignores: 0,
+    filtres_ignores: 0,
     erreurs: [],
     details: [],
   };
@@ -133,10 +148,10 @@ export async function POST() {
     try {
       const thread = await getThread(token, threadId);
       for (const msg of thread.messages ?? []) {
-        if (processedSet.has(msg.id)) continue; // message déjà traité
+        if (processedSet.has(msg.id)) continue;
         const subject = getHeader(msg, 'subject');
         if (/COMMANDE\s+POUR/i.test(subject)) {
-          await importCommande(sb, token, msg, result);
+          await importCommande(sb, token, msg, result, filtresFournisseurs);
         }
         newMessageIds.push(msg.id);
       }

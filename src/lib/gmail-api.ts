@@ -24,6 +24,7 @@ export interface GmailConfig {
   token_expiry: string | null;
   last_sync_at: string | null;
   processed_thread_ids: string[];
+  filtres_fournisseurs: string[];
 }
 
 interface GmailMessagePart {
@@ -53,7 +54,11 @@ export async function getGmailConfig(): Promise<GmailConfig | null> {
   const sb = adminSupabase();
   const { data } = await sb.from('gmail_config').select('*').limit(1).maybeSingle();
   if (!data) return null;
-  return { ...data, processed_thread_ids: data.processed_thread_ids ?? [] } as GmailConfig;
+  return {
+    ...data,
+    processed_thread_ids: data.processed_thread_ids ?? [],
+    filtres_fournisseurs: data.filtres_fournisseurs ?? [],
+  } as GmailConfig;
 }
 
 export async function getValidToken(): Promise<{ token: string; config: GmailConfig } | null> {

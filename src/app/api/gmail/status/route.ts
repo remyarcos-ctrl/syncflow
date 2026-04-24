@@ -12,5 +12,6 @@ export async function GET() {
     email: config.email,
     last_sync_at: config.last_sync_at,
     processed_count: config.processed_thread_ids.length,
+    filtres_fournisseurs: config.filtres_fournisseurs ?? [],
   });
 }

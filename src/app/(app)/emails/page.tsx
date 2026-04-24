@@ -6,7 +6,8 @@ import { toast } from 'sonner';
 import { formatDate, cn } from '@/utils';
 import PageHeader from '@/components/shared/PageHeader';
 import { Button } from '@/components/ui/button';
-import { Mail, RefreshCw, Unlink, CheckCircle, AlertCircle, Clock, ShoppingCart } from 'lucide-react';
+import { Input } from '@/components/ui/input';
+import { Mail, RefreshCw, Unlink, CheckCircle, AlertCircle, Clock, ShoppingCart, Filter, X, Plus } from 'lucide-react';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -15,11 +16,13 @@ interface GmailStatus {
   email?: string;
   last_sync_at?: string | null;
   processed_count?: number;
+  filtres_fournisseurs?: string[];
 }
 
 interface SyncResult {
   commandes_importees: number;
   doublons_ignores: number;
+  filtres_ignores: number;
   erreurs: string[];
   details: string[];
 }
@@ -30,6 +33,36 @@ export default function EmailsPage() {
   const qc = useQueryClient();
   const [lastResult, setLastResult] = useState<SyncResult | null>(null);
   const [scanCompletedAt, setScanCompletedAt] = useState<Date | null>(null);
+  const [filtres, setFiltres] = useState<string[]>([]);
+  const [newFiltre, setNewFiltre] = useState('');
+  const [savingFiltres, setSavingFiltres] = useState(false);
+
+  const saveFiltres = async (updated: string[]) => {
+    setSavingFiltres(true);
+    try {
+      await fetch('/api/gmail/filtres', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filtres: updated }),
+      });
+      setFiltres(updated);
+      qc.invalidateQueries({ queryKey: ['gmail-status'] });
+    } finally {
+      setSavingFiltres(false);
+    }
+  };
+
+  const addFiltre = () => {
+    const val = newFiltre.trim();
+    if (!val || filtres.includes(val)) return;
+    const updated = [...filtres, val];
+    setNewFiltre('');
+    void saveFiltres(updated);
+  };
+
+  const removeFiltre = (f: string) => {
+    void saveFiltres(filtres.filter(x => x !== f));
+  };
 
   // Lire paramètre URL (retour OAuth)
   useEffect(() => {
@@ -58,6 +91,13 @@ export default function EmailsPage() {
     queryFn: () => fetch('/api/gmail/status').then((r) => r.json()),
     refetchInterval: 30_000,
   });
+
+  // Synchroniser l'état local des filtres avec le statut chargé
+  useEffect(() => {
+    if (status?.filtres_fournisseurs) {
+      setFiltres(status.filtres_fournisseurs);
+    }
+  }, [status?.filtres_fournisseurs]);
 
   // Connexion → redirection OAuth
   const connect = () => { window.location.href = '/api/gmail/auth'; };
@@ -181,6 +221,49 @@ export default function EmailsPage() {
         </div>
       </div>
 
+      {/* ── Filtres fournisseurs ──────────────────────────────────────────── */}
+      <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+        <div className="flex items-center gap-2 mb-4">
+          <Filter className="h-4 w-4 text-gray-400" />
+          <h3 className="font-semibold text-gray-800 text-sm">Filtres fournisseurs</h3>
+          {filtres.length === 0 && (
+            <span className="text-xs text-gray-400 ml-1">— tous les fournisseurs sont importés</span>
+          )}
+        </div>
+
+        {filtres.length > 0 && (
+          <div className="flex flex-wrap gap-2 mb-4">
+            {filtres.map(f => (
+              <span key={f} className="inline-flex items-center gap-1.5 rounded-full bg-indigo-50 border border-indigo-200 px-3 py-1 text-sm text-indigo-700">
+                {f}
+                <button onClick={() => removeFiltre(f)} disabled={savingFiltres} className="hover:text-indigo-900 disabled:opacity-40">
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+
+        <form
+          onSubmit={e => { e.preventDefault(); addFiltre(); }}
+          className="flex gap-2"
+        >
+          <Input
+            value={newFiltre}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNewFiltre(e.target.value)}
+            placeholder="Ex: Somafi, ACME, Dupont..."
+            className="max-w-xs"
+            disabled={savingFiltres}
+          />
+          <Button type="submit" variant="outline" size="sm" disabled={!newFiltre.trim() || savingFiltres}>
+            <Plus className="h-4 w-4 mr-1" /> Ajouter
+          </Button>
+        </form>
+        <p className="mt-2 text-xs text-gray-400">
+          Si des filtres sont définis, seules les commandes dont le fournisseur contient l'un de ces termes seront importées. La recherche est insensible à la casse.
+        </p>
+      </div>
+
       {/* ── Prérequis Google Cloud (si non connecté) ──────────────────────── */}
       {!isConnected && !statusLoading && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-5">
@@ -251,11 +334,12 @@ export default function EmailsPage() {
           )}
 
           {/* KPIs résultats */}
-          {(lastResult.commandes_importees > 0 || lastResult.doublons_ignores > 0) && (
-          <div className="grid grid-cols-2 gap-3">
+          {(lastResult.commandes_importees > 0 || lastResult.doublons_ignores > 0 || lastResult.filtres_ignores > 0) && (
+          <div className="grid grid-cols-3 gap-3">
             {[
               { icon: ShoppingCart, label: 'Commandes importées', value: lastResult.commandes_importees, cls: 'text-blue-600', bg: 'bg-blue-50' },
               { icon: Clock, label: 'Doublons ignorés', value: lastResult.doublons_ignores, cls: 'text-gray-500', bg: 'bg-gray-50' },
+              { icon: Filter, label: 'Hors filtre', value: lastResult.filtres_ignores ?? 0, cls: 'text-amber-600', bg: 'bg-amber-50' },
             ].map((k) => (
               <div key={k.label} className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm flex items-center gap-3">
                 <div className={cn('flex h-10 w-10 items-center justify-center rounded-lg', k.bg)}>
