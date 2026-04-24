@@ -84,7 +84,7 @@ export default function CommandesPage() {
     clearSelection,
     isPageChecked,
     isPageIndeterminate,
-  } = useTableFeatures(filtered, { initialSortKey: 'date_commande', initialSortDir: 'desc' });
+  } = useTableFeatures(filtered, { initialSortKey: 'created_at', initialSortDir: 'desc' });
 
   const paginated = sorted.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
   const pageIds = paginated.map(c => c.id);
