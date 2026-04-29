@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef, Suspense } from 'react';
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
@@ -53,7 +53,7 @@ function BEProgress({ be }: { be: BEReception }) {
 const PAGE_SIZE = 25;
 const STATUTS: BEReception['statut_be'][] = ['reçu', 'partiellement facturé', 'facturé', 'soldé', 'en anomalie'];
 
-export default function BEReceptionsPage() {
+function BEReceptionsPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const pathname = usePathname();
@@ -389,5 +389,13 @@ export default function BEReceptionsPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function BEReceptionsPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-sm text-gray-400">Chargement...</div>}>
+      <BEReceptionsPageInner />
+    </Suspense>
   );
 }

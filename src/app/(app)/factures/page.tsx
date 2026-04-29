@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, Suspense } from 'react';
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
@@ -24,7 +24,7 @@ const isAvoir = (f: Facture) =>
 const PAGE_SIZE = 25;
 const STATUTS: Facture['statut_facture'][] = ['importée', 'en cours de rapprochement', 'partiellement rapprochée', 'rapprochée', 'en anomalie'];
 
-export default function FacturesPage() {
+function FacturesPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const pathname = usePathname();
@@ -399,5 +399,13 @@ export default function FacturesPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function FacturesPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-sm text-gray-400">Chargement...</div>}>
+      <FacturesPageInner />
+    </Suspense>
   );
 }

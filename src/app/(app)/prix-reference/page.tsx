@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, Suspense } from 'react';
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
@@ -25,7 +25,7 @@ interface PrixReference {
 
 const PAGE_SIZE = 50;
 
-export default function PrixReferencePage() {
+function PrixReferencePageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const pathname = usePathname();
@@ -303,5 +303,13 @@ export default function PrixReferencePage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function PrixReferencePage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-sm text-gray-400">Chargement...</div>}>
+      <PrixReferencePageInner />
+    </Suspense>
   );
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, Suspense } from 'react';
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
@@ -25,7 +25,7 @@ const STATUTS: Commande['statut_commande'][] = [
   'partiellement facturée', 'soldée', 'en anomalie',
 ];
 
-export default function CommandesPage() {
+function CommandesPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const pathname = usePathname();
@@ -546,5 +546,13 @@ export default function CommandesPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function CommandesPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-sm text-gray-400">Chargement...</div>}>
+      <CommandesPageInner />
+    </Suspense>
   );
 }
