@@ -14,7 +14,7 @@ import { useTableFeatures } from '@/hooks/useTableFeatures';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { formatEur, formatDate, exportToCsv } from '@/utils';
-import { FileText, ChevronRight, Trash2, Download, Upload, Search, X, AlertTriangle, Zap, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react';
+import { FileText, ChevronRight, Trash2, Download, Upload, Search, X, AlertTriangle, Zap, ChevronUp, ChevronDown, ChevronsUpDown, Bot } from 'lucide-react';
 import { toast } from 'sonner';
 import type { Facture } from '@/types';
 
@@ -338,6 +338,13 @@ export default function FacturesPage() {
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-end gap-1" onClick={e => e.stopPropagation()}>
+                      <button
+                        className="p-1.5 rounded hover:bg-indigo-50 text-gray-400 hover:text-indigo-500 transition-colors"
+                        title="Demander à Teddy"
+                        onClick={() => window.dispatchEvent(new CustomEvent('teddy-ask', { detail: { prompt: `Analyse la facture ${f.numero_facture} (${f.fournisseur}) : statut rapprochement, écarts, actions recommandées.` } }))}
+                      >
+                        <Bot className="w-3.5 h-3.5" />
+                      </button>
                       <button className="p-1.5 rounded hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors" onClick={() => setConfirmDelete(f)}>
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>

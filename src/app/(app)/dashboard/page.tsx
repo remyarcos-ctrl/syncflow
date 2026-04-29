@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useEffect, useRef } from 'react';
+import { useMemo, useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -15,11 +15,12 @@ import {
 import type { Commande, BEReception, Facture, Exception, Rapprochement } from '@/types';
 
 function PipelineStep({
-  icon: Icon, label, total, ok, warning, error, linkWarn, linkErr, color
+  icon: Icon, label, total, ok, warning, error, linkWarn, linkErr, color, montant, showMontant, onToggle
 }: {
   icon: React.ElementType; label: string; total: number;
   ok: number; warning: number; error: number;
   linkOk?: string; linkWarn?: string; linkErr?: string; color: string;
+  montant?: number; showMontant?: boolean; onToggle?: () => void;
 }) {
   const pct = total > 0 ? Math.round((ok / total) * 100) : 0;
   return (
@@ -30,7 +31,22 @@ function PipelineStep({
         </div>
         <span className="text-xs font-semibold text-gray-600 uppercase tracking-wide">{label}</span>
       </div>
-      <div className="text-2xl font-bold text-gray-900 mb-1">{total}</div>
+      <div
+        className={`mb-1 ${onToggle ? 'cursor-pointer select-none group' : ''}`}
+        onClick={onToggle}
+        title={onToggle ? (showMontant ? 'Voir le nombre' : 'Voir le montant HT') : undefined}
+      >
+        {showMontant && montant != null ? (
+          <div className="text-xl font-bold text-indigo-700 group-hover:text-indigo-500 transition-colors">
+            {montant.toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })} €
+          </div>
+        ) : (
+          <div className="text-2xl font-bold text-gray-900 group-hover:text-indigo-600 transition-colors">
+            {total}
+            {onToggle && <span className="ml-1 text-xs font-normal text-gray-300 group-hover:text-indigo-400">HT →</span>}
+          </div>
+        )}
+      </div>
       <div className="h-1.5 rounded-full bg-gray-100 mb-2 overflow-hidden">
         <div className="h-full rounded-full bg-emerald-400 transition-all" style={{ width: `${pct}%` }} />
       </div>
@@ -83,6 +99,8 @@ export default function DashboardPage() {
   const STALE = { staleTime: 30_000 };
   const qc = useQueryClient();
   const debounceTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const [cmdShowMontant, setCmdShowMontant] = useState(false);
+  const [factShowMontant, setFactShowMontant] = useState(false);
 
   // IMPORTANT : activer la Replication Supabase pour chaque table dans
   // Database → Replication du dashboard Supabase (sinon les events ne sont pas émis).
@@ -192,13 +210,14 @@ export default function DashboardPage() {
     const factPartiel = factures.filter(f => ['partiellement rapprochée', 'en cours de rapprochement'].includes(f.statut_facture)).length;
     const factNon = factures.filter(f => f.statut_facture === 'importée' && !isAvoir(f)).length;
     const factAnomalie = factures.filter(f => f.statut_facture === 'en anomalie').length;
+    const cmdMontantTotal = commandes.reduce((s, c) => s + (c.montant_total_commande ?? 0), 0);
     const montantTotal = factures.reduce((s, f) => s + (f.total_ht ?? 0), 0);
     const montantRap = rapprochements.filter(r => r.statut_validation === 'validé').reduce((s, r) => s + (r.montant_rapproche ?? 0), 0);
     const pctRap = montantTotal > 0 ? Math.round((montantRap / montantTotal) * 100) : 0;
     const excHaute = exceptions.filter(e => ['ouverte', 'en cours'].includes(e.statut_exception) && ['haute', 'critique'].includes(e.niveau_priorite)).length;
     const excMoyenne = exceptions.filter(e => ['ouverte', 'en cours'].includes(e.statut_exception) && e.niveau_priorite === 'moyenne').length;
     const excFaible = exceptions.filter(e => ['ouverte', 'en cours'].includes(e.statut_exception) && e.niveau_priorite === 'faible').length;
-    return { cmdSoldees, cmdAnomalies, cmdEnCours, beLies, beNonLies, factRapprochees, factPartiel, factNon, factAnomalie, montantTotal, montantRap, pctRap, excHaute, excMoyenne, excFaible };
+    return { cmdSoldees, cmdAnomalies, cmdEnCours, cmdMontantTotal, beLies, beNonLies, factRapprochees, factPartiel, factNon, factAnomalie, montantTotal, montantRap, pctRap, excHaute, excMoyenne, excFaible };
   }, [commandes, bes, factures, exceptions, rapprochements]);
 
   const actions = useMemo(() => {
@@ -274,7 +293,8 @@ export default function DashboardPage() {
           <div className="flex gap-6 items-stretch">
             <PipelineStep icon={ShoppingCart} label="Commandes" color="indigo"
               total={commandes.length} ok={pipeline.cmdSoldees} warning={pipeline.cmdEnCours} error={pipeline.cmdAnomalies}
-              linkWarn="/commandes" linkErr="/commandes" />
+              linkWarn="/commandes" linkErr="/commandes"
+              montant={pipeline.cmdMontantTotal} showMontant={cmdShowMontant} onToggle={() => setCmdShowMontant(v => !v)} />
             <div className="flex items-center text-gray-300"><ArrowRight className="w-5 h-5" /></div>
             <PipelineStep icon={Package} label="BE / Réceptions" color="amber"
               total={bes.length} ok={pipeline.beLies} warning={pipeline.beNonLies} error={0}
@@ -282,7 +302,8 @@ export default function DashboardPage() {
             <div className="flex items-center text-gray-300"><ArrowRight className="w-5 h-5" /></div>
             <PipelineStep icon={FileText} label="Factures" color="cyan"
               total={factures.length} ok={pipeline.factRapprochees} warning={pipeline.factNon + pipeline.factPartiel} error={pipeline.factAnomalie}
-              linkWarn="/factures" linkErr="/factures" />
+              linkWarn="/factures" linkErr="/factures"
+              montant={pipeline.montantTotal} showMontant={factShowMontant} onToggle={() => setFactShowMontant(v => !v)} />
             <div className="flex items-center text-gray-300"><ArrowRight className="w-5 h-5" /></div>
             <PipelineStep icon={AlertTriangle} label="Exceptions" color="red"
               total={pipeline.excHaute + pipeline.excMoyenne + pipeline.excFaible}

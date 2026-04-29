@@ -13,7 +13,7 @@ import { formatEur, formatDate, cn } from '@/utils';
 import {
   ArrowLeft, ExternalLink, Edit2, Save, X, MessageSquare,
   Link2, Unlink, Plus, FileText, ShoppingCart, AlertTriangle,
-  Mail, Trash2, UserPlus, Send, History, Ban, RotateCcw
+  Mail, Trash2, UserPlus, Send, History, Ban, RotateCcw, RefreshCw, Sparkles
 } from 'lucide-react';
 import PDFViewerPanel from '@/components/shared/PDFViewerPanel';
 import { toast } from 'sonner';
@@ -120,7 +120,7 @@ export default function BEDetailPage() {
       const { data } = await supabase
         .from('commandes')
         .select('*')
-        .order('date_commande', { ascending: false })
+        .order('date_commande', { ascending: true })
         .limit(300);
       if (!data) return [];
       const fournBe = (be?.fournisseur ?? '').toLowerCase();
@@ -135,14 +135,14 @@ export default function BEDetailPage() {
 
   // Lignes commande des candidates pour scorer par références
   const candidateIds = commandesCandidates.map(c => c.id);
-  type SlimLigne = { commande_id: string; reference_article: string | null };
+  type SlimLigne = { commande_id: string; reference_article: string | null; quantite_commandee: number; quantite_receptionnee_reelle: number };
   const { data: lignesCandidates = [] } = useQuery<SlimLigne[]>({
     queryKey: ['lignes_cmd_candidates', candidateIds.join()],
     queryFn: async () => {
       if (!candidateIds.length) return [];
       const { data } = await supabase
         .from('lignes_commande')
-        .select('commande_id, reference_article')
+        .select('commande_id, reference_article, quantite_commandee, quantite_receptionnee_reelle')
         .in('commande_id', candidateIds);
       return (data ?? []) as SlimLigne[];
     },
@@ -156,18 +156,80 @@ export default function BEDetailPage() {
     return commandesCandidates
       .map(c => {
         const lignesCmd = lignesCandidates.filter(l => l.commande_id === c.id);
-        const matches = beRefs.filter(refBe =>
-          lignesCmd.some(lc => refsMatch(refBe, lc.reference_article))
-        ).length;
-        return { commande: c, matches, total: lignesCmd.length };
+        const matchedLines = (() => {
+          const byRef = new Map<string, { ref: string | null; qteBe: number; resteCmd: number }>();
+          for (const lb of lignes) {
+            const lc = lignesCmd.find(l => refsMatch(lb.reference_article, l.reference_article));
+            if (!lc) continue;
+            const key = normalizeRef(lb.reference_article);
+            if (byRef.has(key)) {
+              byRef.get(key)!.qteBe += lb.quantite_receptionnee ?? 0;
+            } else {
+              const resteCmd = Math.max(0, (lc.quantite_commandee ?? 0) - (lc.quantite_receptionnee_reelle ?? 0));
+              byRef.set(key, { ref: lb.reference_article, qteBe: lb.quantite_receptionnee ?? 0, resteCmd });
+            }
+          }
+          return [...byRef.values()];
+        })();
+        const matches = matchedLines.length;
+        return { commande: c, matches, total: lignesCmd.length, matchedLines };
       })
       .sort((a, b) => {
         if (b.matches !== a.matches) return b.matches - a.matches;
         const statutPrio = (s: string) =>
           s === 'ouverte' ? 0 : s === 'partiellement réceptionnée' ? 1 : 2;
-        return statutPrio(a.commande.statut_commande) - statutPrio(b.commande.statut_commande);
+        if (statutPrio(a.commande.statut_commande) !== statutPrio(b.commande.statut_commande))
+          return statutPrio(a.commande.statut_commande) - statutPrio(b.commande.statut_commande);
+        // FIFO : commande la plus ancienne en premier
+        return new Date(a.commande.date_commande ?? a.commande.created_at).getTime() -
+               new Date(b.commande.date_commande ?? b.commande.created_at).getTime();
       });
   }, [commandesCandidates, lignesCandidates, beRefs]);
+
+  // Suggestion FIFO : calcule automatiquement la combinaison optimale de commandes à lier
+  const fifoSuggestion = useMemo(() => {
+    if (!commandesScorees.length) return [];
+    const lignesLibres = lignes.filter(l => !l.ligne_commande_id);
+    if (!lignesLibres.length) return [];
+    const remainingBe = new Map<string, number>();
+    for (const lb of lignesLibres) {
+      const key = normalizeRef(lb.reference_article);
+      remainingBe.set(key, (remainingBe.get(key) ?? 0) + (lb.quantite_receptionnee ?? 0));
+    }
+    const suggested: string[] = [];
+    for (const { commande, matchedLines } of commandesScorees) {
+      if ([...remainingBe.values()].every(v => v <= 0)) break;
+      let absorbs = false;
+      for (const ml of matchedLines) {
+        const key = normalizeRef(ml.ref);
+        const remaining = remainingBe.get(key) ?? 0;
+        if (remaining > 0 && ml.resteCmd > 0) {
+          absorbs = true;
+          remainingBe.set(key, Math.max(0, remaining - ml.resteCmd));
+        }
+      }
+      if (absorbs) suggested.push(commande.id);
+    }
+    return suggested;
+  }, [commandesScorees, lignes]);
+
+  // Alerte si la commande sélectionnée absorberait tout alors qu'une autre en a besoin
+  const absorptionWarning = useMemo(() => {
+    if (!selectedCommandeId) return null;
+    const sel = commandesScorees.find(s => s.commande.id === selectedCommandeId);
+    if (!sel) return null;
+    const warnRefs: string[] = [];
+    for (const ml of sel.matchedLines) {
+      if (ml.resteCmd < ml.qteBe) continue;
+      const otherNeeds = commandesScorees
+        .filter(s => s.commande.id !== selectedCommandeId)
+        .some(s => s.matchedLines.some(oml =>
+          normalizeRef(oml.ref) === normalizeRef(ml.ref) && oml.resteCmd > 0
+        ));
+      if (otherNeeds) warnRefs.push(ml.ref ?? '?');
+    }
+    return warnRefs.length > 0 ? warnRefs : null;
+  }, [selectedCommandeId, commandesScorees]);
 
   const { data: contacts = [] } = useQuery<ContactFournisseur[]>({
     queryKey: ['contacts_fournisseurs', be?.fournisseur],
@@ -413,6 +475,28 @@ export default function BEDetailPage() {
     onError: (e: Error) => toast.error(e.message),
   });
 
+  const scanGmailMutation = useMutation({
+    mutationFn: async () => {
+      const r = await fetch('/api/gmail/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fournisseur: be?.fournisseur }),
+      });
+      const json = await r.json();
+      if (!r.ok) throw new Error(json.error ?? 'Erreur scan Gmail');
+      return json as { commandes_importees: number; doublons_ignores: number };
+    },
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ['commandes_dispo_be'] });
+      qc.invalidateQueries({ queryKey: ['commandes'] });
+      const msg = data.commandes_importees > 0
+        ? `${data.commandes_importees} commande(s) importée(s) depuis Gmail`
+        : `Aucune nouvelle commande trouvée (${data.doublons_ignores} doublon(s) ignoré(s))`;
+      toast.success(msg);
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
   const cmdFiltered = useMemo(() =>
     commandesScorees.filter(({ commande: c }) =>
       !searchCmd || c.numero_commande_interne.toLowerCase().includes(searchCmd.toLowerCase())
@@ -501,9 +585,22 @@ export default function BEDetailPage() {
               <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1.5">
                 <ShoppingCart className="w-3.5 h-3.5 text-indigo-500" /> Commande(s) liée(s) ({commandes.length})
               </p>
-              <Button size="sm" variant="outline" className="h-6 text-xs" onClick={() => setShowLinkCommande(v => !v)}>
-                <Plus className="w-3 h-3 mr-1" /> Ajouter
-              </Button>
+              <div className="flex items-center gap-1.5">
+                <Button
+                  size="sm" variant="outline" className="h-6 text-xs"
+                  onClick={() => scanGmailMutation.mutate()}
+                  disabled={scanGmailMutation.isPending}
+                  title="Chercher des commandes dans Gmail"
+                >
+                  {scanGmailMutation.isPending
+                    ? <RefreshCw className="w-3 h-3 animate-spin" />
+                    : <RefreshCw className="w-3 h-3" />}
+                  <span className="ml-1">Gmail</span>
+                </Button>
+                <Button size="sm" variant="outline" className="h-6 text-xs" onClick={() => setShowLinkCommande(v => !v)}>
+                  <Plus className="w-3 h-3 mr-1" /> Ajouter
+                </Button>
+              </div>
             </div>
             {commandes.length === 0 ? (
               <p className="text-xs text-amber-600 italic">Non lié à une commande</p>
@@ -534,30 +631,82 @@ export default function BEDetailPage() {
 
             {showLinkCommande && (
               <div className="mt-3 border-t pt-3">
+
+                {/* Suggestion FIFO */}
+                {fifoSuggestion.length > 0 && (
+                  <div className="mb-3 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2">
+                    <p className="text-[10px] font-semibold text-indigo-700 flex items-center gap-1 mb-1">
+                      <Sparkles className="w-3 h-3" /> Suggestion FIFO
+                    </p>
+                    <p className="text-[10px] text-indigo-600 mb-1.5">
+                      Lier dans cet ordre : {fifoSuggestion.map(cid => {
+                        const c = commandesCandidates.find(x => x.id === cid);
+                        return c ? `#${c.numero_commande_interne}` : '';
+                      }).filter(Boolean).join(' → ')}
+                    </p>
+                  </div>
+                )}
+
                 <div className="relative mb-2">
                   <Input placeholder="Rechercher…" value={searchCmd} onChange={e => setSearchCmd(e.target.value)} className="h-8 text-xs pl-3" />
                 </div>
-                <div className="max-h-56 overflow-y-auto space-y-1">
-                  {cmdFiltered.map(({ commande: c, matches, total }) => (
-                    <div key={c.id} onClick={() => setSelectedCommandeId(c.id)}
-                      className={cn('flex items-center gap-2 px-2 py-2 rounded-lg cursor-pointer text-xs transition-colors',
-                        selectedCommandeId === c.id ? 'bg-indigo-100 text-indigo-800' : 'hover:bg-gray-50')}>
-                      <div className="flex-1 min-w-0">
-                        <span className="font-mono font-medium">#{c.numero_commande_interne}</span>
-                        <span className="text-gray-400 ml-2">{formatDate(c.date_commande)}</span>
+
+                <div className="max-h-72 overflow-y-auto space-y-1">
+                  {cmdFiltered.map(({ commande: c, matches, matchedLines }) => {
+                    const isSuggested = fifoSuggestion.includes(c.id);
+                    const suggestionPos = fifoSuggestion.indexOf(c.id);
+                    return (
+                      <div key={c.id} onClick={() => setSelectedCommandeId(c.id)}
+                        className={cn('px-2 py-2 rounded-lg cursor-pointer text-xs transition-colors',
+                          selectedCommandeId === c.id ? 'bg-indigo-100 text-indigo-800' : 'hover:bg-gray-50',
+                          isSuggested && selectedCommandeId !== c.id && 'ring-1 ring-indigo-200')}>
+                        <div className="flex items-center gap-2">
+                          <div className="flex-1 min-w-0">
+                            {isSuggested && (
+                              <span className="text-[9px] font-bold text-indigo-500 mr-1">{suggestionPos + 1}.</span>
+                            )}
+                            <span className="font-mono font-medium">#{c.numero_commande_interne}</span>
+                            <span className="text-gray-400 ml-2">{formatDate(c.date_commande)}</span>
+                          </div>
+                          <StatusBadge status={c.statut_commande} />
+                          {matches > 0 ? (
+                            <span className="shrink-0 rounded-full bg-emerald-100 text-emerald-700 px-1.5 py-0.5 font-medium whitespace-nowrap">
+                              {matches}/{beRefs.length} réf.
+                            </span>
+                          ) : (
+                            <span className="shrink-0 text-gray-300">0 réf.</span>
+                          )}
+                        </div>
+                        {matchedLines.length > 0 && (
+                          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 pl-1">
+                            {matchedLines.map(ml => (
+                              <span key={ml.ref} className={cn(
+                                'font-mono text-[10px]',
+                                ml.qteBe > ml.resteCmd ? 'text-amber-600' : 'text-gray-500'
+                              )}>
+                                {ml.ref} : BE <b>{ml.qteBe}</b> / attend <b>{ml.resteCmd}</b>
+                              </span>
+                            ))}
+                          </div>
+                        )}
                       </div>
-                      <StatusBadge status={c.statut_commande} />
-                      {matches > 0 ? (
-                        <span className="shrink-0 rounded-full bg-emerald-100 text-emerald-700 px-1.5 py-0.5 font-medium whitespace-nowrap">
-                          {matches}/{beRefs.length} réf.
-                        </span>
-                      ) : (
-                        <span className="shrink-0 text-gray-300">0 réf.</span>
-                      )}
-                    </div>
-                  ))}
+                    );
+                  })}
                   {cmdFiltered.length === 0 && <p className="text-xs text-gray-400 text-center py-4">Aucune commande trouvée</p>}
                 </div>
+
+                {/* Alerte absorption totale */}
+                {absorptionWarning && (
+                  <div className="mt-2 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+                    <AlertTriangle className="w-3.5 h-3.5 text-amber-500 shrink-0 mt-0.5" />
+                    <p className="text-[10px] text-amber-700">
+                      <strong>Attention :</strong> cette commande absorberait tout le BE pour{' '}
+                      {absorptionWarning.map(r => <span key={r} className="font-mono font-bold">{r}</span>).reduce((a, b) => <>{a}, {b}</>)}.
+                      {' '}D'autres commandes attendent aussi ces références.
+                    </p>
+                  </div>
+                )}
+
                 <div className="flex justify-end gap-2 mt-2">
                   <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => { setShowLinkCommande(false); setSelectedCommandeId(''); setSearchCmd(''); }}>Annuler</Button>
                   <Button size="sm" className="h-7 text-xs" disabled={!selectedCommandeId || linkCommandeMutation.isPending} onClick={() => linkCommandeMutation.mutate(selectedCommandeId)}>

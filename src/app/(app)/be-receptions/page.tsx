@@ -11,13 +11,44 @@ import EmptyState from '@/components/shared/EmptyState';
 import Pagination from '@/components/shared/Pagination';
 import PdfImportModal from '@/components/shared/PdfImportModal';
 import SortableHeader from '@/components/shared/SortableHeader';
+import TableSkeleton from '@/components/shared/TableSkeleton';
 import { useTableFeatures } from '@/hooks/useTableFeatures';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { formatDate, exportToCsv } from '@/utils';
-import { Package, ChevronRight, Trash2, Download, Search, Upload, X, AlertTriangle } from 'lucide-react';
+import { Package, ChevronRight, Trash2, Download, Search, Upload, X, AlertTriangle, FileText, Bot } from 'lucide-react';
 import { toast } from 'sonner';
 import type { BEReception } from '@/types';
+
+function BEProgress({ be }: { be: BEReception }) {
+  const steps = [
+    { label: 'Reçu',    done: true },
+    { label: 'Lié',     done: !!be.commande_id },
+    { label: 'Facturé', done: ['partiellement facturé', 'facturé', 'soldé'].includes(be.statut_be ?? '') },
+    { label: 'Soldé',   done: be.statut_be === 'soldé' },
+  ];
+  return (
+    <div className="flex items-center gap-0.5">
+      {steps.map((step, i) => (
+        <div key={i} className="flex items-center gap-0.5">
+          {i > 0 && (
+            <div style={{ width: 10, height: 1, backgroundColor: steps[i - 1].done && step.done ? '#22c55e' : '#e5e7eb' }} />
+          )}
+          <div
+            title={step.label}
+            style={{
+              width: 8, height: 8, borderRadius: '50%',
+              backgroundColor: step.done ? '#22c55e' : '#e5e7eb',
+            }}
+          />
+        </div>
+      ))}
+      {!be.commande_id && (
+        <span className="ml-1.5 text-xs text-amber-500 font-medium">Non lié</span>
+      )}
+    </div>
+  );
+}
 
 const PAGE_SIZE = 25;
 const STATUTS: BEReception['statut_be'][] = ['reçu', 'partiellement facturé', 'facturé', 'soldé', 'en anomalie'];
@@ -56,7 +87,7 @@ export default function BEReceptionsPage() {
     router.replace(`${pathname}?${params.toString()}`);
   }, [searchParams, pathname, router]);
 
-  const { data: besResult = { bes: [], total: 0 }, isError } = useQuery<{ bes: BEReception[]; total: number }>({
+  const { data: besResult = { bes: [], total: 0 }, isError, isLoading } = useQuery<{ bes: BEReception[]; total: number }>({
     queryKey: ['bes', page, filtreStatut, filtreFournisseur, search, dateDebut, dateFin],
     queryFn: async () => {
       let query = supabase
@@ -235,7 +266,9 @@ export default function BEReceptionsPage() {
         </div>
       )}
 
-      <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+      {isLoading && <TableSkeleton rows={8} cols={7} />}
+
+      {!isLoading && <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
         <table className="w-full text-sm">
           <thead>
             <tr className="bg-gray-50/50 border-b border-gray-100">
@@ -251,7 +284,7 @@ export default function BEReceptionsPage() {
               <SortableHeader label="N° BE" field="numero_be" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
               <SortableHeader label="Fournisseur" field="fournisseur" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
               <SortableHeader label="Date BL" field="date_bl" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-              <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Commande liée</th>
+              <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Avancement</th>
               <SortableHeader label="Statut" field="statut_be" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
               <th className="px-4 py-3"></th>
             </tr>
@@ -283,10 +316,22 @@ export default function BEReceptionsPage() {
                 </td>
                 <td className="px-4 py-3 text-gray-600">{be.fournisseur || '—'}</td>
                 <td className="px-4 py-3 text-gray-500">{formatDate(be.date_bl)}</td>
-                <td className="px-4 py-3 text-gray-500 text-xs">{be.commande_id ? <span className="text-indigo-600">Lié</span> : <span className="text-amber-500">Non lié</span>}</td>
+                <td className="px-4 py-3"><BEProgress be={be} /></td>
                 <td className="px-4 py-3"><StatusBadge status={be.statut_be} /></td>
                 <td className="px-4 py-3">
                   <div className="flex items-center justify-end gap-1" onClick={e => e.stopPropagation()}>
+                    {be.pdf_url && (
+                      <a href={be.pdf_url} target="_blank" rel="noopener noreferrer" className="p-1.5 rounded hover:bg-blue-50 text-gray-400 hover:text-blue-500 transition-colors" title="Voir le PDF original">
+                        <FileText className="w-3.5 h-3.5" />
+                      </a>
+                    )}
+                    <button
+                      className="p-1.5 rounded hover:bg-indigo-50 text-gray-400 hover:text-indigo-500 transition-colors"
+                      title="Demander à Teddy"
+                      onClick={() => window.dispatchEvent(new CustomEvent('teddy-ask', { detail: { prompt: `Analyse le BE ${be.numero_be} (${be.fournisseur}) : statut facturation, commande liée, retards éventuels.` } }))}
+                    >
+                      <Bot className="w-3.5 h-3.5" />
+                    </button>
                     <button className="p-1.5 rounded hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors" onClick={() => setConfirmDelete(be)}>
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
@@ -301,7 +346,7 @@ export default function BEReceptionsPage() {
         </table>
         {sorted.length === 0 && <EmptyState icon={Package} title="Aucun bordereau de réception" />}
         <Pagination page={page} pageSize={PAGE_SIZE} total={filtreEcart ? sorted.length : total} onChange={setPage} />
-      </div>
+      </div>}
 
       <PdfImportModal
         open={showImport}

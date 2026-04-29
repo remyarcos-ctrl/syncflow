@@ -12,7 +12,7 @@ import StatusBadge from '@/components/shared/StatusBadge';
 import { formatEur, formatDate, cn } from '@/utils';
 import {
   ArrowLeft, Plus, Package, Link2, Unlink,
-  Edit2, Save, X, MessageSquare, CheckCircle2, Search, FileText, History
+  Edit2, Save, X, MessageSquare, Search, FileText, History
 } from 'lucide-react';
 import ReferenceHistoryModal from '@/components/shared/ReferenceHistoryModal';
 import { toast } from 'sonner';
@@ -58,9 +58,13 @@ export default function CommandeDetailPage() {
   const [searchBE, setSearchBE] = useState('');
   const [editingNotes, setEditingNotes] = useState(false);
   const [notes, setNotes] = useState('');
+  const [editingDate, setEditingDate] = useState(false);
+  const [dateValue, setDateValue] = useState('');
   const [editingLineNotes, setEditingLineNotes] = useState<{ id: string; value: string } | null>(null);
-  const [checking, setChecking] = useState(false);
   const [editingInitQte, setEditingInitQte] = useState<{ id: string; value: string } | null>(null);
+  const [editingQteCmd, setEditingQteCmd] = useState<{ id: string; value: string } | null>(null);
+  const [editingDesig, setEditingDesig] = useState<{ id: string; value: string } | null>(null);
+  const [editingStatut, setEditingStatut] = useState(false);
   const [modeRecu, setModeRecu] = useState<'unites' | 'ht'>('unites');
 
   // ── Données ───────────────────────────────────────────────────────────────
@@ -211,7 +215,13 @@ export default function CommandeDetailPage() {
       });
   }, [besDisponibles, lignesBeCandidates, cmdRefs]);
 
-  useEffect(() => { if (commande) setNotes(commande.commentaire ?? ''); }, [commande]);
+  useEffect(() => {
+    if (commande) {
+      setNotes(commande.commentaire ?? '');
+      if (!editingDate) setDateValue(commande.date_commande?.slice(0, 10) ?? '');
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [commande]);
 
   // ── KPIs calculés ─────────────────────────────────────────────────────────
   const kpis = useMemo(() => {
@@ -240,6 +250,15 @@ export default function CommandeDetailPage() {
     onError: (e: Error) => toast.error(e.message),
   });
 
+  const saveDateMutation = useMutation({
+    mutationFn: async (date: string) => {
+      const { error } = await supabase.from('commandes').update({ date_commande: date || null }).eq('id', id);
+      if (error) throw error;
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['commande', id] }); setEditingDate(false); toast.success('Date mise à jour'); },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
   const saveLineNotesMutation = useMutation({
     mutationFn: async ({ lineId, comment }: { lineId: string; comment: string }) => {
       const { error } = await supabase.from('lignes_commande').update({ commentaire: comment }).eq('id', lineId);
@@ -258,9 +277,74 @@ export default function CommandeDetailPage() {
     },
     onSuccess: (_data, { lineId }) => {
       qc.invalidateQueries({ queryKey: ['lignes_commande', id] });
-      // Ne fermer l'éditeur que si on n'a pas déjà avancé à la ligne suivante
       setEditingPU(prev => prev?.id === lineId ? null : prev);
       toast.success('Prix mis à jour');
+      void recalcMontantTotal();
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const saveQteCmdMutation = useMutation({
+    mutationFn: async ({ lineId, qte }: { lineId: string; qte: number }) => {
+      const ligne = lignes.find(l => l.id === lineId);
+      const montant_ht_commande = ligne?.pu_commande != null ? qte * ligne.pu_commande : null;
+      const quantite_restante_a_recevoir = Math.max(0, qte - (ligne?.quantite_receptionnee_reelle ?? 0));
+      const { error } = await supabase.from('lignes_commande').update({
+        quantite_commandee: qte,
+        montant_ht_commande,
+        quantite_restante_a_recevoir,
+      }).eq('id', lineId);
+      if (error) throw error;
+    },
+    onSuccess: (_data, { lineId }) => {
+      qc.invalidateQueries({ queryKey: ['lignes_commande', id] });
+      setEditingQteCmd(prev => prev?.id === lineId ? null : prev);
+      toast.success('Quantité mise à jour');
+      void recalcMontantTotal();
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const recalcMontantTotal = async () => {
+    const { data: allLignes } = await supabase
+      .from('lignes_commande').select('montant_ht_commande, pu_commande, quantite_commandee').eq('commande_id', id);
+    const total = (allLignes ?? []).reduce((s, l) => {
+      const montant = l.montant_ht_commande ?? ((l.quantite_commandee ?? 0) * (l.pu_commande ?? 0));
+      return s + montant;
+    }, 0);
+    await supabase.from('commandes').update({ montant_total_commande: total || null }).eq('id', id);
+    qc.invalidateQueries({ queryKey: ['commande', id] });
+  };
+
+  // Auto-recalcul si montant_total_commande est null mais les lignes ont des prix
+  useEffect(() => {
+    if (commande && commande.montant_total_commande == null && kpis.montantCmd > 0) {
+      void recalcMontantTotal();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [commande?.id, kpis.montantCmd]);
+
+  const saveDesigMutation = useMutation({
+    mutationFn: async ({ lineId, designation }: { lineId: string; designation: string }) => {
+      const { error } = await supabase.from('lignes_commande').update({ designation }).eq('id', lineId);
+      if (error) throw error;
+    },
+    onSuccess: (_data, { lineId }) => {
+      qc.invalidateQueries({ queryKey: ['lignes_commande', id] });
+      setEditingDesig(prev => prev?.id === lineId ? null : prev);
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const changeStatutMutation = useMutation({
+    mutationFn: async (statut: string) => {
+      const { error } = await supabase.from('commandes').update({ statut_commande: statut }).eq('id', id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['commande', id] });
+      setEditingStatut(false);
+      toast.success('Statut mis à jour');
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -431,36 +515,62 @@ export default function CommandeDetailPage() {
           <h1 className="text-xl font-bold text-gray-900 font-mono">{commande.numero_commande_interne}</h1>
           <p className="text-sm text-gray-500">{commande.fournisseur}</p>
         </div>
-        <StatusBadge status={commande.statut_commande} />
-        <div className="ml-auto flex items-center gap-2">
-          <Button
-            size="sm" variant="outline"
-            disabled={checking || bes.length === 0}
-            onClick={async () => {
-              setChecking(true);
-              try {
-                // Recalcul local des balances
-                const total = lignes.reduce((s, l) => s + (l.quantite_commandee ?? 0), 0);
-                const recues = bes.reduce((s, b) => {
-                  // Simplifié : on marque juste OK
-                  return s;
-                }, 0);
-                toast.success('Vérification terminée — voir les statuts de lignes');
-              } finally {
-                setChecking(false);
-              }
-            }}
+        {editingStatut ? (
+          <select
+            value={commande.statut_commande}
+            onChange={e => changeStatutMutation.mutate(e.target.value)}
+            onBlur={() => setEditingStatut(false)}
+            className="text-xs border border-indigo-300 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+            autoFocus
           >
-            <CheckCircle2 className="w-3.5 h-3.5 mr-1.5" />
-            {checking ? 'Vérification…' : 'Vérifier BE'}
-          </Button>
-        </div>
+            {(['ouverte', 'partiellement réceptionnée', 'réceptionnée', 'partiellement facturée', 'soldée', 'en anomalie'] as const).map(s => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+        ) : (
+          <button onClick={() => setEditingStatut(true)} title="Cliquer pour changer le statut">
+            <StatusBadge status={commande.statut_commande} />
+          </button>
+        )}
       </div>
 
       {/* KPIs */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+        {/* Date — éditable au clic */}
+        <Card className="cursor-pointer hover:border-indigo-200 transition-colors" onClick={() => !editingDate && setEditingDate(true)}>
+          <CardContent className="pt-4 pb-3">
+            <p className="text-xs text-gray-400 flex items-center gap-1">
+              Date commande <Edit2 className="w-2.5 h-2.5 text-gray-300" />
+            </p>
+            {editingDate ? (
+              <div className="flex items-center gap-1 mt-1" onClick={e => e.stopPropagation()}>
+                <input
+                  type="date"
+                  value={dateValue}
+                  onChange={e => setDateValue(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') saveDateMutation.mutate(dateValue);
+                    if (e.key === 'Escape') { setEditingDate(false); setDateValue(commande.date_commande?.slice(0, 10) ?? ''); }
+                  }}
+                  className="text-xs border border-indigo-300 rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-indigo-400 w-full"
+                  autoFocus
+                />
+                <button onClick={() => saveDateMutation.mutate(dateValue)} className="text-emerald-500 hover:text-emerald-700 shrink-0">
+                  <Save className="w-3.5 h-3.5" />
+                </button>
+                <button onClick={() => { setEditingDate(false); setDateValue(commande.date_commande?.slice(0, 10) ?? ''); }} className="text-gray-400 hover:text-gray-600 shrink-0">
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ) : (
+              <p className="text-sm font-semibold text-gray-900 mt-0.5">
+                {formatDate(commande.date_commande) ?? <span className="text-gray-300 italic font-normal text-xs">— Cliquer pour saisir</span>}
+              </p>
+            )}
+          </CardContent>
+        </Card>
+
         {[
-          { label: 'Date commande', value: formatDate(commande.date_commande) },
           { label: 'Qté commandée', value: kpis.qteCmd },
           { label: 'Qté reçue', value: kpis.qteRecue },
           { label: 'Qté facturée', value: kpis.qteFact },
@@ -748,7 +858,7 @@ export default function CommandeDetailPage() {
                   <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500">#</th>
                   <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500">Réf.</th>
                   <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500">Désignation</th>
-                  <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500">Qté cmd</th>
+                  <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500" title="Cliquer sur une valeur pour la modifier">Qté cmd ✎</th>
                   <th className="text-right px-4 py-2.5 text-xs font-semibold text-indigo-400" title="Quantités reçues avant le démarrage de SyncFlow — cliquer pour saisir">Qté init. ✎</th>
                   <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500">{modeRecu === 'unites' ? 'Qté reçue' : 'Reçu HT €'}</th>
                   <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500">Qté facturée</th>
@@ -778,8 +888,64 @@ export default function CommandeDetailPage() {
                         <span className="font-mono text-xs text-gray-400">—</span>
                       )}
                     </td>
-                    <td className="px-4 py-2.5 text-xs text-gray-600 max-w-[180px] truncate">{l.designation}</td>
-                    <td className="px-4 py-2.5 text-right font-mono text-xs">{l.quantite_commandee}</td>
+                    <td className="px-4 py-2.5 text-xs max-w-[200px]">
+                      {editingDesig?.id === l.id ? (
+                        <div className="flex items-center gap-1">
+                          <Input
+                            value={editingDesig.value}
+                            onChange={e => setEditingDesig({ id: l.id, value: e.target.value })}
+                            onKeyDown={e => {
+                              if (e.key === 'Escape') { setEditingDesig(null); return; }
+                              if (e.key === 'Enter') saveDesigMutation.mutate({ lineId: l.id, designation: editingDesig.value });
+                            }}
+                            className="h-6 text-xs flex-1"
+                            autoFocus
+                          />
+                          <button onClick={() => saveDesigMutation.mutate({ lineId: l.id, designation: editingDesig.value })} className="text-emerald-500 hover:text-emerald-700 shrink-0"><Save className="w-3 h-3" /></button>
+                          <button onClick={() => setEditingDesig(null)} className="text-gray-400 hover:text-gray-600 shrink-0"><X className="w-3 h-3" /></button>
+                        </div>
+                      ) : (
+                        <span
+                          className="cursor-pointer text-gray-600 hover:text-gray-900 hover:underline truncate block"
+                          onClick={() => setEditingDesig({ id: l.id, value: l.designation ?? '' })}
+                          title={l.designation ?? 'Cliquer pour saisir la désignation'}
+                        >
+                          {l.designation || <span className="text-gray-300 italic">—</span>}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-4 py-2.5 text-right font-mono text-xs">
+                      {editingQteCmd?.id === l.id ? (
+                        <div className="flex items-center justify-end gap-1">
+                          <Input
+                            type="number" min="0" step="1"
+                            value={editingQteCmd.value}
+                            onChange={e => setEditingQteCmd({ id: l.id, value: e.target.value })}
+                            onKeyDown={e => {
+                              if (e.key === 'Escape') { setEditingQteCmd(null); return; }
+                              if (e.key === 'Enter') {
+                                saveQteCmdMutation.mutate({ lineId: l.id, qte: parseFloat(editingQteCmd.value) || 0 });
+                                const idx = lignes.findIndex(line => line.id === l.id);
+                                if (idx < lignes.length - 1) setEditingQteCmd({ id: lignes[idx + 1].id, value: String(lignes[idx + 1].quantite_commandee ?? '') });
+                                else setEditingQteCmd(null);
+                              }
+                            }}
+                            className="w-16 h-6 text-xs"
+                            autoFocus
+                          />
+                          <button onClick={() => saveQteCmdMutation.mutate({ lineId: l.id, qte: parseFloat(editingQteCmd.value) || 0 })} className="text-emerald-500 hover:text-emerald-700"><Save className="w-3 h-3" /></button>
+                          <button onClick={() => setEditingQteCmd(null)} className="text-gray-400 hover:text-gray-600"><X className="w-3 h-3" /></button>
+                        </div>
+                      ) : (
+                        <span
+                          className="cursor-pointer hover:underline text-gray-800"
+                          onClick={() => setEditingQteCmd({ id: l.id, value: String(l.quantite_commandee ?? '') })}
+                          title="Cliquer pour modifier la quantité commandée"
+                        >
+                          {l.quantite_commandee}
+                        </span>
+                      )}
+                    </td>
                     <td className="px-4 py-2.5 text-right font-mono text-xs">
                       {editingInitQte?.id === l.id ? (
                         <div className="flex items-center justify-end gap-1">

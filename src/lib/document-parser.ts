@@ -69,13 +69,13 @@ const isEanBarcode = (s: string) => /^\d{8,}$/.test(s.trim());
 
 // ── Appel Claude API ──────────────────────────────────────────────────────────
 
-async function callClaude(messages: object[], systemPrompt: string, model = MODEL_EMAIL): Promise<string> {
+async function callClaude(messages: object[], systemPrompt: string, model = MODEL_EMAIL, maxTokens = 4096): Promise<string> {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) throw new Error('ANTHROPIC_API_KEY manquante');
 
   const body = JSON.stringify({
     model,
-    max_tokens: 4096,
+    max_tokens: maxTokens,
     system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
     messages,
   });
@@ -269,7 +269,7 @@ export async function parsePdfDocuments(pdfBase64url: string, filename: string):
   const padded = base64 + '==='.slice((base64.length + 3) % 4 ? (base64.length + 3) % 4 : 3);
 
   const system = `Tu es un extracteur de données pour une application de gestion de commandes, BEs et factures fournisseurs.
-Réponds UNIQUEMENT avec un JSON valide dans une balise json.`;
+Réponds UNIQUEMENT avec un JSON valide dans une balise json. JSON compact sans indentation ni espaces superflus pour minimiser la taille.`;
 
   const prompt = `Ce PDF (nom: ${filename}) peut contenir UN OU PLUSIEURS documents : Bons d'Expédition (BE/BL) et/ou Factures.
 
@@ -336,7 +336,7 @@ Si un document n'est pas reconnu : {"type": "inconnu", "raison": "..."}`;
         { type: 'text', text: prompt },
       ],
     },
-  ], system, MODEL_PDF);
+  ], system, MODEL_PDF, 8192);
 
   // La réponse est un tableau
   const result = extractJSON<unknown[]>(raw);

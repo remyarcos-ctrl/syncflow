@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useMemo } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useCallback } from 'react';
+import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
 import Link from 'next/link';
@@ -10,27 +10,35 @@ import StatusBadge from '@/components/shared/StatusBadge';
 import EmptyState from '@/components/shared/EmptyState';
 import Pagination from '@/components/shared/Pagination';
 import SortableHeader from '@/components/shared/SortableHeader';
+import TableSkeleton from '@/components/shared/TableSkeleton';
 import { useTableFeatures } from '@/hooks/useTableFeatures';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { formatEur, formatDate, exportToCsv } from '@/utils';
-import { ShoppingCart, Plus, ChevronRight, Trash2, Download, Search, X } from 'lucide-react';
+import { formatEur, formatDate, exportToCsv, cn } from '@/utils';
+import { ShoppingCart, Plus, ChevronRight, Trash2, Download, Search, X, Package, Bot } from 'lucide-react';
 import { toast } from 'sonner';
-import type { Commande, LigneCommande, Fournisseur } from '@/types';
+import type { Commande, Fournisseur } from '@/types';
 
 const PAGE_SIZE = 25;
 const STATUTS: Commande['statut_commande'][] = [
   'ouverte', 'partiellement réceptionnée', 'réceptionnée',
-  'partiellement facturée', 'soldée', 'en anomalie'
+  'partiellement facturée', 'soldée', 'en anomalie',
 ];
 
 export default function CommandesPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const pathname = usePathname();
   const qc = useQueryClient();
-  const [page, setPage] = useState(1);
-  const [search, setSearch] = useState('');
-  const [filtreStatut, setFiltreStatut] = useState('all');
-  const [filtreFournisseur, setFiltreFournisseur] = useState('');
+
+  const search = searchParams.get('q') ?? '';
+  const filtreStatut = searchParams.get('statut') ?? 'all';
+  const filtreFournisseur = searchParams.get('fournisseur') ?? '';
+  const filtreReliquats = searchParams.get('reliquats') === '1';
+  const page = parseInt(searchParams.get('page') ?? '1', 10);
+  const sortKey = searchParams.get('sortKey') ?? 'numero_commande_interne';
+  const sortDir = (searchParams.get('sortDir') ?? 'desc') as 'asc' | 'desc';
+
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState({ numero_commande_interne: '', fournisseur: '', date_commande: '' });
   const [lignesForm, setLignesForm] = useState<{ reference_article: string; designation: string; quantite_commandee: string; pu_commande: string }[]>([]);
@@ -39,23 +47,54 @@ export default function CommandesPage() {
   const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
   const [prixSuggere, setPrixSuggere] = useState<{ pu: number; designation: string | null } | null>(null);
 
-  const { data: commandes = [] } = useQuery<Commande[]>({
-    queryKey: ['commandes'],
+  const setFilter = useCallback((key: string, value: string) => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete('page');
+    if (value && value !== 'all') params.set(key, value);
+    else params.delete(key);
+    router.replace(`${pathname}?${params.toString()}`);
+  }, [searchParams, pathname, router]);
+
+  const setPage = useCallback((p: number) => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (p <= 1) params.delete('page');
+    else params.set('page', String(p));
+    router.replace(`${pathname}?${params.toString()}`);
+  }, [searchParams, pathname, router]);
+
+  const handleSortColumn = useCallback((field: string) => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete('page');
+    if (sortKey === field) {
+      params.set('sortDir', sortDir === 'asc' ? 'desc' : 'asc');
+    } else {
+      params.set('sortKey', field);
+      params.set('sortDir', 'asc');
+    }
+    router.replace(`${pathname}?${params.toString()}`);
+  }, [searchParams, pathname, router, sortKey, sortDir]);
+
+  const { data: queryResult, isError, isLoading } = useQuery({
+    queryKey: ['commandes', page, filtreStatut, filtreFournisseur, search, sortKey, sortDir, filtreReliquats],
     queryFn: async () => {
-      const { data } = await supabase.from('commandes').select('*').order('created_at', { ascending: false }).limit(500);
-      return data ?? [];
+      let q = supabase.from('commandes').select('*', { count: 'exact' });
+      if (filtreReliquats) {
+        q = q.in('statut_commande', ['ouverte', 'partiellement réceptionnée']);
+      } else if (filtreStatut !== 'all') {
+        q = q.eq('statut_commande', filtreStatut);
+      }
+      if (filtreFournisseur) q = q.ilike('fournisseur', `%${filtreFournisseur}%`);
+      if (search) q = q.ilike('numero_commande_interne', `%${search}%`);
+      q = q.order(sortKey || 'numero_commande_interne', { ascending: sortDir === 'asc' });
+      q = q.range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1);
+      const { data, count } = await q;
+      return { commandes: (data ?? []) as Commande[], total: count ?? 0 };
     },
-    refetchInterval: 5000,
+    staleTime: 30_000,
   });
 
-  const { data: lignes = [] } = useQuery<LigneCommande[]>({
-    queryKey: ['lignes_commande'],
-    queryFn: async () => {
-      const { data } = await supabase.from('lignes_commande').select('*').limit(2000);
-      return data ?? [];
-    },
-    staleTime: 30000,
-  });
+  const commandes = queryResult?.commandes ?? [];
+  const totalCount = queryResult?.total ?? 0;
 
   const { data: fournisseurs = [] } = useQuery<Fournisseur[]>({
     queryKey: ['fournisseurs'],
@@ -66,30 +105,34 @@ export default function CommandesPage() {
     staleTime: 60000,
   });
 
-  const filtered = useMemo(() => commandes.filter(c => {
-    if (filtreStatut !== 'all' && c.statut_commande !== filtreStatut) return false;
-    if (filtreFournisseur && !c.fournisseur?.toLowerCase().includes(filtreFournisseur.toLowerCase())) return false;
-    if (search && !c.numero_commande_interne?.toLowerCase().includes(search.toLowerCase())) return false;
-    return true;
-  }), [commandes, filtreStatut, filtreFournisseur, search]);
+  const { selected, toggleOne, togglePage, clearSelection, isPageChecked, isPageIndeterminate } = useTableFeatures(commandes);
+  const pageIds = commandes.map(c => c.id);
 
-  const {
-    sorted,
-    sortKey,
-    sortDir,
-    toggleSort,
-    selected,
-    toggleOne,
-    togglePage,
-    clearSelection,
-    isPageChecked,
-    isPageIndeterminate,
-  } = useTableFeatures(filtered);
+  const { data: resteParCommande = {} } = useQuery<Record<string, number>>({
+    queryKey: ['commandes-reste', pageIds.join(',')],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from('lignes_commande')
+        .select('commande_id, quantite_restante_a_recevoir')
+        .in('commande_id', pageIds);
+      const map: Record<string, number> = {};
+      for (const l of data ?? []) {
+        map[l.commande_id] = (map[l.commande_id] ?? 0) + (l.quantite_restante_a_recevoir ?? 0);
+      }
+      return map;
+    },
+    enabled: pageIds.length > 0,
+    staleTime: 30_000,
+  });
 
-  const paginated = sorted.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
-  const pageIds = paginated.map(c => c.id);
-
-  const getLignes = (cmdId: string) => lignes.filter(l => l.commande_id === cmdId);
+  const changeStatutMutation = useMutation({
+    mutationFn: async ({ cmdId, statut }: { cmdId: string; statut: string }) => {
+      const { error } = await supabase.from('commandes').update({ statut_commande: statut }).eq('id', cmdId);
+      if (error) throw error;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['commandes'] }),
+    onError: (e: Error) => toast.error(e.message),
+  });
 
   const createMutation = useMutation({
     mutationFn: async () => {
@@ -120,7 +163,6 @@ export default function CommandesPage() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['commandes'] });
-      qc.invalidateQueries({ queryKey: ['lignes_commande'] });
       setShowCreate(false);
       setForm({ numero_commande_interne: '', fournisseur: '', date_commande: '' });
       setLignesForm([]);
@@ -139,7 +181,6 @@ export default function CommandesPage() {
     },
     onSuccess: (_d, cmd) => {
       qc.invalidateQueries({ queryKey: ['commandes'] });
-      qc.invalidateQueries({ queryKey: ['lignes_commande'] });
       setConfirmDelete(null);
       toast.success(`Commande ${cmd.numero_commande_interne} supprimée`);
     },
@@ -158,7 +199,6 @@ export default function CommandesPage() {
     },
     onSuccess: (count) => {
       qc.invalidateQueries({ queryKey: ['commandes'] });
-      qc.invalidateQueries({ queryKey: ['lignes_commande'] });
       clearSelection();
       setConfirmBulkDelete(false);
       toast.success(`${count} commande${count > 1 ? 's' : ''} supprimée${count > 1 ? 's' : ''}`);
@@ -197,7 +237,7 @@ export default function CommandesPage() {
     <div>
       <PageHeader
         title="Commandes"
-        subtitle={`${commandes.length} commande${commandes.length > 1 ? 's' : ''}`}
+        subtitle={`${totalCount} commande${totalCount > 1 ? 's' : ''}`}
         actions={
           <div className="flex items-center gap-2">
             <Button variant="outline" size="sm" onClick={() => exportToCsv('commandes.csv', commandes as unknown as Record<string, unknown>[], [
@@ -216,10 +256,16 @@ export default function CommandesPage() {
         }
       />
 
+      {isError && (
+        <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+          Erreur lors du chargement des commandes. Vérifiez votre connexion.
+        </div>
+      )}
+
       <div className="flex gap-3 mb-4 flex-wrap items-center">
         <select
           value={filtreStatut}
-          onChange={e => { setFiltreStatut(e.target.value); setPage(1); }}
+          onChange={e => setFilter('statut', e.target.value)}
           className="h-9 rounded-lg border border-gray-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
         >
           <option value="all">Tous les statuts</option>
@@ -230,29 +276,53 @@ export default function CommandesPage() {
           <Input
             placeholder="N° commande..."
             value={search}
-            onChange={e => { setSearch(e.target.value); setPage(1); }}
+            onChange={e => setFilter('q', e.target.value)}
             className="w-56 pl-8"
           />
         </div>
         <Input
           placeholder="Fournisseur..."
           value={filtreFournisseur}
-          onChange={e => { setFiltreFournisseur(e.target.value); setPage(1); }}
+          onChange={e => setFilter('fournisseur', e.target.value)}
           className="w-52"
         />
+        <button
+          onClick={() => {
+            const params = new URLSearchParams(searchParams.toString());
+            params.delete('page');
+            if (filtreReliquats) params.delete('reliquats');
+            else { params.set('reliquats', '1'); params.delete('statut'); }
+            router.replace(`${pathname}?${params.toString()}`);
+          }}
+          className={cn(
+            'flex items-center gap-1.5 h-9 px-3 rounded-lg border text-xs font-medium transition-colors',
+            filtreReliquats
+              ? 'bg-orange-100 border-orange-300 text-orange-700'
+              : 'border-gray-200 text-gray-500 hover:border-orange-300 hover:text-orange-600'
+          )}
+        >
+          <Package className="w-3.5 h-3.5" /> Reliquats
+        </button>
+        {(search || filtreStatut !== 'all' || filtreFournisseur || filtreReliquats) && (
+          <button onClick={() => router.replace(pathname)} className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1">
+            <X className="w-3.5 h-3.5" /> Reset
+          </button>
+        )}
       </div>
 
       {selected.size > 0 && (
         <div className="flex items-center gap-3 mb-3 px-4 py-2.5 bg-indigo-50 border border-indigo-100 rounded-xl text-sm">
           <span className="text-indigo-700 font-medium">{selected.size} sélectionné(s)</span>
           <button onClick={() => setConfirmBulkDelete(true)} className="ml-auto flex items-center gap-1.5 text-red-600 hover:text-red-700 font-medium">
-            <Trash2 className="w-4 h-4" />Supprimer la sélection
+            <Trash2 className="w-4 h-4" /> Supprimer la sélection
           </button>
           <button onClick={clearSelection} className="text-gray-400 hover:text-gray-600"><X className="w-4 h-4" /></button>
         </div>
       )}
 
-      <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+      {isLoading && <TableSkeleton rows={8} cols={7} />}
+
+      {!isLoading && <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
         <table className="w-full text-sm">
           <thead>
             <tr className="bg-gray-50/50 border-b border-gray-100">
@@ -265,23 +335,17 @@ export default function CommandesPage() {
                   className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
                 />
               </th>
-              <SortableHeader label="N° commande" field="numero_commande_interne" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-              <SortableHeader label="Fournisseur" field="fournisseur" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-              <SortableHeader label="Date" field="date_commande" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-              <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Qté cmd</th>
-              <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Qté reçue</th>
-              <SortableHeader label="Montant" field="montant_total_commande" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" />
-              <SortableHeader label="Statut" field="statut_commande" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+              <SortableHeader label="N° commande" field="numero_commande_interne" sortKey={sortKey} sortDir={sortDir} onSort={handleSortColumn} />
+              <SortableHeader label="Fournisseur" field="fournisseur" sortKey={sortKey} sortDir={sortDir} onSort={handleSortColumn} />
+              <SortableHeader label="Date" field="date_commande" sortKey={sortKey} sortDir={sortDir} onSort={handleSortColumn} />
+              <SortableHeader label="Montant" field="montant_total_commande" sortKey={sortKey} sortDir={sortDir} onSort={handleSortColumn} align="right" />
+              <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide text-right">Reste à recevoir</th>
+              <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Statut</th>
               <th className="px-4 py-3"></th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-50">
-            {paginated.map(cmd => {
-              const cl = getLignes(cmd.id);
-              const qteCmd = cl.reduce((s, l) => s + (l.quantite_commandee || 0), 0);
-              const qteRecue = cl.reduce((s, l) => s + (l.quantite_receptionnee_reelle || 0), 0);
-              const montant = cmd.montant_total_commande
-                ?? (cl.reduce((s, l) => s + (l.montant_ht_commande ?? ((l.quantite_commandee ?? 0) * (l.pu_commande ?? 0))), 0) || null);
+            {commandes.map(cmd => {
               const isSelected = selected.has(cmd.id);
               return (
                 <tr
@@ -300,12 +364,37 @@ export default function CommandesPage() {
                   <td className="px-4 py-3 font-medium font-mono">{cmd.numero_commande_interne}</td>
                   <td className="px-4 py-3 text-gray-600">{cmd.fournisseur}</td>
                   <td className="px-4 py-3 text-gray-500">{formatDate(cmd.date_commande)}</td>
-                  <td className="px-4 py-3 text-right font-mono">{qteCmd}</td>
-                  <td className="px-4 py-3 text-right font-mono">{qteRecue}</td>
-                  <td className="px-4 py-3 text-right font-mono">{formatEur(montant)}</td>
-                  <td className="px-4 py-3"><StatusBadge status={cmd.statut_commande} /></td>
+                  <td className="px-4 py-3 text-right font-mono">{formatEur(cmd.montant_total_commande)}</td>
+                  <td className="px-4 py-3 text-right">
+                    {(() => {
+                      const reste = resteParCommande[cmd.id];
+                      if (reste === undefined) return <span className="text-gray-300 text-xs">—</span>;
+                      if (reste <= 0) return <span style={{ color: '#059669', fontSize: '0.7rem', fontWeight: 600 }}>✓ Complet</span>;
+                      return <span style={{ backgroundColor: '#fef3c7', color: '#92400e', borderColor: '#fbbf24', fontSize: '0.7rem', fontWeight: 600, padding: '2px 6px', borderRadius: 4, border: '1px solid' }}>{reste} art.</span>;
+                    })()}
+                  </td>
+                  <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
+                    <div className="relative group/statut inline-block">
+                      <StatusBadge status={cmd.statut_commande} />
+                      <select
+                        value={cmd.statut_commande}
+                        onChange={e => changeStatutMutation.mutate({ cmdId: cmd.id, statut: e.target.value })}
+                        onClick={e => e.stopPropagation()}
+                        className="absolute inset-0 w-full opacity-0 cursor-pointer"
+                      >
+                        {STATUTS.map(s => <option key={s} value={s}>{s}</option>)}
+                      </select>
+                    </div>
+                  </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-end gap-1" onClick={e => e.stopPropagation()}>
+                      <button
+                        className="p-1.5 rounded hover:bg-indigo-50 text-gray-400 hover:text-indigo-500 transition-colors"
+                        title="Demander à Teddy"
+                        onClick={() => window.dispatchEvent(new CustomEvent('teddy-ask', { detail: { prompt: `Analyse la commande ${cmd.numero_commande_interne} : lignes, statut, avancement livraison et anomalies éventuelles.` } }))}
+                      >
+                        <Bot className="w-3.5 h-3.5" />
+                      </button>
                       <button
                         className="p-1.5 rounded hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors"
                         onClick={() => setConfirmDelete(cmd)}
@@ -322,9 +411,9 @@ export default function CommandesPage() {
             })}
           </tbody>
         </table>
-        {filtered.length === 0 && <EmptyState icon={ShoppingCart} title="Aucune commande" />}
-        <Pagination page={page} pageSize={PAGE_SIZE} total={filtered.length} onChange={setPage} />
-      </div>
+        {commandes.length === 0 && <EmptyState icon={ShoppingCart} title="Aucune commande" />}
+        <Pagination page={page} pageSize={PAGE_SIZE} total={totalCount} onChange={setPage} />
+      </div>}
 
       {showCreate && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm">
@@ -352,7 +441,6 @@ export default function CommandesPage() {
                 <label className="text-xs font-medium text-gray-700 mb-1 block">Date commande</label>
                 <Input type="date" value={form.date_commande} onChange={e => setForm({ ...form, date_commande: e.target.value })} className="w-48" />
               </div>
-
               <div>
                 <p className="text-xs font-semibold text-gray-700 mb-2">Lignes articles</p>
                 {lignesForm.length > 0 && (
@@ -389,16 +477,14 @@ export default function CommandesPage() {
                   />
                   <Input value={newLigne.designation} onChange={e => setNewLigne({ ...newLigne, designation: e.target.value })} placeholder="Désignation" className="text-xs h-8" />
                   <Input type="number" value={newLigne.quantite_commandee} onChange={e => setNewLigne({ ...newLigne, quantite_commandee: e.target.value })} placeholder="Qté" className="text-xs h-8" />
-                  <div className="relative">
-                    <Input
-                      type="number"
-                      step="0.01"
-                      value={newLigne.pu_commande}
-                      onChange={e => setNewLigne({ ...newLigne, pu_commande: e.target.value })}
-                      placeholder="PU €"
-                      className={`text-xs h-8 ${prixSuggere && newLigne.pu_commande && parseFloat(newLigne.pu_commande) !== prixSuggere.pu ? 'border-amber-400 focus:ring-amber-400' : ''}`}
-                    />
-                  </div>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    value={newLigne.pu_commande}
+                    onChange={e => setNewLigne({ ...newLigne, pu_commande: e.target.value })}
+                    placeholder="PU €"
+                    className={`text-xs h-8 ${prixSuggere && newLigne.pu_commande && parseFloat(newLigne.pu_commande) !== prixSuggere.pu ? 'border-amber-400 focus:ring-amber-400' : ''}`}
+                  />
                 </div>
                 {prixSuggere && (
                   <p className="text-xs mt-1 text-gray-400">
