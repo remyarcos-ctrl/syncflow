@@ -94,6 +94,64 @@ const WORKFLOWS = [
   },
 ];
 
+// ── Context-aware chips ──────────────────────────────────────────────────────
+
+type Chip = { icon: React.ElementType; label: string; prompt: string };
+
+function getContextChips(pathname: string): Chip[] {
+  if (/^\/commandes\/[^/]+/.test(pathname)) return [
+    { icon: BarChart2,    label: 'Résumé',      prompt: 'Fais le résumé de cette commande.' },
+    { icon: CheckCheck,   label: 'Facture liée', prompt: 'Y a-t-il une facture liée à cette commande ?' },
+    { icon: Package,      label: 'BEs liés',     prompt: 'Quels BEs sont liés à cette commande ?' },
+    { icon: AlertTriangle,label: 'Anomalies',    prompt: 'Y a-t-il des anomalies sur cette commande ?' },
+  ];
+  if (pathname.startsWith('/commandes')) return [
+    { icon: Clock,         label: 'En retard',        prompt: 'Quelles commandes sont en retard ou non soldées ?' },
+    { icon: AlertTriangle, label: 'Anomalies',         prompt: 'Liste les commandes avec des anomalies.' },
+    { icon: TrendingUp,    label: 'Top fournisseurs',  prompt: 'Quels sont mes top fournisseurs par montant commandé ?' },
+    { icon: Download,      label: 'Export',            prompt: 'Exporte les commandes en CSV.' },
+  ];
+  if (/^\/factures\/[^/]+/.test(pathname)) return [
+    { icon: Zap,           label: 'Rapprocher',  prompt: 'Lance le rapprochement pour cette facture.' },
+    { icon: BarChart2,     label: 'Résumé',      prompt: 'Fais le résumé de cette facture.' },
+    { icon: Wrench,        label: 'Corriger',    prompt: 'Y a-t-il des écarts à corriger sur cette facture ?' },
+    { icon: AlertTriangle, label: 'Anomalies',   prompt: 'Y a-t-il des anomalies sur cette facture ?' },
+  ];
+  if (pathname.startsWith('/factures')) return [
+    { icon: AlertTriangle, label: 'Non rapprochées', prompt: 'Quelles factures ne sont pas encore rapprochées ?' },
+    { icon: Zap,           label: 'Lancer matching', prompt: 'Lance le matching automatique sur toutes les factures non rapprochées.' },
+    { icon: Clock,         label: 'Échues',          prompt: 'Quelles factures sont échues ou en retard de paiement ?' },
+    { icon: Download,      label: 'Export',          prompt: 'Exporte les factures en CSV.' },
+  ];
+  if (/^\/be-receptions\/[^/]+/.test(pathname)) return [
+    { icon: BarChart2,  label: 'Résumé',      prompt: 'Fais le résumé de ce bon d\'entrée.' },
+    { icon: CheckCheck, label: 'Facture liée', prompt: 'Y a-t-il une facture liée à ce BE ?' },
+    { icon: Zap,        label: 'Rapprocher',  prompt: 'Lance le rapprochement pour ce BE.' },
+  ];
+  if (pathname.startsWith('/be-receptions')) return [
+    { icon: Clock,      label: 'BEs anciens', prompt: 'Quels BEs sont en attente depuis plus de 14 jours ?' },
+    { icon: Zap,        label: 'Matching',    prompt: 'Lance le matching automatique sur tous les BEs en attente.' },
+    { icon: CheckCheck, label: 'À valider',   prompt: 'Quels BEs sont prêts à être validés ?' },
+    { icon: Download,   label: 'Export',      prompt: 'Exporte les BEs en CSV.' },
+  ];
+  if (pathname.startsWith('/prix-reference')) return [
+    { icon: TrendingUp,    label: 'Écarts prix', prompt: 'Y a-t-il des références avec des écarts de prix suspects ?' },
+    { icon: BarChart2,     label: 'Top refs',    prompt: 'Quelles sont les références les plus commandées ?' },
+    { icon: Download,      label: 'Export',      prompt: 'Exporte le catalogue prix en CSV.' },
+  ];
+  if (pathname.startsWith('/exceptions')) return [
+    { icon: Wrench,        label: 'Résoudre auto',  prompt: 'Résous automatiquement les exceptions avec un écart ≤ 5%.' },
+    { icon: AlertTriangle, label: 'Priorité haute', prompt: 'Liste les exceptions de priorité haute.' },
+    { icon: BarChart2,     label: 'Par fournisseur',prompt: 'Résume les exceptions ouvertes par fournisseur.' },
+  ];
+  return [
+    { icon: Sun,           label: 'Brief',   prompt: 'Briefing du jour' },
+    { icon: AlertTriangle, label: 'Audit',   prompt: 'Fais un audit complet et donne-moi le score de santé.' },
+    { icon: BarChart2,     label: 'Rapport', prompt: 'Génère le bilan global : commandes, factures, BEs, top fournisseurs.' },
+    { icon: Download,      label: 'Export',  prompt: 'Exporte les commandes en CSV.' },
+  ];
+}
+
 // ── Help categories ──────────────────────────────────────────────────────────
 
 const HELP_CATEGORIES = [
@@ -538,6 +596,7 @@ function parseEntityContext(pathname: string): { type: string; id: string } | nu
 
 export default function ChatAssistant() {
   const pathname = usePathname();
+  const contextChips = useMemo(() => getContextChips(pathname), [pathname]);
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
@@ -1213,15 +1272,10 @@ export default function ChatAssistant() {
             </div>
           )}
 
-          {/* Quick chips — visibles quand conversation active */}
+          {/* Quick chips — contextuels selon la page */}
           {messages.length > 0 && (
             <div className="shrink-0 px-3 pt-2 pb-0 bg-white border-t border-gray-50 flex gap-1.5 overflow-x-auto">
-              {[
-                { icon: Sun, label: 'Brief', prompt: 'Briefing du jour' },
-                { icon: AlertTriangle, label: 'Audit', prompt: 'Fais un audit complet et donne-moi le score de santé.' },
-                { icon: BarChart2, label: 'Rapport', prompt: 'Génère le bilan global : commandes, factures, BEs, top fournisseurs.' },
-                { icon: Download, label: 'Export', prompt: 'Exporte les commandes en CSV.' },
-              ].map(({ icon: Icon, label, prompt }) => (
+              {contextChips.map(({ icon: Icon, label, prompt }) => (
                 <button key={label} type="button" onClick={() => void sendMessage(prompt)} disabled={isLoading}
                   className="flex items-center gap-1 text-[10px] px-2.5 py-1 rounded-lg border border-gray-200 bg-gray-50 hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-600 text-gray-500 transition-all whitespace-nowrap disabled:opacity-40 shrink-0">
                   <Icon className="w-2.5 h-2.5" />
