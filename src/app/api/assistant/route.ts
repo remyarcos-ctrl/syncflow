@@ -88,7 +88,22 @@ Utilise sauvegarder_memoire_teddy pour retenir des faits importants :
 - Préférences de travail de Rémy
 - Informations sur les fournisseurs clés
 - Règles métier spécifiques à SD Équipements
-Rappelle-toi de ce qui est déjà mémorisé (visible dans le système) avant de poser des questions déjà connues.`;
+Rappelle-toi de ce qui est déjà mémorisé (visible dans le système) avant de poser des questions déjà connues.
+
+════════════════════════════════════════
+PROACTIVITÉ
+════════════════════════════════════════
+Pendant toute conversation, si tu remarques quelque chose d'important (BE en retard, facture échue, doublon potentiel, anomalie), signale-le spontanément AVANT de répondre à la question principale. Une phrase suffit : "Au passage, j'ai remarqué que...".
+
+════════════════════════════════════════
+WORKFLOWS EN CHAÎNE
+════════════════════════════════════════
+Tu peux enchaîner autant d'outils que nécessaire en une seule demande. Si l'utilisateur dit "traite toutes les factures non rapprochées", appelle lancer_matching en boucle pour chacune. Si il dit "exporte puis envoie-moi le rapport", enchaîne generer_rapport → exporter_donnees. Pas besoin de confirmation entre les étapes d'un même workflow sauf si une étape est destructive.
+
+════════════════════════════════════════
+MÉMOIRE DE SESSION
+════════════════════════════════════════
+Tu as accès à tout l'historique de la conversation en cours. Si l'utilisateur dit "la commande dont on parlait", "le fournisseur mentionné", retrouve l'info dans les messages précédents sans demander. Utilise le contexte de session pour éviter les questions redondantes.`;
 
 const tools = [
   // ── Lecture ──────────────────────────────────────────────────────────────────
@@ -778,6 +793,138 @@ const tools = [
         sauvegarder: { type: 'boolean', description: 'Si true, sauvegarde les patterns en mémoire (défaut: true)' },
       },
       required: ['fournisseur'],
+    },
+  },
+  {
+    name: 'recherche_globale',
+    description: 'Recherche dans toutes les tables simultanément (commandes, factures, BEs, exceptions) par mot-clé, fournisseur ou période. Utiliser quand l\'utilisateur cherche quelque chose sans préciser le type.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        q: { type: 'string', description: 'Mot-clé : numéro, fournisseur, référence...' },
+        fournisseur: { type: 'string', description: 'Filtre fournisseur (partiel)' },
+        date_debut: { type: 'string', description: 'Date début YYYY-MM-DD' },
+        date_fin: { type: 'string', description: 'Date fin YYYY-MM-DD' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'get_echeances',
+    description: 'Retourne les factures dont l\'échéance approche ou est dépassée. Utiliser pour "quelles factures arrivent à échéance ?", "factures en retard de paiement".',
+    input_schema: {
+      type: 'object',
+      properties: {
+        jours: { type: 'number', description: 'Horizon en jours (défaut: 30). Ex: 7 = échéances dans les 7 prochains jours.' },
+        inclure_retard: { type: 'boolean', description: 'Si true, inclut aussi les factures déjà en retard (défaut: true)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'detecter_doublons',
+    description: 'Détecte les factures potentiellement en double : même numéro, ou même fournisseur + même montant + dates proches. Utiliser quand l\'utilisateur demande "y a-t-il des doublons ?".',
+    input_schema: {
+      type: 'object',
+      properties: {
+        fournisseur: { type: 'string', description: 'Limiter la recherche à un fournisseur (optionnel)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'creer_facture',
+    description: 'Crée une nouvelle facture manuellement. Pas besoin de confirmation.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        numero_facture: { type: 'string', description: 'Numéro de facture' },
+        fournisseur: { type: 'string', description: 'Nom du fournisseur' },
+        date_facture: { type: 'string', description: 'Date YYYY-MM-DD' },
+        date_echeance: { type: 'string', description: 'Date d\'échéance YYYY-MM-DD (optionnel)' },
+        total_ht: { type: 'number', description: 'Montant HT' },
+        montant_ttc: { type: 'number', description: 'Montant TTC (optionnel)' },
+        notes: { type: 'string', description: 'Notes (optionnel)' },
+      },
+      required: ['numero_facture', 'fournisseur'],
+    },
+  },
+  {
+    name: 'creer_be',
+    description: 'Crée un nouveau bordereau d\'entrée (BE/réception) manuellement. Pas besoin de confirmation.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        numero_be: { type: 'string', description: 'Numéro du BE' },
+        fournisseur: { type: 'string', description: 'Nom du fournisseur' },
+        date_bl: { type: 'string', description: 'Date du BL YYYY-MM-DD' },
+        date_reception: { type: 'string', description: 'Date de réception YYYY-MM-DD (défaut: aujourd\'hui)' },
+        notes: { type: 'string', description: 'Notes (optionnel)' },
+      },
+      required: ['numero_be', 'fournisseur'],
+    },
+  },
+  {
+    name: 'audit_complet',
+    description: 'Audit complet de la santé de la base : factures non rapprochées depuis >30j, BEs anciens, commandes en anomalie, exceptions non résolues, rapprochements à score faible. Retourne un score global /100 et la liste de tous les points d\'attention. Utiliser quand l\'utilisateur demande "fais un audit", "état de la base", "bilan complet".',
+    input_schema: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'generer_rapport',
+    description: 'Génère un rapport de synthèse sur une période donnée : KPIs clés, activité, top fournisseurs, taux de rapprochement. Utiliser pour "rapport de la semaine/du mois", "bilan mensuel".',
+    input_schema: {
+      type: 'object',
+      properties: {
+        periode: { type: 'string', description: '"semaine" (7j) ou "mois" (30j) — défaut: mois' },
+        fournisseur: { type: 'string', description: 'Limiter le rapport à un fournisseur (optionnel)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'comparer_fournisseurs',
+    description: 'Compare 2 fournisseurs ou plus sur les 6 derniers mois : nombre de commandes, montants, taux d\'anomalies, délais, BEs anciens. Utiliser quand l\'utilisateur veut comparer des fournisseurs.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        fournisseurs: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Liste des fournisseurs à comparer (minimum 2)',
+        },
+      },
+      required: ['fournisseurs'],
+    },
+  },
+  {
+    name: 'exporter_donnees',
+    description: 'Exporte des données en CSV (commandes, factures, be_receptions, exceptions) avec filtres optionnels. Génère un fichier téléchargeable. Utiliser quand l\'utilisateur demande un export ou "donne-moi les données en CSV".',
+    input_schema: {
+      type: 'object',
+      properties: {
+        entite: { type: 'string', description: 'commandes | factures | be_receptions | exceptions' },
+        fournisseur: { type: 'string', description: 'Filtre fournisseur (optionnel)' },
+        statut: { type: 'string', description: 'Filtre statut (optionnel)' },
+        date_debut: { type: 'string', description: 'Date début YYYY-MM-DD (optionnel)' },
+        date_fin: { type: 'string', description: 'Date fin YYYY-MM-DD (optionnel)' },
+      },
+      required: ['entite'],
+    },
+  },
+  {
+    name: 'get_historique_prix',
+    description: 'Retourne l\'historique complet des prix d\'une référence article : toutes les commandes qui l\'ont utilisée, prix min/max/moyen, évolution dans le temps. Utiliser pour "historique prix de REF", "évolution du prix de...".',
+    input_schema: {
+      type: 'object',
+      properties: {
+        reference_article: { type: 'string', description: 'Référence article exacte' },
+        fournisseur: { type: 'string', description: 'Filtrer par fournisseur (optionnel)' },
+      },
+      required: ['reference_article'],
     },
   },
 ];
@@ -1866,6 +2013,275 @@ async function executeTool(name: string, input: ToolInput): Promise<string> {
       return JSON.stringify(summary);
     }
 
+    if (name === 'recherche_globale') {
+      const q = String(input.q ?? '');
+      const fournisseur = String(input.fournisseur ?? '');
+      const dateDebut = String(input.date_debut ?? '');
+      const dateFin = String(input.date_fin ?? '');
+
+      type AnyQuery = Record<string, (col: string, val: string) => AnyQuery>;
+      const applyFilters = (qb: unknown): AnyQuery => {
+        let r = qb as AnyQuery;
+        if (fournisseur) r = r.ilike('fournisseur', `%${fournisseur}%`);
+        if (dateDebut) r = r.gte('created_at', dateDebut);
+        if (dateFin) r = r.lte('created_at', dateFin);
+        return r;
+      };
+
+      const orQ = q ? `fournisseur.ilike.%${q}%` : 'id.neq.00000000-0000-0000-0000-000000000000';
+
+      const [resCmd, resFact, resBe, resExc] = await Promise.all([
+        (applyFilters(supabase.from('commandes').select('id,numero_commande_interne,fournisseur,statut_commande,montant_total_commande,created_at')) as unknown as { or: (s: string) => { limit: (n: number) => Promise<{ data: unknown[] | null }> } }).or(q ? `numero_commande_interne.ilike.%${q}%,${orQ}` : orQ).limit(8),
+        (applyFilters(supabase.from('factures').select('id,numero_facture,fournisseur,statut_facture,total_ht,created_at')) as unknown as { or: (s: string) => { limit: (n: number) => Promise<{ data: unknown[] | null }> } }).or(q ? `numero_facture.ilike.%${q}%,${orQ}` : orQ).limit(8),
+        (applyFilters(supabase.from('be_receptions').select('id,numero_be,fournisseur,statut_be,created_at')) as unknown as { or: (s: string) => { limit: (n: number) => Promise<{ data: unknown[] | null }> } }).or(q ? `numero_be.ilike.%${q}%,${orQ}` : orQ).limit(8),
+        supabase.from('exceptions').select('id,type_exception,fournisseur,niveau_priorite,statut_exception,created_at').or(q ? `fournisseur.ilike.%${q}%,type_exception.ilike.%${q}%` : orQ).limit(8),
+      ]);
+
+      return JSON.stringify({
+        commandes: (resCmd as { data: unknown[] | null }).data ?? [],
+        factures: (resFact as { data: unknown[] | null }).data ?? [],
+        be_receptions: (resBe as { data: unknown[] | null }).data ?? [],
+        exceptions: resExc.data ?? [],
+      });
+    }
+
+    if (name === 'get_echeances') {
+      const jours = Number(input.jours ?? 30);
+      const dateLimite = new Date(Date.now() + jours * 86400000).toISOString().slice(0, 10);
+      const { data } = await supabase
+        .from('factures')
+        .select('id,numero_facture,fournisseur,date_echeance,total_ht,statut_facture,taux_rapprochement')
+        .not('date_echeance', 'is', null)
+        .lte('date_echeance', dateLimite)
+        .not('statut_facture', 'eq', 'rapprochée')
+        .order('date_echeance');
+      const today = Date.now();
+      const result = (data ?? []).map(f => {
+        const row = f as Record<string, unknown>;
+        const joursRestants = Math.floor((new Date(String(row.date_echeance)).getTime() - today) / 86400000);
+        return { ...row, jours_restants: joursRestants, en_retard: joursRestants < 0 };
+      });
+      return JSON.stringify({
+        en_retard: result.filter(f => f.en_retard),
+        a_venir: result.filter(f => !f.en_retard),
+        total: result.length,
+      });
+    }
+
+    if (name === 'detecter_doublons') {
+      const fournisseur = String(input.fournisseur ?? '');
+      let q = supabase.from('factures').select('id,numero_facture,fournisseur,total_ht,date_facture').order('fournisseur,total_ht');
+      if (fournisseur) q = q.ilike('fournisseur', `%${fournisseur}%`);
+      const { data: rows } = await q;
+      const all = (rows ?? []) as Record<string, unknown>[];
+      const doublons: Array<{ type: string; factures: unknown[] }> = [];
+      const byNum: Record<string, unknown[]> = {};
+      for (const f of all) { const k = String(f.numero_facture ?? '').toLowerCase().trim(); if (!byNum[k]) byNum[k] = []; byNum[k].push(f); }
+      for (const g of Object.values(byNum)) { if (g.length > 1) doublons.push({ type: 'numéro identique', factures: g }); }
+      for (let i = 0; i < all.length; i++) {
+        for (let j = i + 1; j < all.length; j++) {
+          const a = all[i], b = all[j];
+          if (a.fournisseur !== b.fournisseur) continue;
+          if (Math.abs(Number(a.total_ht ?? 0) - Number(b.total_ht ?? 0)) > 0.01) continue;
+          if (String(a.numero_facture).toLowerCase() === String(b.numero_facture).toLowerCase()) continue;
+          const diff = Math.abs(new Date(String(a.date_facture)).getTime() - new Date(String(b.date_facture)).getTime()) / 86400000;
+          if (diff <= 30) doublons.push({ type: 'montant + fournisseur identiques (dates ≤30j)', factures: [a, b] });
+        }
+      }
+      return JSON.stringify({ doublons_potentiels: doublons, nb: doublons.length });
+    }
+
+    if (name === 'creer_facture') {
+      const { data: fact, error } = await supabase.from('factures').insert({
+        numero_facture: String(input.numero_facture ?? ''),
+        fournisseur: String(input.fournisseur ?? ''),
+        date_facture: input.date_facture ? String(input.date_facture) : null,
+        date_echeance: input.date_echeance ? String(input.date_echeance) : null,
+        total_ht: input.total_ht != null ? Number(input.total_ht) : null,
+        montant_ttc: input.montant_ttc != null ? Number(input.montant_ttc) : null,
+        statut_facture: 'importée',
+        notes: input.notes ? String(input.notes) : null,
+      }).select().single();
+      if (error) return JSON.stringify({ error: error.message });
+      return JSON.stringify({ ok: true, id: (fact as Record<string, unknown>).id, numero_facture: input.numero_facture });
+    }
+
+    if (name === 'creer_be') {
+      const { data: be, error } = await supabase.from('be_receptions').insert({
+        numero_be: String(input.numero_be ?? ''),
+        fournisseur: String(input.fournisseur ?? ''),
+        date_bl: input.date_bl ? String(input.date_bl) : null,
+        date_reception: input.date_reception ? String(input.date_reception) : new Date().toISOString().slice(0, 10),
+        statut_be: 'reçu',
+        notes: input.notes ? String(input.notes) : null,
+      }).select().single();
+      if (error) return JSON.stringify({ error: error.message });
+      return JSON.stringify({ ok: true, id: (be as Record<string, unknown>).id, numero_be: input.numero_be });
+    }
+
+    if (name === 'audit_complet') {
+      const d30 = new Date(Date.now() - 30 * 86400000).toISOString();
+      const d14 = new Date(Date.now() - 14 * 86400000).toISOString();
+      const d7 = new Date(Date.now() - 7 * 86400000).toISOString();
+      const [a, b, c, d, e, f, g] = await Promise.all([
+        supabase.from('factures').select('id,numero_facture,fournisseur,total_ht,created_at').in('statut_facture', ['importée', 'en cours de rapprochement']).lte('created_at', d30).limit(20),
+        supabase.from('be_receptions').select('id,numero_be,fournisseur,statut_be,created_at').in('statut_be', ['reçu', 'partiellement facturé']).lte('created_at', d14).limit(20),
+        supabase.from('commandes').select('id,numero_commande_interne,fournisseur,created_at').eq('statut_commande', 'en anomalie').limit(20),
+        supabase.from('exceptions').select('id,type_exception,fournisseur,niveau_priorite,created_at').in('statut_exception', ['ouverte', 'en cours']).lte('created_at', d7).limit(20),
+        supabase.from('rapprochements').select('id,score_match').eq('statut_validation', 'proposé').lt('score_match', 0.7).limit(10),
+        supabase.from('exceptions').select('id', { count: 'exact', head: true }).in('statut_exception', ['ouverte', 'en cours']),
+        supabase.from('rapprochements').select('id', { count: 'exact', head: true }).eq('statut_validation', 'proposé'),
+      ]);
+      const score = Math.max(0, 100 - (a.data?.length ?? 0) * 3 - (b.data?.length ?? 0) * 2 - (c.data?.length ?? 0) * 2 - (d.data?.length ?? 0) * 2 - (e.data?.length ?? 0) * 2);
+      return JSON.stringify({
+        score_global: score,
+        kpis: { exceptions_actives: f.count ?? 0, rapprochements_en_attente: g.count ?? 0 },
+        alertes: {
+          factures_sans_rapprochement_30j: a.data ?? [],
+          bes_anciens_non_soldes: b.data ?? [],
+          commandes_en_anomalie: c.data ?? [],
+          exceptions_non_resolues_7j: d.data ?? [],
+          rapprochements_score_faible: e.data ?? [],
+        },
+      });
+    }
+
+    if (name === 'generer_rapport') {
+      const periode = String(input.periode ?? 'mois');
+      const jours = periode === 'semaine' ? 7 : 30;
+      const fournisseur = String(input.fournisseur ?? '');
+      const since = new Date(Date.now() - jours * 86400000).toISOString();
+      type RapportQuery = { ilike: (c: string, v: string) => RapportQuery; data?: Record<string, unknown>[] | null };
+      const applyF = (q: RapportQuery) => fournisseur ? q.ilike('fournisseur', `%${fournisseur}%`) : q;
+      const [rF, rB, rC, rE, rR] = await Promise.all([
+        applyF(supabase.from('factures').select('fournisseur,total_ht,statut_facture,taux_rapprochement').gte('created_at', since) as unknown as RapportQuery),
+        applyF(supabase.from('be_receptions').select('fournisseur,statut_be').gte('created_at', since) as unknown as RapportQuery),
+        applyF(supabase.from('commandes').select('fournisseur,montant_total_commande,statut_commande').gte('created_at', since) as unknown as RapportQuery),
+        supabase.from('exceptions').select('statut_exception').gte('created_at', since),
+        supabase.from('rapprochements').select('statut_validation,score_match').gte('created_at', since),
+      ]);
+      const facts = (rF as unknown as { data: Record<string, unknown>[] | null }).data ?? [];
+      const cmds = (rC as unknown as { data: Record<string, unknown>[] | null }).data ?? [];
+      const bes = (rB as unknown as { data: Record<string, unknown>[] | null }).data ?? [];
+      const excs = rE.data ?? [];
+      const raps = rR.data ?? [];
+      const montantFact = facts.reduce((s, f) => s + Number(f.total_ht ?? 0), 0);
+      const montantCmd = cmds.reduce((s, c) => s + Number(c.montant_total_commande ?? 0), 0);
+      const tauxMoyen = facts.length ? Math.round(facts.reduce((s, f) => s + Number(f.taux_rapprochement ?? 0), 0) / facts.length) : 0;
+      const parFourn: Record<string, number> = {};
+      for (const f of facts) { const k = String(f.fournisseur ?? 'Inconnu'); parFourn[k] = (parFourn[k] ?? 0) + Number(f.total_ht ?? 0); }
+      const topFourn = Object.entries(parFourn).sort(([, a], [, b]) => b - a).slice(0, 5).map(([nom, montant]) => ({ nom, montant: Math.round(montant) }));
+      return JSON.stringify({
+        periode: `${jours} derniers jours`,
+        kpis: {
+          factures: facts.length, montant_facture: Math.round(montantFact),
+          commandes: cmds.length, montant_commandes: Math.round(montantCmd),
+          bes: bes.length,
+          exceptions_ouvertes: excs.filter(e => (e as Record<string, unknown>).statut_exception !== 'résolue').length,
+          rapprochements_valides: raps.filter(r => (r as Record<string, unknown>).statut_validation === 'validé').length,
+          taux_rapprochement_moyen: tauxMoyen,
+        },
+        top_fournisseurs: topFourn,
+      });
+    }
+
+    if (name === 'comparer_fournisseurs') {
+      const fournisseurs = (input.fournisseurs as string[]) ?? [];
+      if (fournisseurs.length < 2) return JSON.stringify({ error: 'Fournir au moins 2 fournisseurs à comparer' });
+      const since = new Date(Date.now() - 6 * 30 * 86400000).toISOString();
+      const results = await Promise.all(fournisseurs.map(async (fourn: string) => {
+        const [rc, re, rb, rf] = await Promise.all([
+          supabase.from('commandes').select('id,montant_total_commande,statut_commande').ilike('fournisseur', `%${fourn}%`).gte('created_at', since),
+          supabase.from('exceptions').select('id,niveau_priorite').ilike('fournisseur', `%${fourn}%`).gte('created_at', since),
+          supabase.from('be_receptions').select('id,statut_be,created_at').ilike('fournisseur', `%${fourn}%`).gte('created_at', since),
+          supabase.from('factures').select('id,total_ht,taux_rapprochement').ilike('fournisseur', `%${fourn}%`).gte('created_at', since),
+        ]);
+        const cmds = rc.data ?? [], excs = re.data ?? [], bes = rb.data ?? [], facts = rf.data ?? [];
+        const montant = cmds.reduce((s, c) => s + Number((c as Record<string, unknown>).montant_total_commande ?? 0), 0);
+        const besAnciens = bes.filter(be => {
+          const age = (Date.now() - new Date(String((be as Record<string, unknown>).created_at)).getTime()) / 86400000;
+          return age > 14 && !['soldé', 'facturé'].includes(String((be as Record<string, unknown>).statut_be));
+        }).length;
+        const tauxRap = facts.length ? Math.round(facts.reduce((s, f) => s + Number((f as Record<string, unknown>).taux_rapprochement ?? 0), 0) / facts.length) : 0;
+        return { fournisseur: fourn, nb_commandes: cmds.length, montant_total: Math.round(montant), nb_anomalies: excs.length, taux_anomalie_pct: cmds.length ? Math.round(excs.length / cmds.length * 100) : 0, bes_anciens: besAnciens, taux_rapprochement_moyen: tauxRap, nb_factures: facts.length };
+      }));
+      return JSON.stringify({ comparaison: results, periode: '6 derniers mois' });
+    }
+
+    if (name === 'exporter_donnees') {
+      const entite = String(input.entite ?? 'commandes');
+      const fournisseur = String(input.fournisseur ?? '');
+      const statut = String(input.statut ?? '');
+      const dateDebut = String(input.date_debut ?? '');
+      const dateFin = String(input.date_fin ?? '');
+      let rows: Record<string, unknown>[] = [];
+      let headers: string[] = [];
+      let filename = '';
+      type ExportQuery = Record<string, (c: string, v: string) => ExportQuery>;
+      const af = (q: unknown) => {
+        let r = q as ExportQuery;
+        if (fournisseur) r = r.ilike('fournisseur', `%${fournisseur}%`);
+        return r;
+      };
+      if (entite === 'commandes') {
+        let q = af(supabase.from('commandes').select('numero_commande_interne,fournisseur,date_commande,statut_commande,montant_total_commande,created_at').order('created_at', { ascending: false }).limit(500));
+        if (statut) q = (q as unknown as { eq: (c: string, v: string) => typeof q }).eq('statut_commande', statut);
+        if (dateDebut) q = (q as unknown as { gte: (c: string, v: string) => typeof q }).gte('date_commande', dateDebut);
+        if (dateFin) q = (q as unknown as { lte: (c: string, v: string) => typeof q }).lte('date_commande', dateFin);
+        const { data } = await (q as unknown as Promise<{ data: Record<string, unknown>[] | null }>);
+        rows = data ?? []; headers = ['numero_commande_interne','fournisseur','date_commande','statut_commande','montant_total_commande','created_at']; filename = `commandes_${new Date().toISOString().slice(0,10)}.csv`;
+      } else if (entite === 'factures') {
+        let q = af(supabase.from('factures').select('numero_facture,fournisseur,date_facture,date_echeance,total_ht,statut_facture,taux_rapprochement,created_at').order('created_at', { ascending: false }).limit(500));
+        if (statut) q = (q as unknown as { eq: (c: string, v: string) => typeof q }).eq('statut_facture', statut);
+        if (dateDebut) q = (q as unknown as { gte: (c: string, v: string) => typeof q }).gte('date_facture', dateDebut);
+        if (dateFin) q = (q as unknown as { lte: (c: string, v: string) => typeof q }).lte('date_facture', dateFin);
+        const { data } = await (q as unknown as Promise<{ data: Record<string, unknown>[] | null }>);
+        rows = data ?? []; headers = ['numero_facture','fournisseur','date_facture','date_echeance','total_ht','statut_facture','taux_rapprochement']; filename = `factures_${new Date().toISOString().slice(0,10)}.csv`;
+      } else if (entite === 'be_receptions') {
+        let q = af(supabase.from('be_receptions').select('numero_be,fournisseur,date_bl,date_reception,statut_be,notes,created_at').order('created_at', { ascending: false }).limit(500));
+        if (statut) q = (q as unknown as { eq: (c: string, v: string) => typeof q }).eq('statut_be', statut);
+        if (dateDebut) q = (q as unknown as { gte: (c: string, v: string) => typeof q }).gte('date_bl', dateDebut);
+        if (dateFin) q = (q as unknown as { lte: (c: string, v: string) => typeof q }).lte('date_bl', dateFin);
+        const { data } = await (q as unknown as Promise<{ data: Record<string, unknown>[] | null }>);
+        rows = data ?? []; headers = ['numero_be','fournisseur','date_bl','date_reception','statut_be','notes']; filename = `be_receptions_${new Date().toISOString().slice(0,10)}.csv`;
+      } else if (entite === 'exceptions') {
+        let q = af(supabase.from('exceptions').select('type_exception,fournisseur,niveau_priorite,statut_exception,motif,created_at').order('created_at', { ascending: false }).limit(500));
+        if (statut) q = (q as unknown as { eq: (c: string, v: string) => typeof q }).eq('statut_exception', statut);
+        const { data } = await (q as unknown as Promise<{ data: Record<string, unknown>[] | null }>);
+        rows = data ?? []; headers = ['type_exception','fournisseur','niveau_priorite','statut_exception','motif','created_at']; filename = `exceptions_${new Date().toISOString().slice(0,10)}.csv`;
+      }
+      const esc = (v: unknown) => { const s = String(v ?? ''); return /[,"\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+      const csv = [headers.join(','), ...rows.map(r => headers.map(h => esc(r[h])).join(','))].join('\n');
+      const b64 = Buffer.from('﻿' + csv, 'utf-8').toString('base64');
+      return JSON.stringify({ __export__: true, filename, b64, rows_count: rows.length });
+    }
+
+    if (name === 'get_historique_prix') {
+      const ref = String(input.reference_article ?? '');
+      const fourn = String(input.fournisseur ?? '');
+      let q = supabase.from('lignes_commande')
+        .select('pu_commande,created_at,commandes!inner(fournisseur,date_commande,numero_commande_interne)')
+        .eq('reference_article', ref)
+        .not('pu_commande', 'is', null)
+        .order('created_at', { ascending: false })
+        .limit(50);
+      if (fourn) q = q.ilike('commandes.fournisseur', `%${fourn}%`);
+      const { data } = await q;
+      const rows = (data ?? []) as Record<string, unknown>[];
+      if (rows.length === 0) {
+        const { data: cat } = await supabase.from('prix_reference').select('*').eq('reference_article', ref).limit(5);
+        return JSON.stringify({ reference: ref, historique: [], catalogue: cat ?? [] });
+      }
+      const prix = rows.map(r => Number(r.pu_commande ?? 0));
+      const min = Math.min(...prix), max = Math.max(...prix);
+      const avg = prix.reduce((a, b) => a + b, 0) / prix.length;
+      return JSON.stringify({
+        reference: ref,
+        stats: { min, max, moyenne: Math.round(avg * 100) / 100, dernier_prix: rows[0].pu_commande, nb_occurrences: rows.length },
+        historique: rows.slice(0, 20),
+      });
+    }
+
     return JSON.stringify({ error: `Outil inconnu: ${name}` });
   } catch (e) {
     return JSON.stringify({ error: String(e) });
@@ -1932,7 +2348,7 @@ export async function POST(req: NextRequest) {
             },
             body: JSON.stringify({
               model: 'claude-sonnet-4-6',
-              max_tokens: 4000,
+              max_tokens: 8000,
               stream: true,
               system: systemPrompt,
               tools,
