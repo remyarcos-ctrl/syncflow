@@ -3,8 +3,8 @@ import { createClient } from '@supabase/supabase-js';
 import { getValidToken, sendEmail } from '@/lib/gmail-api';
 
 const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+  (process.env.NEXT_PUBLIC_SUPABASE_URL ?? '').trim(),
+  (process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? '').trim(),
 );
 
 const BASE_URL = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000';
