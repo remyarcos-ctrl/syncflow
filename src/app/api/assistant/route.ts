@@ -2148,17 +2148,28 @@ async function executeTool(name: string, input: ToolInput): Promise<string> {
 
     if (name === 'generer_rapport') {
       const periode = String(input.periode ?? 'mois');
-      const jours = periode === 'semaine' ? 7 : 30;
       const fournisseur = String(input.fournisseur ?? '');
-      const since = new Date(Date.now() - jours * 86400000).toISOString();
-      type RapportQuery = { ilike: (c: string, v: string) => RapportQuery; data?: Record<string, unknown>[] | null };
+      // Pour "semaine" : 7 jours glissants. Pour "mois" : mois calendaire en cours.
+      // Sans filtre de date pour le bilan global — évite les faux zéros sur données anciennes.
+      const now = new Date();
+      let since: string | null = null;
+      let periodeLabel = 'Global';
+      if (periode === 'semaine') {
+        since = new Date(Date.now() - 7 * 86400000).toISOString();
+        periodeLabel = '7 derniers jours';
+      } else if (periode === 'mois') {
+        since = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+        periodeLabel = `${now.toLocaleString('fr-FR', { month: 'long' })} ${now.getFullYear()}`;
+      }
+      type RapportQuery = { ilike: (c: string, v: string) => RapportQuery; gte: (c: string, v: string) => RapportQuery; data?: Record<string, unknown>[] | null };
       const applyF = (q: RapportQuery) => fournisseur ? q.ilike('fournisseur', `%${fournisseur}%`) : q;
+      const applyDate = (q: RapportQuery, field = 'created_at') => since ? q.gte(field, since) : q;
       const [rF, rB, rC, rE, rR] = await Promise.all([
-        applyF(supabase.from('factures').select('fournisseur,total_ht,statut_facture,taux_rapprochement').gte('created_at', since) as unknown as RapportQuery),
-        applyF(supabase.from('be_receptions').select('fournisseur,statut_be').gte('created_at', since) as unknown as RapportQuery),
-        applyF(supabase.from('commandes').select('fournisseur,montant_total_commande,statut_commande').gte('created_at', since) as unknown as RapportQuery),
-        supabase.from('exceptions').select('statut_exception').gte('created_at', since),
-        supabase.from('rapprochements').select('statut_validation,score_match').gte('created_at', since),
+        applyDate(applyF(supabase.from('factures').select('fournisseur,total_ht,statut_facture,taux_rapprochement') as unknown as RapportQuery)),
+        applyDate(applyF(supabase.from('be_receptions').select('fournisseur,statut_be') as unknown as RapportQuery)),
+        applyDate(applyF(supabase.from('commandes').select('fournisseur,montant_total_commande,statut_commande') as unknown as RapportQuery)),
+        applyDate(supabase.from('exceptions').select('statut_exception') as unknown as RapportQuery),
+        applyDate(supabase.from('rapprochements').select('statut_validation,score_match') as unknown as RapportQuery),
       ]);
       const facts = (rF as unknown as { data: Record<string, unknown>[] | null }).data ?? [];
       const cmds = (rC as unknown as { data: Record<string, unknown>[] | null }).data ?? [];
@@ -2172,7 +2183,7 @@ async function executeTool(name: string, input: ToolInput): Promise<string> {
       for (const f of facts) { const k = String(f.fournisseur ?? 'Inconnu'); parFourn[k] = (parFourn[k] ?? 0) + Number(f.total_ht ?? 0); }
       const topFourn = Object.entries(parFourn).sort(([, a], [, b]) => b - a).slice(0, 5).map(([nom, montant]) => ({ nom, montant: Math.round(montant) }));
       return JSON.stringify({
-        periode: `${jours} derniers jours`,
+        periode: periodeLabel,
         kpis: {
           factures: facts.length, montant_facture: Math.round(montantFact),
           commandes: cmds.length, montant_commandes: Math.round(montantCmd),
