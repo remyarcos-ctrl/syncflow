@@ -1219,7 +1219,7 @@ export default function ChatAssistant() {
               {[
                 { icon: Sun, label: 'Brief', prompt: 'Briefing du jour' },
                 { icon: AlertTriangle, label: 'Audit', prompt: 'Fais un audit complet et donne-moi le score de santé.' },
-                { icon: BarChart2, label: 'Rapport', prompt: 'Génère le rapport du mois en cours.' },
+                { icon: BarChart2, label: 'Rapport', prompt: 'Génère le bilan global : commandes, factures, BEs, top fournisseurs.' },
                 { icon: Download, label: 'Export', prompt: 'Exporte les commandes en CSV.' },
               ].map(({ icon: Icon, label, prompt }) => (
                 <button key={label} type="button" onClick={() => void sendMessage(prompt)} disabled={isLoading}
