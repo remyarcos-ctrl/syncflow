@@ -927,6 +927,22 @@ const tools = [
       required: ['reference_article'],
     },
   },
+  {
+    name: 'get_bes_sur_factures',
+    description: 'Retourne la liste des numéros de BE présents sur les factures (détectés dans le PDF ou rapprochés). Pour chaque BE : quelles factures le mentionnent, si il est rapproché ou seulement détecté. Utiliser pour "quels BEs sont sur mes factures", "liste des BEs de ce mois", "BEs présents sur cette facture".',
+    input_schema: {
+      type: 'object',
+      properties: {
+        facture_id: { type: 'string', description: 'ID d\'une facture spécifique' },
+        numero_facture: { type: 'string', description: 'Numéro de facture (recherche partielle)' },
+        mois: { type: 'string', description: 'Mois au format YYYY-MM pour filtrer par mois de facturation' },
+        fournisseur: { type: 'string', description: 'Filtrer par fournisseur' },
+        date_debut: { type: 'string', description: 'YYYY-MM-DD' },
+        date_fin: { type: 'string', description: 'YYYY-MM-DD' },
+      },
+      required: [],
+    },
+  },
 ];
 
 type ToolInput = Record<string, unknown>;
@@ -2282,6 +2298,74 @@ async function executeTool(name: string, input: ToolInput): Promise<string> {
         stats: { min, max, moyenne: Math.round(avg * 100) / 100, dernier_prix: rows[0].pu_commande, nb_occurrences: rows.length },
         historique: rows.slice(0, 20),
       });
+    }
+
+    if (name === 'get_bes_sur_factures') {
+      type FacRow = { id: string; numero_facture: string; date_facture: string; fournisseur: string };
+      let factures: FacRow[] = [];
+
+      if (input.facture_id) {
+        const { data } = await supabase.from('factures').select('id, numero_facture, date_facture, fournisseur').eq('id', String(input.facture_id));
+        factures = (data ?? []) as FacRow[];
+      } else {
+        let q = supabase.from('factures').select('id, numero_facture, date_facture, fournisseur').order('date_facture', { ascending: false }).limit(300);
+        if (input.numero_facture) q = q.ilike('numero_facture', `%${String(input.numero_facture)}%`);
+        if (input.fournisseur) q = q.ilike('fournisseur', `%${String(input.fournisseur)}%`);
+        if (input.mois) {
+          const [yr, mo] = String(input.mois).split('-');
+          q = q.gte('date_facture', `${yr}-${mo}-01`).lte('date_facture', new Date(parseInt(yr), parseInt(mo), 0).toISOString().slice(0, 10));
+        }
+        if (input.date_debut) q = q.gte('date_facture', String(input.date_debut));
+        if (input.date_fin) q = q.lte('date_facture', String(input.date_fin));
+        const { data } = await q;
+        factures = (data ?? []) as FacRow[];
+      }
+
+      if (factures.length === 0) return JSON.stringify({ bes: [], message: 'Aucune facture trouvée avec ces critères.' });
+
+      const factureIds = factures.map(f => f.id);
+      const factureMap = Object.fromEntries(factures.map(f => [f.id, f]));
+
+      const [{ data: lignes }, { data: raps }] = await Promise.all([
+        supabase.from('lignes_facture').select('facture_id, numero_be_detecte').in('facture_id', factureIds).not('numero_be_detecte', 'is', null),
+        supabase.from('rapprochements').select('facture_id, be_id, statut_validation').in('facture_id', factureIds).not('be_id', 'is', null),
+      ]);
+
+      const rapBeIds = [...new Set((raps ?? []).map(r => r.be_id as string))];
+      let beDetails: { id: string; numero_be: string }[] = [];
+      if (rapBeIds.length > 0) {
+        const { data } = await supabase.from('be_receptions').select('id, numero_be').in('id', rapBeIds);
+        beDetails = (data ?? []) as { id: string; numero_be: string }[];
+      }
+      const beNumMap = Object.fromEntries(beDetails.map(b => [b.id, b.numero_be]));
+
+      type BEEntry = { numero_be: string; source: string; factures: { numero_facture: string; date_facture: string }[]; statuts_rapprochement: string[] };
+      const beMap = new Map<string, BEEntry>();
+
+      for (const l of (lignes ?? [])) {
+        const num = l.numero_be_detecte as string;
+        if (!beMap.has(num)) beMap.set(num, { numero_be: num, source: 'détecté', factures: [], statuts_rapprochement: [] });
+        const fac = factureMap[l.facture_id as string];
+        const entry = beMap.get(num)!;
+        if (fac && !entry.factures.find(f => f.numero_facture === fac.numero_facture))
+          entry.factures.push({ numero_facture: fac.numero_facture, date_facture: fac.date_facture });
+      }
+
+      for (const r of (raps ?? [])) {
+        const num = beNumMap[r.be_id as string];
+        if (!num) continue;
+        if (!beMap.has(num)) beMap.set(num, { numero_be: num, source: 'rapproché', factures: [], statuts_rapprochement: [] });
+        const entry = beMap.get(num)!;
+        entry.source = 'rapproché';
+        const fac = factureMap[r.facture_id as string];
+        if (fac && !entry.factures.find(f => f.numero_facture === fac.numero_facture))
+          entry.factures.push({ numero_facture: fac.numero_facture, date_facture: fac.date_facture });
+        const sv = r.statut_validation as string;
+        if (sv && !entry.statuts_rapprochement.includes(sv)) entry.statuts_rapprochement.push(sv);
+      }
+
+      const results = Array.from(beMap.values()).sort((a, b) => a.numero_be.localeCompare(b.numero_be));
+      return JSON.stringify({ nb_factures_analysees: factureIds.length, nb_bes: results.length, bes: results });
     }
 
     return JSON.stringify({ error: `Outil inconnu: ${name}` });

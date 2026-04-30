@@ -7,6 +7,7 @@ import GlobalSearch from '@/components/shared/GlobalSearch';
 import ChatAssistant from '@/components/shared/ChatAssistant';
 import TeddyWatcher from '@/components/shared/TeddyWatcher';
 import NotificationBell from '@/components/shared/NotificationBell';
+import { DisplayCurrencyProvider } from '@/contexts/DisplayCurrencyContext';
 import { useQueryClient } from '@tanstack/react-query';
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
@@ -20,6 +21,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   }, [qc]);
 
   return (
+    <DisplayCurrencyProvider>
     <div className="min-h-screen bg-slate-50 flex">
       {/* Mobile overlay */}
       {sidebarOpen && (
@@ -68,5 +70,6 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       <TeddyWatcher />
       <ChatAssistant />
     </div>
+    </DisplayCurrencyProvider>
   );
 }

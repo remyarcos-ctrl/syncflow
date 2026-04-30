@@ -14,8 +14,10 @@ import { useTableFeatures } from '@/hooks/useTableFeatures';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { formatEur, formatDate, exportToCsv } from '@/utils';
-import { FileText, ChevronRight, Trash2, Download, Upload, Search, X, AlertTriangle, Zap, ChevronUp, ChevronDown, ChevronsUpDown, Bot } from 'lucide-react';
+import { FileText, ChevronRight, Trash2, Download, Upload, Search, X, AlertTriangle, Zap, ChevronUp, ChevronDown, ChevronsUpDown, Bot, Package, ChevronLeft } from 'lucide-react';
 import { toast } from 'sonner';
+import { MoneyAmount } from '@/components/shared/MoneyAmount';
+import { useDisplayCurrency } from '@/contexts/DisplayCurrencyContext';
 import type { Facture } from '@/types';
 
 const isAvoir = (f: Facture) =>
@@ -43,6 +45,9 @@ function FacturesPageInner() {
   const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [isBulkMatching, setIsBulkMatching] = useState(false);
+  const [showBEsParMois, setShowBEsParMois] = useState(false);
+  const [moisSelectionne, setMoisSelectionne] = useState(() => new Date().toISOString().slice(0, 7));
+  const { showTTC, toggle: toggleTTC } = useDisplayCurrency();
 
   const setFilter = useCallback((key: string, value: string) => {
     const params = new URLSearchParams(searchParams.toString());
@@ -186,6 +191,57 @@ function FacturesPageInner() {
     clearSelection();
   };
 
+  const shiftMonth = (m: string, delta: number) => {
+    const d = new Date(m + '-01');
+    d.setMonth(d.getMonth() + delta);
+    return d.toISOString().slice(0, 7);
+  };
+
+  const formatMonthLabel = (m: string) =>
+    new Date(m + '-01').toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
+
+  const { data: besParMois = [], isLoading: besLoading } = useQuery({
+    queryKey: ['bes_par_mois', moisSelectionne],
+    enabled: showBEsParMois,
+    queryFn: async () => {
+      const [year, month] = moisSelectionne.split('-');
+      const start = `${year}-${month}-01`;
+      const end = new Date(parseInt(year), parseInt(month), 0).toISOString().slice(0, 10);
+
+      const { data: facsMois } = await supabase
+        .from('factures')
+        .select('id, numero_facture, date_facture, total_ht, total_ttc')
+        .gte('date_facture', start)
+        .lte('date_facture', end);
+
+      if (!facsMois || facsMois.length === 0) return [];
+
+      const factureIds = facsMois.map(f => f.id);
+      const factureMap = Object.fromEntries(facsMois.map(f => [f.id, f]));
+
+      const { data: raps } = await supabase
+        .from('rapprochements')
+        .select('be_id, facture_id, be_receptions(id, numero_be, fournisseur)')
+        .in('facture_id', factureIds)
+        .not('be_id', 'is', null);
+
+      if (!raps || raps.length === 0) return [];
+
+      const beMap = new Map<string, { be: { id: string; numero_be: string; fournisseur: string }; factures: typeof facsMois }>();
+      for (const rap of raps) {
+        if (!rap.be_id || !rap.be_receptions) continue;
+        const be = rap.be_receptions as unknown as { id: string; numero_be: string; fournisseur: string };
+        if (!beMap.has(rap.be_id)) beMap.set(rap.be_id, { be, factures: [] });
+        const fac = factureMap[rap.facture_id];
+        if (fac && !beMap.get(rap.be_id)!.factures.find(f => f.id === fac.id)) {
+          beMap.get(rap.be_id)!.factures.push(fac);
+        }
+      }
+      return Array.from(beMap.values()).sort((a, b) => a.be.numero_be.localeCompare(b.be.numero_be));
+    },
+    staleTime: 60_000,
+  });
+
   const SortTh = ({ field, label, align = 'left' }: { field: string; label: string; align?: 'left' | 'right' }) => {
     const active = sortKey === field;
     const asc = sortDir === 'asc';
@@ -211,6 +267,9 @@ function FacturesPageInner() {
         subtitle={`${totalCount} facture${totalCount > 1 ? 's' : ''}`}
         actions={
           <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={() => setShowBEsParMois(true)}>
+              <Package className="w-4 h-4" /> BEs par mois
+            </Button>
             <Button size="sm" onClick={() => setShowImport(true)}>
               <Upload className="w-4 h-4" /> Importer PDF
             </Button>
@@ -288,7 +347,16 @@ function FacturesPageInner() {
               <SortTh field="numero_facture" label="N° facture" />
               <SortTh field="fournisseur" label="Fournisseur" />
               <SortTh field="date_facture" label="Date" />
-              <SortTh field="total_ht" label="Total HT" align="right" />
+              <th
+                onClick={toggleTTC}
+                className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide cursor-pointer select-none text-right group hover:text-indigo-600 transition-colors"
+                title="Cliquer pour basculer HT / TTC"
+              >
+                <span className="inline-flex items-center gap-1 flex-row-reverse">
+                  Total {showTTC ? 'TTC' : 'HT'}
+                  <span className="text-[10px] opacity-40 group-hover:opacity-80">⇄</span>
+                </span>
+              </th>
               <SortTh field="taux_rapprochement" label="Rapproché" align="right" />
               <SortTh field="statut_facture" label="Statut" />
               <th className="px-4 py-3"></th>
@@ -316,7 +384,9 @@ function FacturesPageInner() {
                   <td className="px-4 py-3 font-medium font-mono">{f.numero_facture}</td>
                   <td className="px-4 py-3 text-gray-600">{f.fournisseur || '—'}</td>
                   <td className="px-4 py-3 text-gray-500">{formatDate(f.date_facture)}</td>
-                  <td className={`px-4 py-3 text-right font-mono${avoir ? ' text-teal-600 font-semibold' : ''}`}>{formatEur(f.total_ht)}</td>
+                  <td className={`px-4 py-3 text-right font-mono${avoir ? ' text-teal-600 font-semibold' : ''}`}>
+                    <MoneyAmount ht={f.total_ht} ttc={f.total_ttc} />
+                  </td>
                   <td className="px-4 py-3 text-right">
                     <div className="flex items-center justify-end gap-2">
                       <div className="w-16 h-1.5 rounded-full bg-gray-100 overflow-hidden">
@@ -394,6 +464,88 @@ function FacturesPageInner() {
               <Button variant="destructive" onClick={() => bulkDeleteMutation.mutate(Array.from(selected))} disabled={bulkDeleteMutation.isPending}>
                 {bulkDeleteMutation.isPending ? 'Suppression...' : 'Supprimer'}
               </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showBEsParMois && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm" onClick={() => setShowBEsParMois(false)}>
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+              <div className="flex items-center gap-2">
+                <Package className="w-5 h-5 text-indigo-500" />
+                <h2 className="text-base font-semibold text-gray-900">BEs présents sur les factures</h2>
+              </div>
+              <button onClick={() => setShowBEsParMois(false)} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
+            </div>
+
+            <div className="flex items-center gap-3 px-6 py-3 border-b border-gray-100 bg-gray-50/50">
+              <button
+                onClick={() => setMoisSelectionne(m => shiftMonth(m, -1))}
+                className="p-1.5 rounded hover:bg-gray-200 text-gray-500 transition-colors"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+              <input
+                type="month"
+                value={moisSelectionne}
+                onChange={e => setMoisSelectionne(e.target.value)}
+                className="h-8 rounded-lg border border-gray-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 capitalize"
+              />
+              <button
+                onClick={() => setMoisSelectionne(m => shiftMonth(m, 1))}
+                className="p-1.5 rounded hover:bg-gray-200 text-gray-500 transition-colors"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
+              <span className="text-sm text-gray-500 capitalize">{formatMonthLabel(moisSelectionne)}</span>
+            </div>
+
+            <div className="overflow-auto flex-1">
+              {besLoading ? (
+                <div className="p-8 text-center text-sm text-gray-400">Chargement...</div>
+              ) : besParMois.length === 0 ? (
+                <div className="p-8 text-center">
+                  <Package className="w-8 h-8 text-gray-200 mx-auto mb-2" />
+                  <p className="text-sm text-gray-400">Aucun BE lié aux factures de ce mois</p>
+                </div>
+              ) : (
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-gray-50/50 border-b border-gray-100">
+                      <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide text-left">N° BE</th>
+                      <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide text-left">Fournisseur</th>
+                      <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide text-left">Factures liées</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50">
+                    {besParMois.map(({ be, factures: facs }) => (
+                      <tr key={be.id} className="hover:bg-gray-50/50">
+                        <td className="px-4 py-3 font-medium font-mono text-indigo-700">{be.numero_be}</td>
+                        <td className="px-4 py-3 text-gray-600">{be.fournisseur || '—'}</td>
+                        <td className="px-4 py-3">
+                          <div className="flex flex-wrap gap-1">
+                            {facs.map(f => (
+                              <button
+                                key={f.id}
+                                onClick={() => { setShowBEsParMois(false); router.push(`/factures/${f.id}`); }}
+                                className="inline-flex items-center rounded-full bg-indigo-50 border border-indigo-100 px-2 py-0.5 text-xs text-indigo-700 hover:bg-indigo-100 transition-colors font-mono"
+                              >
+                                {f.numero_facture}
+                              </button>
+                            ))}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            <div className="px-6 py-3 border-t border-gray-100 text-xs text-gray-400 text-right">
+              {besParMois.length > 0 && `${besParMois.length} BE${besParMois.length > 1 ? 's' : ''} — ${besParMois.reduce((n, b) => n + b.factures.length, 0)} facture${besParMois.reduce((n, b) => n + b.factures.length, 0) > 1 ? 's' : ''}`}
             </div>
           </div>
         </div>

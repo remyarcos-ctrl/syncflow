@@ -15,6 +15,7 @@ import {
   CheckCircle2, XCircle, AlertTriangle, TrendingUp, TrendingDown,
   Play, Link2, Unlink, Plus, Package, ShoppingCart, FileText, History
 } from 'lucide-react';
+import { MoneyAmount } from '@/components/shared/MoneyAmount';
 import { toast } from 'sonner';
 import PDFViewerPanel from '@/components/shared/PDFViewerPanel';
 import type {
@@ -246,6 +247,35 @@ export default function FactureDetailPage() {
     const qteTotale = lignesFacture.reduce((s, l) => s + (l.quantite_facturee ?? 0), 0);
     return { montantRap, qteRap, qteTotale };
   }, [rapprochements, lignesFacture]);
+
+  // ── Statut rapprochement par BE ───────────────────────────────────────────
+  const beStatusMap = useMemo(() => {
+    const byBE = new Map<string, Rapprochement[]>();
+    for (const rap of rapprochements) {
+      if (!rap.be_id) continue;
+      if (!byBE.has(rap.be_id)) byBE.set(rap.be_id, []);
+      byBE.get(rap.be_id)!.push(rap);
+    }
+    return bes.map(be => {
+      const raps = byBE.get(be.id) ?? [];
+      const validated = raps.filter(r => r.statut_validation === 'validé').length;
+      const proposed = raps.filter(r => r.statut_validation === 'proposé').length;
+      const total = raps.length;
+      const montantValide = raps.filter(r => r.statut_validation === 'validé').reduce((s, r) => s + (r.montant_rapproche ?? 0), 0);
+      let etat: 'validé' | 'proposé' | 'partiel' | 'non_lié';
+      if (total === 0) etat = 'non_lié';
+      else if (validated === total && total > 0) etat = 'validé';
+      else if (proposed > 0 && validated === 0) etat = 'proposé';
+      else etat = 'partiel';
+      return { be, raps, validated, proposed, total, montantValide, etat };
+    });
+  }, [bes, rapprochements]);
+
+  const detectedBeNums = useMemo(() => {
+    const linked = new Set(bes.map(b => b.numero_be));
+    return [...new Set(lignesFacture.map(l => l.numero_be_detecte).filter((n): n is string => !!n))]
+      .filter(n => !linked.has(n));
+  }, [lignesFacture, bes]);
 
   // ── Vue enrichie des lignes ────────────────────────────────────────────────
   const vue = useMemo(() => {
@@ -554,8 +584,10 @@ export default function FactureDetailPage() {
         </Card>
         <Card>
           <CardContent className="pt-4 pb-3">
-            <p className="text-xs text-gray-400">Total HT</p>
-            <p className="text-lg font-bold text-gray-900 mt-0.5 font-mono">{formatEur(facture.total_ht)}</p>
+            <p className="text-xs text-gray-400">Montant</p>
+            <div className="text-lg font-bold text-gray-900 mt-0.5 font-mono">
+              <MoneyAmount ht={facture.total_ht} ttc={facture.total_ttc} />
+            </div>
           </CardContent>
         </Card>
         <Card>
@@ -627,22 +659,59 @@ export default function FactureDetailPage() {
           </CardContent>
         </Card>
 
-        {/* BEs */}
+        {/* BEs avec statut rapprochement */}
         <Card className="border-amber-100">
           <CardContent className="pt-4 pb-4">
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1.5 mb-3">
-              <Package className="w-3.5 h-3.5 text-amber-500" /> BE liés ({bes.length})
+              <Package className="w-3.5 h-3.5 text-amber-500" /> BEs ({bes.length + detectedBeNums.length})
             </p>
-            {bes.map(be => (
-              <Link key={be.id} href={`/be-receptions/${be.id}`} className="flex items-center justify-between px-2 py-1.5 rounded-lg hover:bg-amber-50 transition-colors">
-                <span className="text-sm font-medium text-amber-700 font-mono">{be.numero_be}</span>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-gray-400">{formatDate(be.date_bl)}</span>
-                  <StatusBadge status={be.statut_be} />
+            <div className="space-y-1.5">
+              {beStatusMap.map(({ be, validated, total, montantValide, etat }) => {
+                const pct = total > 0 ? Math.round((validated / total) * 100) : 0;
+                const etatCfg = {
+                  validé:  { style: 'bg-emerald-50 border-emerald-200 text-emerald-700', bar: 'bg-emerald-400', label: 'Validé' },
+                  proposé: { style: 'bg-indigo-50 border-indigo-200 text-indigo-700',   bar: 'bg-indigo-400',  label: 'Proposé' },
+                  partiel: { style: 'bg-amber-50 border-amber-200 text-amber-700',      bar: 'bg-amber-400',   label: 'Partiel' },
+                  non_lié: { style: 'bg-gray-50 border-gray-200 text-gray-500',         bar: 'bg-gray-300',    label: 'Non lié' },
+                }[etat];
+                return (
+                  <Link key={be.id} href={`/be-receptions/${be.id}`}>
+                    <div className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-amber-50/60 border border-transparent hover:border-amber-100 transition-all">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium text-amber-700 font-mono">{be.numero_be}</span>
+                          <span className="text-xs text-gray-400">{formatDate(be.date_bl)}</span>
+                        </div>
+                        {total > 0 && (
+                          <div className="flex items-center gap-2 mt-1">
+                            <div className="w-20 h-1 rounded-full bg-gray-100 overflow-hidden">
+                              <div className={`h-full rounded-full ${etatCfg.bar}`} style={{ width: `${pct}%` }} />
+                            </div>
+                            <span className="text-xs text-gray-400">{validated}/{total} ligne{total > 1 ? 's' : ''}</span>
+                            {montantValide > 0 && <span className="text-xs text-gray-400 font-mono">{formatEur(montantValide)}</span>}
+                          </div>
+                        )}
+                      </div>
+                      <span className={`shrink-0 text-xs font-medium px-2 py-0.5 rounded-full border ${etatCfg.style}`}>{etatCfg.label}</span>
+                    </div>
+                  </Link>
+                );
+              })}
+
+              {detectedBeNums.map(num => (
+                <div key={num} className="flex items-center gap-3 px-3 py-2 rounded-lg border border-dashed border-amber-200 bg-amber-50/30">
+                  <div className="flex-1 min-w-0">
+                    <span className="text-sm font-medium text-amber-600 font-mono">{num}</span>
+                    <p className="text-xs text-amber-500 mt-0.5">Détecté sur la facture — pas encore rapproché</p>
+                  </div>
+                  <span className="shrink-0 text-xs font-medium px-2 py-0.5 rounded-full border bg-amber-50 border-amber-200 text-amber-600">Détecté</span>
                 </div>
-              </Link>
-            ))}
-            {bes.length === 0 && <p className="text-xs text-gray-400 italic">Aucun BE lié</p>}
+              ))}
+
+              {bes.length === 0 && detectedBeNums.length === 0 && (
+                <p className="text-xs text-gray-400 italic">Aucun BE lié</p>
+              )}
+            </div>
           </CardContent>
         </Card>
       </div>

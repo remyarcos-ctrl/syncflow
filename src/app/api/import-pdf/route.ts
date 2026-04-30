@@ -138,10 +138,12 @@ export async function POST(req: NextRequest) {
           continue;
         }
 
-        // Agréger par beNum|ref (règle CONTEXT.md)
+        // Agréger par beNum|ref|pu : même ref + même prix = même commande (agréger) ;
+        // même ref + prix différent = commandes distinctes à des moments différents → lignes séparées
         const aggMap = new Map<string, typeof doc.data.lignes[0]>();
         for (const l of doc.data.lignes) {
-          const key = `${l.numero_be_detecte ?? ''}|${normalizeRef(l.reference_article ?? '')}`;
+          const puKey = Math.round((l.prix_unitaire ?? 0) * 10000);
+          const key = `${l.numero_be_detecte ?? ''}|${normalizeRef(l.reference_article ?? '')}|${puKey}`;
           if (aggMap.has(key)) {
             const ex = aggMap.get(key)!;
             ex.quantite_facturee += l.quantite_facturee;
