@@ -2528,14 +2528,16 @@ export async function POST(req: NextRequest) {
 
   const encoder = new TextEncoder();
 
-  // Charger la mémoire persistante de Teddy
-  const { data: memoryRows } = await supabase
-    .from('teddy_memory')
-    .select('cle, valeur, categorie')
-    .order('updated_at', { ascending: false })
-    .limit(60);
+  // Charger mémoire persistante + historique conversations en parallèle
+  const [{ data: memoryRows }, { data: recentConvos }] = await Promise.all([
+    supabase.from('teddy_memory').select('cle, valeur, categorie').order('updated_at', { ascending: false }).limit(60),
+    supabase.from('teddy_conversations').select('resume, themes, created_at').order('created_at', { ascending: false }).limit(5),
+  ]);
   const memorySection = (memoryRows ?? []).length > 0
     ? `\n\n════════════════════════════════════════\nMÉMOIRE PERSISTANTE (faits mémorisés)\n════════════════════════════════════════\n${(memoryRows ?? []).map((r: Record<string, string>) => `[${r.categorie}] ${r.cle}: ${r.valeur}`).join('\n')}`
+    : '';
+  const convosSection = (recentConvos ?? []).length > 0
+    ? `\n\n════════════════════════════════════════\nCONVERSATIONS RÉCENTES\n════════════════════════════════════════\n${(recentConvos ?? []).map((c: Record<string, unknown>) => `[${new Date(String(c.created_at)).toLocaleDateString('fr-FR')}${(c.themes as string[] | null)?.length ? ' · ' + (c.themes as string[]).join(', ') : ''}] ${c.resume}`).join('\n')}`
     : '';
 
   let contextSection = '';
@@ -2548,7 +2550,7 @@ export async function POST(req: NextRequest) {
   }
   const systemArray = [
     { type: 'text', text: SYSTEM, cache_control: { type: 'ephemeral' } },
-    ...((memorySection || contextSection) ? [{ type: 'text', text: `${memorySection}${contextSection}` }] : []),
+    ...((memorySection || convosSection || contextSection) ? [{ type: 'text', text: `${memorySection}${convosSection}${contextSection}` }] : []),
   ];
 
   const stream = new ReadableStream({

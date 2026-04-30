@@ -67,6 +67,10 @@ const TOOL_LABELS: Record<string, string> = {
   modifier_ligne_facture: 'Modification ligne facture',
   modifier_be: 'Modification BE',
   analyser_patterns_fournisseur: 'Analyse patterns fournisseur',
+  analyser_ecarts_prix_fournisseur: 'Analyse écarts prix',
+  get_flux_tresorerie: 'Flux de trésorerie',
+  detecter_surfacturations: 'Détection surfacturations',
+  get_bes_sur_factures: 'BEs sur factures',
 };
 
 // ── Workflows ────────────────────────────────────────────────────────────────
@@ -614,10 +618,27 @@ export default function ChatAssistant() {
   const [undoPending, setUndoPending] = useState<{ table: string; id: string; champs: Record<string, unknown> } | null>(null);
   const undoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [slashResults, setSlashResults] = useState<typeof SLASH_COMMANDS>([]);
+  const prevOpenRef = useRef(false);
   const [isOnboarded, setIsOnboarded] = useState(true); // true par défaut pour éviter flash SSR
   useEffect(() => {
     setIsOnboarded(!!localStorage.getItem('teddy_onboarded'));
   }, []);
+
+  // Mémorisation automatique à la fermeture du chat
+  useEffect(() => {
+    if (prevOpenRef.current && !open && messages.length >= 4) {
+      const toMemorize = messages
+        .filter(m => typeof m.content === 'string' && m.content.trim().length > 10)
+        .slice(-30)
+        .map(m => ({ role: m.role, content: m.content }));
+      fetch('/api/teddy/memorize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: toMemorize }),
+      }).catch(() => null);
+    }
+    prevOpenRef.current = open;
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Morning brief : afficher la carte si première ouverture du jour avant 12h
   const showMorningBrief = useMemo(() => {
