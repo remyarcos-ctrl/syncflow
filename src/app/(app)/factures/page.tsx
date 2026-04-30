@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, Suspense } from 'react';
+import { useState, useCallback, Suspense, useEffect } from 'react';
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
@@ -47,6 +47,7 @@ function FacturesPageInner() {
   const [isBulkMatching, setIsBulkMatching] = useState(false);
   const [showBEsParMois, setShowBEsParMois] = useState(false);
   const [moisSelectionne, setMoisSelectionne] = useState(() => new Date().toISOString().slice(0, 7));
+  const [selectedFacIds, setSelectedFacIds] = useState<Set<string> | null>(null);
   const { showTTC, toggle: toggleTTC } = useDisplayCurrency();
 
   const setFilter = useCallback((key: string, value: string) => {
@@ -200,37 +201,46 @@ function FacturesPageInner() {
   const formatMonthLabel = (m: string) =>
     new Date(m + '-01').toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
 
-  const { data: besParMois = [], isLoading: besLoading } = useQuery({
-    queryKey: ['bes_par_mois', moisSelectionne],
+  // Reset selection when month changes
+  useEffect(() => { setSelectedFacIds(null); }, [moisSelectionne]);
+
+  const { data: facsDuMois = [], isLoading: facsLoading } = useQuery({
+    queryKey: ['bes_mois_factures', moisSelectionne],
     enabled: showBEsParMois,
     queryFn: async () => {
       const [year, month] = moisSelectionne.split('-');
       const start = `${year}-${month}-01`;
       const end = new Date(parseInt(year), parseInt(month), 0).toISOString().slice(0, 10);
-
-      const { data: facsMois } = await supabase
+      const { data } = await supabase
         .from('factures')
-        .select('id, numero_facture, date_facture, total_ht, total_ttc')
+        .select('id, numero_facture, fournisseur, date_facture')
         .gte('date_facture', start)
-        .lte('date_facture', end);
+        .lte('date_facture', end)
+        .order('date_facture', { ascending: false });
+      return (data ?? []) as { id: string; numero_facture: string; fournisseur: string | null; date_facture: string | null }[];
+    },
+    staleTime: 60_000,
+  });
 
-      if (!facsMois || facsMois.length === 0) return [];
+  const effectiveIds = selectedFacIds === null
+    ? facsDuMois.map(f => f.id)
+    : Array.from(selectedFacIds);
 
-      const factureIds = facsMois.map(f => f.id);
-      const factureMap = Object.fromEntries(facsMois.map(f => [f.id, f]));
-
+  const { data: besParMois = [], isLoading: besLoading } = useQuery({
+    queryKey: ['bes_pour_factures', [...effectiveIds].sort().join(',')],
+    enabled: showBEsParMois && effectiveIds.length > 0,
+    queryFn: async () => {
+      const factureMap = Object.fromEntries(facsDuMois.map(f => [f.id, f]));
       const { data: raps } = await supabase
         .from('rapprochements')
         .select('be_id, facture_id, be_receptions(id, numero_be, fournisseur)')
-        .in('facture_id', factureIds)
+        .in('facture_id', effectiveIds)
         .not('be_id', 'is', null);
 
-      if (!raps || raps.length === 0) return [];
-
-      const beMap = new Map<string, { be: { id: string; numero_be: string; fournisseur: string }; factures: typeof facsMois }>();
-      for (const rap of raps) {
+      const beMap = new Map<string, { be: { id: string; numero_be: string; fournisseur: string | null }; factures: typeof facsDuMois }>();
+      for (const rap of (raps ?? [])) {
         if (!rap.be_id || !rap.be_receptions) continue;
-        const be = rap.be_receptions as unknown as { id: string; numero_be: string; fournisseur: string };
+        const be = rap.be_receptions as unknown as { id: string; numero_be: string; fournisseur: string | null };
         if (!beMap.has(rap.be_id)) beMap.set(rap.be_id, { be, factures: [] });
         const fac = factureMap[rap.facture_id];
         if (fac && !beMap.get(rap.be_id)!.factures.find(f => f.id === fac.id)) {
@@ -471,81 +481,129 @@ function FacturesPageInner() {
 
       {showBEsParMois && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm" onClick={() => setShowBEsParMois(false)}>
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-4xl max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            {/* Header */}
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
               <div className="flex items-center gap-2">
                 <Package className="w-5 h-5 text-indigo-500" />
                 <h2 className="text-base font-semibold text-gray-900">BEs présents sur les factures</h2>
               </div>
-              <button onClick={() => setShowBEsParMois(false)} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
+              <div className="flex items-center gap-2">
+                <button onClick={() => setMoisSelectionne(m => shiftMonth(m, -1))} className="p-1.5 rounded hover:bg-gray-100 text-gray-500"><ChevronLeft className="w-4 h-4" /></button>
+                <input type="month" value={moisSelectionne} onChange={e => setMoisSelectionne(e.target.value)} className="h-8 rounded-lg border border-gray-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                <button onClick={() => setMoisSelectionne(m => shiftMonth(m, 1))} className="p-1.5 rounded hover:bg-gray-100 text-gray-500"><ChevronRight className="w-4 h-4" /></button>
+                <span className="text-sm text-gray-500 capitalize mr-2">{formatMonthLabel(moisSelectionne)}</span>
+                <button onClick={() => setShowBEsParMois(false)} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
+              </div>
             </div>
 
-            <div className="flex items-center gap-3 px-6 py-3 border-b border-gray-100 bg-gray-50/50">
-              <button
-                onClick={() => setMoisSelectionne(m => shiftMonth(m, -1))}
-                className="p-1.5 rounded hover:bg-gray-200 text-gray-500 transition-colors"
-              >
-                <ChevronLeft className="w-4 h-4" />
-              </button>
-              <input
-                type="month"
-                value={moisSelectionne}
-                onChange={e => setMoisSelectionne(e.target.value)}
-                className="h-8 rounded-lg border border-gray-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 capitalize"
-              />
-              <button
-                onClick={() => setMoisSelectionne(m => shiftMonth(m, 1))}
-                className="p-1.5 rounded hover:bg-gray-200 text-gray-500 transition-colors"
-              >
-                <ChevronRight className="w-4 h-4" />
-              </button>
-              <span className="text-sm text-gray-500 capitalize">{formatMonthLabel(moisSelectionne)}</span>
-            </div>
-
-            <div className="overflow-auto flex-1">
-              {besLoading ? (
-                <div className="p-8 text-center text-sm text-gray-400">Chargement...</div>
-              ) : besParMois.length === 0 ? (
-                <div className="p-8 text-center">
-                  <Package className="w-8 h-8 text-gray-200 mx-auto mb-2" />
-                  <p className="text-sm text-gray-400">Aucun BE lié aux factures de ce mois</p>
+            {/* Body: 2 panels */}
+            <div className="flex flex-1 min-h-0">
+              {/* Left: Factures */}
+              <div className="w-72 border-r border-gray-100 flex flex-col shrink-0">
+                <div className="px-4 py-2.5 bg-gray-50 border-b border-gray-100 flex items-center gap-2.5">
+                  <input
+                    type="checkbox"
+                    checked={selectedFacIds === null || selectedFacIds.size === facsDuMois.length}
+                    onChange={() => setSelectedFacIds(null)}
+                    className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                  />
+                  <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                    Factures ({facsDuMois.length})
+                  </span>
+                  {selectedFacIds !== null && selectedFacIds.size < facsDuMois.length && (
+                    <span className="ml-auto text-xs text-indigo-600 font-medium">{selectedFacIds.size} sél.</span>
+                  )}
                 </div>
-              ) : (
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="bg-gray-50/50 border-b border-gray-100">
-                      <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide text-left">N° BE</th>
-                      <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide text-left">Fournisseur</th>
-                      <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide text-left">Factures liées</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-50">
-                    {besParMois.map(({ be, factures: facs }) => (
-                      <tr key={be.id} className="hover:bg-gray-50/50">
-                        <td className="px-4 py-3 font-medium font-mono text-indigo-700">{be.numero_be}</td>
-                        <td className="px-4 py-3 text-gray-600">{be.fournisseur || '—'}</td>
-                        <td className="px-4 py-3">
-                          <div className="flex flex-wrap gap-1">
-                            {facs.map(f => (
-                              <button
-                                key={f.id}
-                                onClick={() => { setShowBEsParMois(false); router.push(`/factures/${f.id}`); }}
-                                className="inline-flex items-center rounded-full bg-indigo-50 border border-indigo-100 px-2 py-0.5 text-xs text-indigo-700 hover:bg-indigo-100 transition-colors font-mono"
-                              >
-                                {f.numero_facture}
-                              </button>
-                            ))}
-                          </div>
-                        </td>
+                <div className="overflow-auto flex-1">
+                  {facsLoading ? (
+                    <div className="p-4 text-center text-sm text-gray-400">Chargement...</div>
+                  ) : facsDuMois.length === 0 ? (
+                    <div className="p-4 text-center text-sm text-gray-400">Aucune facture ce mois</div>
+                  ) : (
+                    <div className="divide-y divide-gray-50">
+                      {facsDuMois.map(f => {
+                        const isChecked = selectedFacIds === null || selectedFacIds.has(f.id);
+                        return (
+                          <label key={f.id} className="flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50/50 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={() => {
+                                const current = selectedFacIds ?? new Set(facsDuMois.map(x => x.id));
+                                const next = new Set(current);
+                                if (next.has(f.id)) next.delete(f.id);
+                                else next.add(f.id);
+                                setSelectedFacIds(next.size === facsDuMois.length ? null : next);
+                              }}
+                              className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 shrink-0"
+                            />
+                            <div className="min-w-0">
+                              <div className="text-xs font-mono font-medium text-indigo-700 truncate">{f.numero_facture}</div>
+                              <div className="text-xs text-gray-400 truncate">{f.fournisseur || '—'}</div>
+                            </div>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Right: BEs */}
+              <div className="flex-1 overflow-auto">
+                {effectiveIds.length === 0 ? (
+                  <div className="p-8 text-center text-sm text-gray-400">Sélectionne au moins une facture</div>
+                ) : besLoading ? (
+                  <div className="p-8 text-center text-sm text-gray-400">Chargement...</div>
+                ) : besParMois.length === 0 ? (
+                  <div className="p-8 text-center">
+                    <Package className="w-8 h-8 text-gray-200 mx-auto mb-2" />
+                    <p className="text-sm text-gray-400">Aucun BE lié aux factures sélectionnées</p>
+                  </div>
+                ) : (
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-white z-10">
+                      <tr className="bg-gray-50/50 border-b border-gray-100">
+                        <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide text-left">N° BE</th>
+                        <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide text-left">Fournisseur</th>
+                        <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide text-left">Factures liées</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
+                    </thead>
+                    <tbody className="divide-y divide-gray-50">
+                      {besParMois.map(({ be, factures: facs }) => (
+                        <tr key={be.id} className="hover:bg-gray-50/50">
+                          <td className="px-4 py-3 font-medium font-mono text-indigo-700">{be.numero_be}</td>
+                          <td className="px-4 py-3 text-gray-600">{be.fournisseur || '—'}</td>
+                          <td className="px-4 py-3">
+                            <div className="flex flex-wrap gap-1">
+                              {facs.map(f => (
+                                <button
+                                  key={f.id}
+                                  onClick={() => { setShowBEsParMois(false); router.push(`/factures/${f.id}`); }}
+                                  className="inline-flex items-center rounded-full bg-indigo-50 border border-indigo-100 px-2 py-0.5 text-xs text-indigo-700 hover:bg-indigo-100 transition-colors font-mono"
+                                >
+                                  {f.numero_facture}
+                                </button>
+                              ))}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
             </div>
 
-            <div className="px-6 py-3 border-t border-gray-100 text-xs text-gray-400 text-right">
-              {besParMois.length > 0 && `${besParMois.length} BE${besParMois.length > 1 ? 's' : ''} — ${besParMois.reduce((n, b) => n + b.factures.length, 0)} facture${besParMois.reduce((n, b) => n + b.factures.length, 0) > 1 ? 's' : ''}`}
+            {/* Footer */}
+            <div className="px-6 py-2.5 border-t border-gray-100 text-xs text-gray-400 flex justify-between">
+              <span>
+                {selectedFacIds !== null && selectedFacIds.size < facsDuMois.length
+                  ? `${selectedFacIds.size} / ${facsDuMois.length} factures sélectionnées`
+                  : `${facsDuMois.length} facture${facsDuMois.length > 1 ? 's' : ''} ce mois`}
+              </span>
+              <span>{besParMois.length > 0 && `${besParMois.length} BE${besParMois.length > 1 ? 's' : ''} liés`}</span>
             </div>
           </div>
         </div>
