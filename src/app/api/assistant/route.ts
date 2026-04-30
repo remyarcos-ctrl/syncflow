@@ -980,6 +980,41 @@ const tools = [
       },
       required: [],
     },
+  },
+  {
+    name: 'planifier_rappel',
+    description: 'Planifie un rappel pour une date future. Teddy mémorisera le rappel et le signalera au prochain brief du jour. Utiliser pour "rappelle-moi de...", "dans X jours vérifie...".',
+    input_schema: {
+      type: 'object',
+      properties: {
+        message: { type: 'string', description: 'Le message du rappel' },
+        date_rappel: { type: 'string', description: 'Date YYYY-MM-DD' },
+        heure: { type: 'string', description: 'Heure HH:MM (optionnel)' },
+      },
+      required: ['message', 'date_rappel'],
+    },
+  },
+  {
+    name: 'rapport_complet_fournisseur',
+    description: 'Génère un rapport complet sur un fournisseur : factures des 3 derniers mois, BEs anciens, commandes ouvertes, exceptions actives, mémoire mémorisée. Plus détaillé que comparer_fournisseurs. Utiliser pour "rapport sur X", "bilan complet de X".',
+    input_schema: {
+      type: 'object',
+      properties: {
+        fournisseur: { type: 'string', description: 'Nom du fournisseur (partiel accepté)' },
+      },
+      required: ['fournisseur'],
+    },
+  },
+  {
+    name: 'synthese_mensuelle',
+    description: 'Synthèse complète d\'un mois : factures, BEs, montants, taux rapprochement, top fournisseurs, exceptions, comparaison mois précédent. Utiliser pour "synthèse de janvier", "bilan du mois".',
+    input_schema: {
+      type: 'object',
+      properties: {
+        mois: { type: 'string', description: 'Mois YYYY-MM (défaut: mois en cours)' },
+      },
+      required: [],
+    },
     cache_control: { type: 'ephemeral' },
   },
 ];
@@ -1036,6 +1071,18 @@ function deriveQuickActions(toolNames: string[]): { label: string; prompt: strin
   // Dédupliquer sur label, max 3
   const seen = new Set<string>();
   return actions.filter(a => { if (seen.has(a.label)) return false; seen.add(a.label); return true; }).slice(0, 3);
+}
+
+async function executeToolWithRetry(name: string, input: ToolInput, maxAttempts = 2): Promise<string> {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const result = await executeTool(name, input);
+    try {
+      const parsed = JSON.parse(result) as Record<string, unknown>;
+      if (!parsed.error || attempt === maxAttempts) return result;
+    } catch { return result; }
+    await new Promise(r => setTimeout(r, 300 * attempt));
+  }
+  return executeTool(name, input);
 }
 
 async function executeTool(name: string, input: ToolInput): Promise<string> {
@@ -2511,6 +2558,62 @@ async function executeTool(name: string, input: ToolInput): Promise<string> {
       return JSON.stringify({ seuil_pct: seuilPct, fournisseur: fournisseur ?? 'tous', nb_surfacturations: surfacts.length, total_ecart_eur: totalEcartEur, surfacturations: surfacts.slice(0, 30), note: surfacts.length === 0 ? `Aucune surfacturation ≥ ${seuilPct}% détectée.` : `${surfacts.length} ligne(s) avec surfacturation ≥ ${seuilPct}% — écart total : ${totalEcartEur} €.` });
     }
 
+    if (name === 'planifier_rappel') {
+      const message = String(input.message ?? '');
+      const date = String(input.date_rappel ?? '');
+      if (!message || !date) return JSON.stringify({ error: 'message et date_rappel requis.' });
+      const heure = input.heure ? String(input.heure) : null;
+      const key = `rappel_${date}${heure ? `_${heure.replace(':', 'h')}` : ''}`;
+      await supabase.from('teddy_memory').upsert({ cle: key, valeur: message, categorie: 'rappel', updated_at: new Date().toISOString() }, { onConflict: 'cle' });
+      await supabase.from('notifications').insert({ type: 'rappel_planifie', severite: 'info', titre: `Rappel : ${date}`, message, lu: false });
+      return JSON.stringify({ ok: true, message: `Rappel planifié pour le ${date}${heure ? ` à ${heure}` : ''} : "${message}"` });
+    }
+
+    if (name === 'rapport_complet_fournisseur') {
+      const fournisseur = String(input.fournisseur ?? '');
+      if (!fournisseur) return JSON.stringify({ error: 'fournisseur requis.' });
+      const since3m = new Date(); since3m.setMonth(since3m.getMonth() - 3);
+      const since6m = new Date(); since6m.setMonth(since6m.getMonth() - 6);
+      const [{ data: factures }, { data: bes }, { data: commandes }, { data: exceptions }, { data: memo }] = await Promise.all([
+        supabase.from('factures').select('id, numero_facture, date_facture, total_ht, statut_facture, taux_rapprochement').ilike('fournisseur', `%${fournisseur}%`).gte('date_facture', since3m.toISOString().slice(0, 10)).order('date_facture', { ascending: false }),
+        supabase.from('be_receptions').select('id, numero_be, date_bl, statut_be').ilike('fournisseur', `%${fournisseur}%`).gte('created_at', since3m.toISOString()).order('created_at', { ascending: false }),
+        supabase.from('commandes').select('numero_commande_interne, date_commande, montant_total_commande, statut_commande').ilike('fournisseur', `%${fournisseur}%`).gte('date_commande', since6m.toISOString().slice(0, 10)).order('date_commande', { ascending: false }),
+        supabase.from('exceptions').select('type_exception, niveau_priorite, statut_exception, motif').ilike('fournisseur', `%${fournisseur}%`).in('statut_exception', ['ouverte', 'en cours']),
+        supabase.from('teddy_memory').select('cle, valeur').or(`cle.ilike.%${fournisseur.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8)}%,categorie.eq.fournisseur`).limit(10),
+      ]);
+      const montantHT = (factures ?? []).reduce((s, f) => s + Number(f.total_ht ?? 0), 0);
+      const tauxMoyen = (factures ?? []).length > 0 ? Math.round((factures ?? []).reduce((s, f) => s + Number(f.taux_rapprochement ?? 0), 0) / (factures ?? []).length) : 0;
+      const besAnciens = (bes ?? []).filter(b => ['reçu', 'partiellement facturé'].includes(String(b.statut_be)));
+      return JSON.stringify({ fournisseur, periode: '3-6 derniers mois', factures: { total: (factures ?? []).length, montant_ht: Math.round(montantHT * 100) / 100, taux_rapprochement_moyen: tauxMoyen, liste: (factures ?? []).slice(0, 10) }, be_receptions: { total: (bes ?? []).length, anciens_non_factures: besAnciens.length, liste_anciens: besAnciens.slice(0, 5) }, commandes: { total: (commandes ?? []).length, liste: (commandes ?? []).slice(0, 5) }, exceptions_actives: exceptions ?? [], memoire_fournisseur: (memo ?? []).map(m => `${m.cle}: ${m.valeur}`) });
+    }
+
+    if (name === 'synthese_mensuelle') {
+      const mois = input.mois ? String(input.mois) : new Date().toISOString().slice(0, 7);
+      const [yr, mo] = mois.split('-');
+      const start = `${yr}-${mo}-01`;
+      const end = new Date(parseInt(yr), parseInt(mo), 0).toISOString().slice(0, 10);
+      const prevDate = new Date(parseInt(yr), parseInt(mo) - 2, 1);
+      const prevStart = prevDate.toISOString().slice(0, 7) + '-01';
+      const prevEnd = new Date(parseInt(yr), parseInt(mo) - 1, 0).toISOString().slice(0, 10);
+      const [{ data: facs, count: nbFac }, { data: facsPrev }, { count: nbBes }, { count: nbBesPrev }, { data: exceptions }, { data: raps }] = await Promise.all([
+        supabase.from('factures').select('fournisseur, total_ht, statut_facture, taux_rapprochement', { count: 'exact' }).gte('date_facture', start).lte('date_facture', end),
+        supabase.from('factures').select('total_ht').gte('date_facture', prevStart).lte('date_facture', prevEnd),
+        supabase.from('be_receptions').select('id', { count: 'exact', head: true }).gte('created_at', `${start}T00:00:00Z`).lte('created_at', `${end}T23:59:59Z`),
+        supabase.from('be_receptions').select('id', { count: 'exact', head: true }).gte('created_at', `${prevStart}T00:00:00Z`).lte('created_at', `${prevEnd}T23:59:59Z`),
+        supabase.from('exceptions').select('type_exception, niveau_priorite').in('statut_exception', ['ouverte', 'en cours']),
+        supabase.from('rapprochements').select('montant_rapproche').eq('statut_validation', 'validé').gte('created_at', `${start}T00:00:00Z`).lte('created_at', `${end}T23:59:59Z`),
+      ]);
+      const montantHT = (facs ?? []).reduce((s, f) => s + Number(f.total_ht ?? 0), 0);
+      const montantHTPrev = (facsPrev ?? []).reduce((s, f) => s + Number(f.total_ht ?? 0), 0);
+      const montantValide = (raps ?? []).reduce((s, r) => s + Number(r.montant_rapproche ?? 0), 0);
+      const tauxMoyen = (facs ?? []).length > 0 ? Math.round((facs ?? []).reduce((s, f) => s + Number(f.taux_rapprochement ?? 0), 0) / (facs ?? []).length) : 0;
+      const byFourn = new Map<string, number>();
+      for (const f of (facs ?? [])) byFourn.set(f.fournisseur ?? '?', (byFourn.get(f.fournisseur ?? '?') ?? 0) + Number(f.total_ht ?? 0));
+      const topFournisseurs = [...byFourn.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([nom, mt]) => ({ nom, montant_ht: Math.round(mt * 100) / 100 }));
+      const r2 = (n: number) => Math.round(n * 100) / 100;
+      return JSON.stringify({ mois, factures: { total: nbFac ?? 0, montant_ht: r2(montantHT), montant_precedent: r2(montantHTPrev), evolution_pct: montantHTPrev > 0 ? Math.round(((montantHT - montantHTPrev) / montantHTPrev) * 100) : null, taux_rapprochement_moyen: tauxMoyen, montant_valide: r2(montantValide) }, be_receptions: { total: nbBes ?? 0, precedent: nbBesPrev ?? 0 }, exceptions_ouvertes: (exceptions ?? []).length, top_fournisseurs: topFournisseurs });
+    }
+
     return JSON.stringify({ error: `Outil inconnu: ${name}` });
   } catch (e) {
     return JSON.stringify({ error: String(e) });
@@ -2680,12 +2783,11 @@ export async function POST(req: NextRequest) {
             }
             claudeMessages.push({ role: 'assistant', content: assistantContent });
 
-            const toolResults: ContentBlock[] = [];
-            for (const tb of toolBlocks) {
+            const toolResultEntries = await Promise.all(toolBlocks.map(async (tb) => {
               usedToolNames.add(tb.name);
               let parsedInput: ToolInput = {};
               try { parsedInput = JSON.parse(tb.inputJson || '{}'); } catch {}
-              const result = await executeTool(tb.name, parsedInput);
+              const result = await executeToolWithRetry(tb.name, parsedInput);
               send({ type: 'tool_end', name: tb.name });
               // Tronquer les résultats trop longs pour préserver la fenêtre de contexte
               let toolContent = result.length > 6000
@@ -2705,8 +2807,11 @@ export async function POST(req: NextRequest) {
                   toolContent = JSON.stringify(clean);
                 }
               } catch { /* not JSON or no export flag */ }
-              toolResults.push({ type: 'tool_result', tool_use_id: tb.id, content: toolContent });
-            }
+              return { tool_use_id: tb.id, content: toolContent };
+            }));
+            const toolResults: ContentBlock[] = toolResultEntries.map(e => ({
+              type: 'tool_result', tool_use_id: e.tool_use_id, content: e.content,
+            }));
             claudeMessages.push({ role: 'user', content: toolResults });
           } else {
             const qas = deriveQuickActions(Array.from(usedToolNames));

@@ -7,6 +7,7 @@ import {
   Bot, Send, X, Loader2, Sparkles, User, RotateCcw,
   ImagePlus, Zap, BarChart2, AlertTriangle, Clock, Wrench, ChevronRight,
   Sun, CheckCheck, Package, HelpCircle, Bell, Download, TrendingUp,
+  ThumbsUp, ThumbsDown,
 } from 'lucide-react';
 import { cn } from '@/utils';
 
@@ -71,6 +72,9 @@ const TOOL_LABELS: Record<string, string> = {
   get_flux_tresorerie: 'Flux de trésorerie',
   detecter_surfacturations: 'Détection surfacturations',
   get_bes_sur_factures: 'BEs sur factures',
+  planifier_rappel: 'Rappel planifié',
+  rapport_complet_fournisseur: 'Rapport fournisseur',
+  synthese_mensuelle: 'Synthèse mensuelle',
 };
 
 // ── Workflows ────────────────────────────────────────────────────────────────
@@ -603,6 +607,7 @@ export default function ChatAssistant() {
   const contextChips = useMemo(() => getContextChips(pathname), [pathname]);
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [feedbackSent, setFeedbackSent] = useState<Record<number, 'up' | 'down'>>({});
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
@@ -1175,6 +1180,36 @@ export default function ChatAssistant() {
                       <Download className="w-3 h-3" />
                       {m.exportFile.filename}
                     </a>
+                  )}
+                  {m.role === 'assistant' && (
+                    <div className="flex gap-1 mt-2 justify-end">
+                      {feedbackSent[i] ? (
+                        <span className="text-[9px] text-gray-400">{feedbackSent[i] === 'up' ? '👍 Merci !' : '👎 Noté'}</span>
+                      ) : (
+                        <>
+                          <button
+                            onClick={() => {
+                              setFeedbackSent(prev => ({ ...prev, [i]: 'up' }));
+                              fetch('/api/teddy/feedback', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rating: 'up', message: m.content.slice(0, 500) }) }).catch(() => null);
+                            }}
+                            className="p-1 rounded hover:bg-green-50 text-gray-300 hover:text-green-500 transition-colors"
+                            title="Bonne réponse"
+                          >
+                            <ThumbsUp className="w-3 h-3" />
+                          </button>
+                          <button
+                            onClick={() => {
+                              setFeedbackSent(prev => ({ ...prev, [i]: 'down' }));
+                              fetch('/api/teddy/feedback', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rating: 'down', message: m.content.slice(0, 500) }) }).catch(() => null);
+                            }}
+                            className="p-1 rounded hover:bg-red-50 text-gray-300 hover:text-red-400 transition-colors"
+                            title="Mauvaise réponse"
+                          >
+                            <ThumbsDown className="w-3 h-3" />
+                          </button>
+                        </>
+                      )}
+                    </div>
                   )}
                 </div>
               </div>
