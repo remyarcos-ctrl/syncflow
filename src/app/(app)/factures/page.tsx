@@ -14,7 +14,7 @@ import { useTableFeatures } from '@/hooks/useTableFeatures';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { formatEur, formatDate, exportToCsv } from '@/utils';
-import { FileText, ChevronRight, Trash2, Download, Upload, Search, X, AlertTriangle, Zap, ChevronUp, ChevronDown, ChevronsUpDown, Bot, Package, ChevronLeft } from 'lucide-react';
+import { FileText, ChevronRight, Trash2, Download, Upload, Search, X, AlertTriangle, Zap, ChevronUp, ChevronDown, ChevronsUpDown, Bot, Package, ChevronLeft, Printer } from 'lucide-react';
 import { toast } from 'sonner';
 import { MoneyAmount } from '@/components/shared/MoneyAmount';
 import { useDisplayCurrency } from '@/contexts/DisplayCurrencyContext';
@@ -200,6 +200,38 @@ function FacturesPageInner() {
 
   const formatMonthLabel = (m: string) =>
     new Date(m + '-01').toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
+
+  const handleExportBEsPDF = () => {
+    const moisLabel = formatMonthLabel(moisSelectionne);
+    const selectionLabel = selectedFacIds !== null && selectedFacIds.size < facsDuMois.length
+      ? `${selectedFacIds.size} factures sélectionnées`
+      : `${facsDuMois.length} facture${facsDuMois.length > 1 ? 's' : ''}`;
+    const rows = besParMois.map(({ numero_be, factures: facs }) =>
+      `<tr><td>${numero_be}</td><td>${facs.map(f => f.numero_facture).join(', ')}</td></tr>`
+    ).join('');
+    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>BEs — ${moisLabel}</title>
+<style>
+  body{font-family:Arial,sans-serif;font-size:12px;color:#111;margin:20px}
+  h1{font-size:16px;margin-bottom:4px}
+  p.meta{font-size:11px;color:#666;margin-bottom:16px}
+  table{width:100%;border-collapse:collapse}
+  th{background:#f3f4f6;text-align:left;padding:8px 10px;font-size:11px;text-transform:uppercase;letter-spacing:.05em;border-bottom:2px solid #e5e7eb}
+  td{padding:7px 10px;border-bottom:1px solid #e5e7eb;vertical-align:top}
+  tr:nth-child(even) td{background:#f9fafb}
+  @media print{body{margin:10mm}}
+</style></head><body>
+<h1>BEs présents sur les factures — ${moisLabel}</h1>
+<p class="meta">${selectionLabel} &nbsp;·&nbsp; ${besParMois.length} BE${besParMois.length > 1 ? 's' : ''} &nbsp;·&nbsp; SD Équipements</p>
+<table><thead><tr><th style="width:40%">N° BE</th><th>Factures</th></tr></thead>
+<tbody>${rows}</tbody></table>
+</body></html>`;
+    const win = window.open('', '_blank');
+    if (!win) return;
+    win.document.write(html);
+    win.document.close();
+    win.focus();
+    setTimeout(() => { win.print(); }, 400);
+  };
 
   // Reset selection when month changes
   useEffect(() => { setSelectedFacIds(null); }, [moisSelectionne]);
@@ -494,6 +526,14 @@ function FacturesPageInner() {
                 <input type="month" value={moisSelectionne} onChange={e => setMoisSelectionne(e.target.value)} className="h-8 rounded-lg border border-gray-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
                 <button onClick={() => setMoisSelectionne(m => shiftMonth(m, 1))} className="p-1.5 rounded hover:bg-gray-100 text-gray-500"><ChevronRight className="w-4 h-4" /></button>
                 <span className="text-sm text-gray-500 capitalize mr-2">{formatMonthLabel(moisSelectionne)}</span>
+                <button
+                  onClick={handleExportBEsPDF}
+                  disabled={besParMois.length === 0}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  title="Imprimer / Exporter PDF"
+                >
+                  <Printer className="w-3.5 h-3.5" /> Imprimer
+                </button>
                 <button onClick={() => setShowBEsParMois(false)} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
               </div>
             </div>
