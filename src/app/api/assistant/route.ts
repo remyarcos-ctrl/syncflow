@@ -94,6 +94,7 @@ Rappelle-toi de ce qui est déjà mémorisé (visible dans le système) avant de
 PROACTIVITÉ
 ════════════════════════════════════════
 Pendant toute conversation, si tu remarques quelque chose d'important (BE en retard, facture échue, doublon potentiel, anomalie), signale-le spontanément AVANT de répondre à la question principale. Une phrase suffit : "Au passage, j'ai remarqué que...".
+Si c'est le PREMIER message de la conversation (aucun message assistant dans l'historique), appelle get_morning_brief en premier pour avoir le contexte complet du jour avant de répondre.
 
 ════════════════════════════════════════
 WORKFLOWS EN CHAÎNE
@@ -939,6 +940,43 @@ const tools = [
         fournisseur: { type: 'string', description: 'Filtrer par fournisseur' },
         date_debut: { type: 'string', description: 'YYYY-MM-DD' },
         date_fin: { type: 'string', description: 'YYYY-MM-DD' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'analyser_ecarts_prix_fournisseur',
+    description: 'Analyse les écarts de prix entre les factures reçues et le catalogue de référence pour un fournisseur. Identifie les articles surfacturés ou sous-facturés au-delà d\'un seuil. Utiliser pour "est-ce qu\'il y a des écarts de prix chez X ?", "vérifie les prix de ce fournisseur".',
+    input_schema: {
+      type: 'object',
+      properties: {
+        fournisseur: { type: 'string', description: 'Nom du fournisseur (partiel accepté)' },
+        periode_mois: { type: 'number', description: 'Période d\'analyse en mois (défaut: 6)' },
+        seuil_pct: { type: 'number', description: 'Seuil d\'écart en % pour signaler (défaut: 5)' },
+      },
+      required: ['fournisseur'],
+    },
+  },
+  {
+    name: 'get_flux_tresorerie',
+    description: 'Vue flux de trésorerie : montants facturés vs rapprochés validés vs en attente vs non rapprochés, par mois. Utiliser pour "quel est mon flux de trésorerie ?", "combien est validé vs en attente ?", "bilan financier du mois".',
+    input_schema: {
+      type: 'object',
+      properties: {
+        periode_mois: { type: 'number', description: 'Période en mois (défaut: 3)' },
+        fournisseur: { type: 'string', description: 'Filtrer par fournisseur (optionnel)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'detecter_surfacturations',
+    description: 'Détecte les lignes de facture où le prix unitaire facturé dépasse le prix de commande. Donne la liste triée par écart décroissant. Utiliser pour "y a-t-il des surfacturations ?", "comparer prix facturés vs commandés".',
+    input_schema: {
+      type: 'object',
+      properties: {
+        fournisseur: { type: 'string', description: 'Filtrer par fournisseur (optionnel)' },
+        seuil_pct: { type: 'number', description: 'Seuil d\'écart minimum en % (défaut: 3)' },
       },
       required: [],
     },
@@ -2369,6 +2407,110 @@ async function executeTool(name: string, input: ToolInput): Promise<string> {
       return JSON.stringify({ nb_factures_analysees: factureIds.length, nb_bes: results.length, bes: results });
     }
 
+    if (name === 'analyser_ecarts_prix_fournisseur') {
+      const fournisseur = String(input.fournisseur ?? '');
+      const periodeMois = Number(input.periode_mois ?? 6);
+      const seuilPct = Number(input.seuil_pct ?? 5);
+      const cutoff = new Date(); cutoff.setMonth(cutoff.getMonth() - periodeMois);
+      const { data: factures } = await supabase.from('factures').select('id, numero_facture').ilike('fournisseur', `%${fournisseur}%`).gte('date_facture', cutoff.toISOString().slice(0, 10));
+      if (!factures || factures.length === 0) return JSON.stringify({ message: `Aucune facture trouvée pour "${fournisseur}" sur ${periodeMois} mois.` });
+      const facIds = factures.map(f => f.id);
+      const facNumMap = Object.fromEntries(factures.map(f => [f.id, f.numero_facture]));
+      const { data: lignesF } = await supabase.from('lignes_facture').select('reference_article, pu_facture, facture_id').in('facture_id', facIds).not('reference_article', 'is', null).not('pu_facture', 'is', null);
+      if (!lignesF || lignesF.length === 0) return JSON.stringify({ message: 'Aucune ligne de facture avec prix trouvée.' });
+      const refs = [...new Set(lignesF.map(l => l.reference_article as string))];
+      const { data: catalogue } = await supabase.from('prix_reference').select('reference_article, pu_reference').in('reference_article', refs);
+      const catMap = new Map((catalogue ?? []).map(c => [c.reference_article, Number(c.pu_reference)]));
+      const ecarts: { reference: string; pu_facture: number; pu_reference: number; ecart_pct: number; facture: string }[] = [];
+      for (const l of lignesF) {
+        const ref = l.reference_article as string;
+        const puF = Number(l.pu_facture);
+        const puRef = catMap.get(ref);
+        if (!puRef || puRef === 0) continue;
+        const ecartPct = Math.round(((puF - puRef) / puRef) * 10000) / 100;
+        if (Math.abs(ecartPct) >= seuilPct) ecarts.push({ reference: ref, pu_facture: puF, pu_reference: puRef, ecart_pct: ecartPct, facture: facNumMap[l.facture_id as string] ?? '' });
+      }
+      ecarts.sort((a, b) => Math.abs(b.ecart_pct) - Math.abs(a.ecart_pct));
+      const unique = [...new Map(ecarts.map(e => [e.reference, e])).values()];
+      return JSON.stringify({ fournisseur, periode_mois: periodeMois, seuil_pct: seuilPct, nb_refs_analysees: refs.length, nb_refs_avec_catalogue: catMap.size, nb_ecarts: unique.length, ecarts: unique.slice(0, 30), note: unique.length === 0 ? `Aucun écart ≥ ${seuilPct}% détecté.` : `${unique.length} référence(s) avec écart ≥ ${seuilPct}%.` });
+    }
+
+    if (name === 'get_flux_tresorerie') {
+      const periodeMois = Number(input.periode_mois ?? 3);
+      const fournisseur = input.fournisseur ? String(input.fournisseur) : null;
+      const cutoff = new Date(); cutoff.setMonth(cutoff.getMonth() - periodeMois);
+      let q = supabase.from('factures').select('id, fournisseur, date_facture, total_ht, statut_facture').gte('date_facture', cutoff.toISOString().slice(0, 10)).order('date_facture', { ascending: false }).limit(500);
+      if (fournisseur) q = q.ilike('fournisseur', `%${fournisseur}%`);
+      const { data: factures } = await q;
+      if (!factures || factures.length === 0) return JSON.stringify({ message: 'Aucune facture sur cette période.' });
+      const facIds = factures.map(f => f.id);
+      const { data: raps } = await supabase.from('rapprochements').select('facture_id, montant_rapproche, statut_validation').in('facture_id', facIds);
+      const rapsByFac = new Map<string, { valide: number; propose: number }>();
+      for (const r of (raps ?? [])) {
+        if (!rapsByFac.has(r.facture_id)) rapsByFac.set(r.facture_id, { valide: 0, propose: 0 });
+        const m = Number(r.montant_rapproche ?? 0);
+        if (r.statut_validation === 'validé') rapsByFac.get(r.facture_id)!.valide += m;
+        else if (r.statut_validation === 'proposé') rapsByFac.get(r.facture_id)!.propose += m;
+      }
+      const byMonth = new Map<string, { mois: string; total_ht: number; valide: number; propose: number; non_rapproche: number; nb_factures: number }>();
+      let tHt = 0, tVal = 0, tProp = 0, tNon = 0;
+      for (const f of factures) {
+        const mois = String(f.date_facture ?? '').slice(0, 7);
+        if (!byMonth.has(mois)) byMonth.set(mois, { mois, total_ht: 0, valide: 0, propose: 0, non_rapproche: 0, nb_factures: 0 });
+        const entry = byMonth.get(mois)!;
+        const ht = Number(f.total_ht ?? 0);
+        const rap = rapsByFac.get(f.id) ?? { valide: 0, propose: 0 };
+        const nonRap = Math.max(0, ht - rap.valide - rap.propose);
+        entry.total_ht += ht; entry.valide += rap.valide; entry.propose += rap.propose; entry.non_rapproche += nonRap; entry.nb_factures++;
+        tHt += ht; tVal += rap.valide; tProp += rap.propose; tNon += nonRap;
+      }
+      const r2 = (n: number) => Math.round(n * 100) / 100;
+      return JSON.stringify({ periode_mois: periodeMois, fournisseur: fournisseur ?? 'tous', synthese: { total_facture_ht: r2(tHt), montant_valide: r2(tVal), montant_en_attente: r2(tProp), montant_non_rapproche: r2(tNon), taux_couverture_pct: tHt > 0 ? Math.round((tVal / tHt) * 100) : 0 }, par_mois: Array.from(byMonth.values()).sort((a, b) => b.mois.localeCompare(a.mois)).map(m => ({ ...m, total_ht: r2(m.total_ht), valide: r2(m.valide), propose: r2(m.propose), non_rapproche: r2(m.non_rapproche) })) });
+    }
+
+    if (name === 'detecter_surfacturations') {
+      const fournisseur = input.fournisseur ? String(input.fournisseur) : null;
+      const seuilPct = Number(input.seuil_pct ?? 3);
+      let facQ = supabase.from('factures').select('id, numero_facture, fournisseur').limit(500);
+      if (fournisseur) facQ = facQ.ilike('fournisseur', `%${fournisseur}%`);
+      const { data: factures } = await facQ;
+      if (!factures || factures.length === 0) return JSON.stringify({ message: 'Aucune facture trouvée.' });
+      const facIds = factures.map(f => f.id);
+      const facMap = Object.fromEntries(factures.map(f => [f.id, f]));
+      const { data: raps } = await supabase.from('rapprochements').select('facture_id, ligne_facture_id, ligne_be_id').in('facture_id', facIds).in('statut_validation', ['validé', 'proposé']).limit(1000);
+      if (!raps || raps.length === 0) return JSON.stringify({ message: 'Aucun rapprochement trouvé.' });
+      const lfIds = [...new Set(raps.map(r => r.ligne_facture_id as string).filter(Boolean))];
+      const lbIds = [...new Set(raps.map(r => r.ligne_be_id as string).filter(Boolean))];
+      const [{ data: lignesF }, { data: lignesB }] = await Promise.all([
+        supabase.from('lignes_facture').select('id, reference_article, pu_facture, designation').in('id', lfIds),
+        supabase.from('lignes_be').select('id, ligne_commande_id').in('id', lbIds).not('ligne_commande_id', 'is', null),
+      ]);
+      const lcIds = [...new Set((lignesB ?? []).map(lb => lb.ligne_commande_id as string).filter(Boolean))];
+      const { data: lignesC } = lcIds.length > 0 ? await supabase.from('lignes_commande').select('id, pu_commande').in('id', lcIds) : { data: [] };
+      const lfMap = Object.fromEntries((lignesF ?? []).map(l => [l.id, l]));
+      const lbMap = Object.fromEntries((lignesB ?? []).map(l => [l.id, l]));
+      const lcMap = Object.fromEntries((lignesC ?? []).map(l => [l.id, l]));
+      const surfacts: { reference: string; designation: string; pu_facture: number; pu_commande: number; ecart_pct: number; ecart_eur: number; facture: string; fournisseur_nom: string }[] = [];
+      for (const rap of raps) {
+        const lf = lfMap[rap.ligne_facture_id as string];
+        const lb = lbMap[rap.ligne_be_id as string];
+        if (!lf || !lb || !lb.ligne_commande_id) continue;
+        const lc = lcMap[lb.ligne_commande_id as string];
+        if (!lc) continue;
+        const puF = Number(lf.pu_facture ?? 0);
+        const puC = Number(lc.pu_commande ?? 0);
+        if (!puF || !puC) continue;
+        const ecartPct = Math.round(((puF - puC) / puC) * 10000) / 100;
+        if (ecartPct >= seuilPct) {
+          const fac = facMap[rap.facture_id as string];
+          surfacts.push({ reference: String(lf.reference_article ?? ''), designation: String(lf.designation ?? ''), pu_facture: puF, pu_commande: puC, ecart_pct: ecartPct, ecart_eur: Math.round((puF - puC) * 100) / 100, facture: fac?.numero_facture ?? '', fournisseur_nom: fac?.fournisseur ?? '' });
+        }
+      }
+      surfacts.sort((a, b) => b.ecart_pct - a.ecart_pct);
+      const totalEcartEur = Math.round(surfacts.reduce((s, l) => s + l.ecart_eur, 0) * 100) / 100;
+      return JSON.stringify({ seuil_pct: seuilPct, fournisseur: fournisseur ?? 'tous', nb_surfacturations: surfacts.length, total_ecart_eur: totalEcartEur, surfacturations: surfacts.slice(0, 30), note: surfacts.length === 0 ? `Aucune surfacturation ≥ ${seuilPct}% détectée.` : `${surfacts.length} ligne(s) avec surfacturation ≥ ${seuilPct}% — écart total : ${totalEcartEur} €.` });
+    }
+
     return JSON.stringify({ error: `Outil inconnu: ${name}` });
   } catch (e) {
     return JSON.stringify({ error: String(e) });
@@ -2415,13 +2557,24 @@ export async function POST(req: NextRequest) {
         try { controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`)); } catch {}
       };
 
-      const claudeMessages = messages
+      // Fenêtre glissante : 40 messages max, on ne coupe jamais au milieu d'un aller-retour tool_use/tool_result
+      const MAX_HISTORY = 40;
+      const allMsgs = messages
         .map(m => ({ role: m.role, content: m.content }))
         .filter(m => {
           if (typeof m.content === 'string') return m.content.trim().length > 0;
           if (Array.isArray(m.content)) return m.content.length > 0;
           return false;
         });
+      let histStart = Math.max(0, allMsgs.length - MAX_HISTORY);
+      while (histStart < allMsgs.length) {
+        const m = allMsgs[histStart];
+        const isOrphanResult = m.role === 'user' && Array.isArray(m.content) &&
+          (m.content as ContentBlock[]).some(b => (b as Record<string, unknown>).type === 'tool_result');
+        if (!isOrphanResult) break;
+        histStart++;
+      }
+      const claudeMessages = allMsgs.slice(histStart);
       let iterations = 0;
       const usedToolNames = new Set<string>();
 
@@ -2532,7 +2685,10 @@ export async function POST(req: NextRequest) {
               try { parsedInput = JSON.parse(tb.inputJson || '{}'); } catch {}
               const result = await executeTool(tb.name, parsedInput);
               send({ type: 'tool_end', name: tb.name });
-              let toolContent = result;
+              // Tronquer les résultats trop longs pour préserver la fenêtre de contexte
+              let toolContent = result.length > 6000
+                ? result.slice(0, 6000) + '…[résultat tronqué — utilise des filtres plus précis si nécessaire]'
+                : result;
               try {
                 const parsed = JSON.parse(result) as Record<string, unknown>;
                 if (parsed.__export__ === true) {
