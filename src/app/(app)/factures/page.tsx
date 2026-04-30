@@ -231,23 +231,24 @@ function FacturesPageInner() {
     enabled: showBEsParMois && effectiveIds.length > 0,
     queryFn: async () => {
       const factureMap = Object.fromEntries(facsDuMois.map(f => [f.id, f]));
-      const { data: raps } = await supabase
-        .from('rapprochements')
-        .select('be_id, facture_id, be_receptions(id, numero_be, fournisseur)')
+      const { data: lignes } = await supabase
+        .from('lignes_facture')
+        .select('facture_id, numero_be_detecte')
         .in('facture_id', effectiveIds)
-        .not('be_id', 'is', null);
+        .not('numero_be_detecte', 'is', null)
+        .neq('numero_be_detecte', '');
 
-      const beMap = new Map<string, { be: { id: string; numero_be: string; fournisseur: string | null }; factures: typeof facsDuMois }>();
-      for (const rap of (raps ?? [])) {
-        if (!rap.be_id || !rap.be_receptions) continue;
-        const be = rap.be_receptions as unknown as { id: string; numero_be: string; fournisseur: string | null };
-        if (!beMap.has(rap.be_id)) beMap.set(rap.be_id, { be, factures: [] });
-        const fac = factureMap[rap.facture_id];
-        if (fac && !beMap.get(rap.be_id)!.factures.find(f => f.id === fac.id)) {
-          beMap.get(rap.be_id)!.factures.push(fac);
+      const beMap = new Map<string, { numero_be: string; factures: typeof facsDuMois }>();
+      for (const ligne of (lignes ?? [])) {
+        if (!ligne.numero_be_detecte) continue;
+        const key = ligne.numero_be_detecte.toUpperCase().replace(/[^A-Z0-9]/g, '');
+        if (!beMap.has(key)) beMap.set(key, { numero_be: ligne.numero_be_detecte, factures: [] });
+        const fac = factureMap[ligne.facture_id];
+        if (fac && !beMap.get(key)!.factures.find(f => f.id === fac.id)) {
+          beMap.get(key)!.factures.push(fac);
         }
       }
-      return Array.from(beMap.values()).sort((a, b) => a.be.numero_be.localeCompare(b.be.numero_be));
+      return Array.from(beMap.values()).sort((a, b) => a.numero_be.localeCompare(b.numero_be));
     },
     staleTime: 60_000,
   });
@@ -559,22 +560,20 @@ function FacturesPageInner() {
                 ) : besParMois.length === 0 ? (
                   <div className="p-8 text-center">
                     <Package className="w-8 h-8 text-gray-200 mx-auto mb-2" />
-                    <p className="text-sm text-gray-400">Aucun BE lié aux factures sélectionnées</p>
+                    <p className="text-sm text-gray-400">Aucun numéro de BE détecté sur ces factures</p>
                   </div>
                 ) : (
                   <table className="w-full text-sm">
                     <thead className="sticky top-0 bg-white z-10">
                       <tr className="bg-gray-50/50 border-b border-gray-100">
                         <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide text-left">N° BE</th>
-                        <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide text-left">Fournisseur</th>
-                        <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide text-left">Factures liées</th>
+                        <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide text-left">Factures</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-50">
-                      {besParMois.map(({ be, factures: facs }) => (
-                        <tr key={be.id} className="hover:bg-gray-50/50">
-                          <td className="px-4 py-3 font-medium font-mono text-indigo-700">{be.numero_be}</td>
-                          <td className="px-4 py-3 text-gray-600">{be.fournisseur || '—'}</td>
+                      {besParMois.map(({ numero_be, factures: facs }) => (
+                        <tr key={numero_be} className="hover:bg-gray-50/50">
+                          <td className="px-4 py-3 font-medium font-mono text-indigo-700">{numero_be}</td>
                           <td className="px-4 py-3">
                             <div className="flex flex-wrap gap-1">
                               {facs.map(f => (
