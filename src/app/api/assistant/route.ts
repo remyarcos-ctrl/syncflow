@@ -942,6 +942,7 @@ const tools = [
       },
       required: [],
     },
+    cache_control: { type: 'ephemeral' },
   },
 ];
 
@@ -2403,7 +2404,10 @@ export async function POST(req: NextRequest) {
     }
     contextSection += '\nAdapte tes suggestions à ce contexte.';
   }
-  const systemPrompt = `${SYSTEM}${memorySection}${contextSection}`;
+  const systemArray = [
+    { type: 'text', text: SYSTEM, cache_control: { type: 'ephemeral' } },
+    ...((memorySection || contextSection) ? [{ type: 'text', text: `${memorySection}${contextSection}` }] : []),
+  ];
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -2430,13 +2434,14 @@ export async function POST(req: NextRequest) {
             headers: {
               'x-api-key': process.env.ANTHROPIC_API_KEY!,
               'anthropic-version': '2023-06-01',
+              'anthropic-beta': 'prompt-caching-2024-07-31',
               'content-type': 'application/json',
             },
             body: JSON.stringify({
               model: 'claude-sonnet-4-6',
               max_tokens: 8000,
               stream: true,
-              system: systemPrompt,
+              system: systemArray,
               tools,
               messages: claudeMessages,
             }),
