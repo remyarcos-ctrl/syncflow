@@ -25,6 +25,7 @@ interface SyncResult {
   filtres_ignores: number;
   erreurs: string[];
   details: string[];
+  interrompu?: boolean;
 }
 
 // ── Composant ─────────────────────────────────────────────────────────────────
@@ -325,8 +326,25 @@ export default function EmailsPage() {
             </span>
           </div>
 
+          {/* Bannière interrompu — relancer nécessaire */}
+          {lastResult.interrompu && (
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 shadow-sm">
+              <div className="flex items-center gap-3 text-sm text-amber-700">
+                <RefreshCw className="h-4 w-4 shrink-0 text-amber-500" />
+                <span>Il reste des emails à traiter — relancez le scan pour continuer.</span>
+              </div>
+              <button
+                onClick={() => syncMutation.mutate()}
+                disabled={syncMutation.isPending}
+                className="shrink-0 rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-600 disabled:opacity-50"
+              >
+                Continuer
+              </button>
+            </div>
+          )}
+
           {/* Cas aucun résultat */}
-          {lastResult.commandes_importees === 0 && lastResult.erreurs.length === 0 && (
+          {lastResult.commandes_importees === 0 && lastResult.erreurs.length === 0 && !lastResult.interrompu && (
             <div className="flex items-center gap-3 rounded-xl border border-gray-200 bg-white p-4 shadow-sm text-sm text-gray-500">
               <Clock className="h-5 w-5 shrink-0 text-gray-300" />
               Aucun nouvel email — tous les threads déjà traités.

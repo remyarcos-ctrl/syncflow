@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
+
+export const maxDuration = 60;
 import { createClient } from '@supabase/supabase-js';
 import {
   getValidToken,
@@ -187,13 +189,18 @@ export async function POST(req: NextRequest) {
     ];
 
     const seenThreadIds = new Set<string>();
+    const DEADLINE_MS = 50_000; // s'arrêter à 50s pour laisser 10s de marge avant le timeout Vercel
+    const startedAt = Date.now();
 
     for (const cmdQuery of cmdQueries) {
+      if (Date.now() - startedAt > DEADLINE_MS) break;
       const cmdThreadIds = await listThreads(token, cmdQuery, 50);
 
       for (const threadId of cmdThreadIds) {
+        if (Date.now() - startedAt > DEADLINE_MS) break;
         if (seenThreadIds.has(threadId)) continue;
         seenThreadIds.add(threadId);
+        const threadNewIds: string[] = [];
         try {
           const thread = await getThread(token, threadId);
           for (const msg of thread.messages ?? []) {
@@ -201,6 +208,7 @@ export async function POST(req: NextRequest) {
             const subject = getHeader(msg, 'subject');
             if (/COMMANDE/i.test(subject) || /commande\s+sd/i.test(subject)) {
               await importCommande(sb, token, msg, result, filtresFournisseurs);
+              threadNewIds.push(msg.id);
               newMessageIds.push(msg.id);
             } else {
               result.details.push(`⏭ Sujet non reconnu ignoré : "${subject}"`);
@@ -209,15 +217,18 @@ export async function POST(req: NextRequest) {
         } catch (err) {
           result.erreurs.push(`Thread ${threadId}: ${err instanceof Error ? err.message : String(err)}`);
         }
+        // Sauvegarder la progression après chaque thread — si timeout, les suivants reprennent là où on s'est arrêté
+        if (threadNewIds.length > 0) {
+          await markThreadsProcessed(config.id, threadNewIds);
+          threadNewIds.forEach(id => processedSet.add(id));
+        }
       }
     }
 
-    // ── 2. Marquer les messages comme traités ─────────────────────────────────
-    if (newMessageIds.length > 0) {
-      await markThreadsProcessed(config.id, newMessageIds);
-    }
-
-    return NextResponse.json(result);
+    return NextResponse.json({
+      ...result,
+      interrompu: Date.now() - startedAt > DEADLINE_MS,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: `Erreur scan Gmail: ${message}` }, { status: 500 });
