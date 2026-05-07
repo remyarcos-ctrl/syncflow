@@ -4,6 +4,7 @@ import { useState, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Upload, CheckCircle, AlertCircle, Clock, Loader2, X } from 'lucide-react';
 import { cn } from '@/utils';
+import { supabase } from '@/lib/supabase';
 
 interface FileResult {
   name: string;
@@ -64,11 +65,34 @@ export default function PdfImportModal({ open, onClose, onSuccess, title = 'Impo
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
-      updateResult(i, { status: 'processing' });
+      updateResult(i, { status: 'processing', message: 'Envoi du fichier…' });
       try {
-        const fd = new FormData();
-        fd.append('files', file);
-        const r = await fetch('/api/import-pdf', { method: 'POST', body: fd });
+        // 1. Obtenir une URL signée
+        const urlResp = await fetch('/api/storage/upload-url', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fileName: file.name }),
+        });
+        if (!urlResp.ok) throw new Error('Impossible de créer l\'URL d\'upload');
+        const { path, token } = await urlResp.json() as { signedUrl: string; path: string; token: string };
+
+        // 2. Upload direct vers Supabase Storage (contourne la limite Vercel 4.5 MB)
+        const { error: uploadError } = await supabase.storage
+          .from('documents')
+          .uploadToSignedUrl(path, token, file, { contentType: 'application/pdf' });
+        if (uploadError) throw new Error(`Upload storage : ${uploadError.message}`);
+
+        updateResult(i, { status: 'processing', message: 'Analyse Claude en cours…' });
+
+        // 3. API reçoit uniquement le chemin storage (payload ~200 octets)
+        const r = await fetch('/api/import-pdf', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ storagePath: path, fileName: file.name }),
+        });
+        if (!r.ok && !r.headers.get('content-type')?.includes('application/json')) {
+          throw new Error(`Erreur serveur (${r.status})`);
+        }
         const data = await r.json() as ApiResult;
 
         const imported = data.bes_importes + data.factures_importees;

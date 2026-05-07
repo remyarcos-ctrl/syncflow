@@ -7,7 +7,8 @@ const supabase = createClient(
   (process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? '').trim(),
 );
 
-const BASE_URL = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000';
+const BASE_URL = process.env.NEXT_PUBLIC_APP_URL
+  ?? (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000');
 
 const SYSTEM = `Tu es Teddy, l'assistant IA de SyncFlow pour SD Équipements / Orchidée Innovation.
 Tu peux consulter les données ET exécuter des actions (suppressions, matching, validations, prix, rapprochements, envoi d'emails).

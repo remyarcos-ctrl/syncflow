@@ -5,7 +5,7 @@ import { parsePdfDocuments, normalizeRef } from '@/lib/document-parser';
 function adminSb() {
   return createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!.trim(),
   );
 }
 
@@ -15,10 +15,8 @@ function normalizeDocNum(s: string): string {
 
 async function isDuplicate(sb: ReturnType<typeof adminSb>, table: string, field: string, value: string): Promise<boolean> {
   const norm = normalizeDocNum(value);
-  // Exact match first (covers 95%+ of cases, single indexed query)
   const { data: exact } = await sb.from(table).select('id').eq(field, value).limit(1);
   if ((exact?.length ?? 0) > 0) return true;
-  // Suffix search to catch format variations (BE-26031735 vs BE26031735)
   const suffix = norm.slice(-8);
   if (suffix.length < 4) return false;
   const { data } = await sb.from(table).select(field).ilike(field, `%${suffix}%`);
@@ -28,16 +26,15 @@ async function isDuplicate(sb: ReturnType<typeof adminSb>, table: string, field:
 export async function POST(req: NextRequest) {
   const sb = adminSb();
 
-  let formData: FormData;
+  let storagePath: string;
+  let fileName: string;
   try {
-    formData = await req.formData();
+    const body = await req.json() as { storagePath: string; fileName: string };
+    storagePath = body.storagePath;
+    fileName = body.fileName;
+    if (!storagePath || !fileName) throw new Error('Champs manquants');
   } catch {
     return NextResponse.json({ error: 'Requête invalide' }, { status: 400 });
-  }
-
-  const files = formData.getAll('files') as File[];
-  if (files.length === 0) {
-    return NextResponse.json({ error: 'Aucun fichier reçu' }, { status: 400 });
   }
 
   const result = {
@@ -48,25 +45,29 @@ export async function POST(req: NextRequest) {
     details: [] as string[],
   };
 
-  for (let fi = 0; fi < files.length; fi++) {
-    if (fi > 0) await new Promise((res) => setTimeout(res, 5000));
-    const file = files[fi];
-    const arrayBuffer = await file.arrayBuffer();
+  try {
+    const { data: blob, error: dlErr } = await sb.storage.from('documents').download(storagePath);
+    if (dlErr || !blob) {
+      result.erreurs.push(`${fileName} : impossible de télécharger depuis le storage — ${dlErr?.message}`);
+      return NextResponse.json(result);
+    }
+
+    const arrayBuffer = await blob.arrayBuffer();
     const base64 = Buffer.from(arrayBuffer).toString('base64');
 
     let docs;
     try {
-      docs = await parsePdfDocuments(base64, file.name);
+      docs = await parsePdfDocuments(base64, fileName);
     } catch (err) {
-      result.erreurs.push(`${file.name} : erreur Claude API — ${err instanceof Error ? err.message : String(err)}`);
-      continue;
+      result.erreurs.push(`${fileName} : erreur Claude API — ${err instanceof Error ? err.message : String(err)}`);
+      return NextResponse.json(result);
     }
 
-    console.log(`[import-pdf] ${file.name} → ${docs.length} document(s) détecté(s)`);
+    console.log(`[import-pdf] ${fileName} → ${docs.length} document(s) détecté(s)`);
 
     for (const doc of docs) {
       if (doc.type === 'inconnu') {
-        result.erreurs.push(`${file.name} : ${doc.raison}`);
+        result.erreurs.push(`${fileName} : ${doc.raison}`);
         continue;
       }
 
@@ -86,7 +87,7 @@ export async function POST(req: NextRequest) {
         }).select('id').single();
 
         if (error || !beRecord) {
-          result.erreurs.push(`${file.name} / BE ${doc.data.numero_be} : erreur base de données — ${error?.message}`);
+          result.erreurs.push(`${fileName} / BE ${doc.data.numero_be} : erreur base de données — ${error?.message}`);
           continue;
         }
 
@@ -108,7 +109,7 @@ export async function POST(req: NextRequest) {
           type_action: 'import_pdf',
           entite_type: 'be_reception',
           entite_id: beRecord.id,
-          details_action: JSON.stringify({ fichier: file.name, lignes: doc.data.lignes.length }),
+          details_action: JSON.stringify({ fichier: fileName, lignes: doc.data.lignes.length }),
         });
 
         result.bes_importes++;
@@ -134,12 +135,10 @@ export async function POST(req: NextRequest) {
         }).select('id').single();
 
         if (error || !factRecord) {
-          result.erreurs.push(`${file.name} / Facture ${doc.data.numero_facture} : erreur base de données — ${error?.message}`);
+          result.erreurs.push(`${fileName} / Facture ${doc.data.numero_facture} : erreur base de données — ${error?.message}`);
           continue;
         }
 
-        // Agréger par beNum|ref|pu : même ref + même prix = même commande (agréger) ;
-        // même ref + prix différent = commandes distinctes à des moments différents → lignes séparées
         const aggMap = new Map<string, typeof doc.data.lignes[0]>();
         for (const l of doc.data.lignes) {
           const puKey = Math.round((l.prix_unitaire ?? 0) * 10000);
@@ -179,14 +178,16 @@ export async function POST(req: NextRequest) {
           type_action: 'import_pdf',
           entite_type: 'facture',
           entite_id: factRecord.id,
-          details_action: JSON.stringify({ fichier: file.name, lignes: lignes.length }),
+          details_action: JSON.stringify({ fichier: fileName, lignes: lignes.length }),
         });
 
         result.factures_importees++;
         result.details.push(`✓ Facture importée : ${doc.data.numero_facture} (${lignes.length} ligne${lignes.length > 1 ? 's' : ''})`);
       }
     }
-  }
 
-  return NextResponse.json(result);
+    return NextResponse.json(result);
+  } finally {
+    await sb.storage.from('documents').remove([storagePath]);
+  }
 }
