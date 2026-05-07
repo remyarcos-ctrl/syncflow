@@ -130,7 +130,8 @@ export async function POST(req: NextRequest) {
     .from('lignes_be')
     .select('*')
     .eq('be_id', beId)
-    .is('ligne_commande_id', null);
+    .is('ligne_commande_id', null)
+    .eq('hors_systeme', false);
 
   if (errLignesBe) {
     return NextResponse.json({ error: errLignesBe.message }, { status: 500 });
