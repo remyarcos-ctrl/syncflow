@@ -103,13 +103,14 @@ export async function PATCH(req: NextRequest) {
   const qteFact = ligne.quantite_facturee ?? 0;
   const qteResteFacturer = Math.max(0, quantiteReceptionnee - qteFact);
 
-  // Mémoriser la quantité d'origine au premier enregistrement d'une correction
+  // quantite_document_be est posée à l'import (valeur extraite par Claude) et reste immuable.
+  // Les éditions utilisateur ne touchent que quantite_receptionnee — sinon une saisie erronée
+  // figerait la "vérité document" sur une fausse valeur et générerait des écarts fantômes.
   const quantiteDocumentBe = ligne.quantite_document_be ?? ligne.quantite_receptionnee;
 
   const { error: errUpd } = await sb.from('lignes_be').update({
     quantite_receptionnee: quantiteReceptionnee,
     quantite_restante_a_facturer: qteResteFacturer,
-    quantite_document_be: quantiteDocumentBe,
   }).eq('id', ligneBeId);
 
   if (errUpd) {

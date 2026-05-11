@@ -398,8 +398,10 @@ export default function BEDetailPage() {
       qc.invalidateQueries({ queryKey: ['be', id] });
       setEditingQteRecu(prev => prev?.id === vars.ligneBeId ? null : prev);
       if (data.ecart !== 0) {
-        const sens = data.ecart > 0 ? `manquant` : `en excès`;
-        toast.warning(`Écart de ${Math.abs(data.ecart)} unité(s) ${sens} — avoir à réclamer au fournisseur`, { duration: 6000 });
+        const msg = data.ecart > 0
+          ? `Écart de ${data.ecart} unité(s) manquante(s) — avoir à réclamer au fournisseur`
+          : `Écart de ${Math.abs(data.ecart)} unité(s) en surplus — à régulariser avec le fournisseur`;
+        toast.warning(msg, { duration: 6000 });
       }
     },
     onError: (e: Error) => toast.error(e.message),
@@ -566,36 +568,48 @@ export default function BEDetailPage() {
         <StatusBadge status={be.statut_be} />
       </div>
 
-      {/* Bannière écarts / avoir à réclamer */}
-      {lignesEnEcart.length > 0 && (
-        <div className="flex items-start gap-3 rounded-xl border border-orange-200 bg-orange-50 px-4 py-3">
-          <AlertTriangle className="w-4 h-4 text-orange-500 shrink-0 mt-0.5" />
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center justify-between gap-2 flex-wrap">
-              <p className="text-sm font-semibold text-orange-800">
-                {lignesEnEcart.length} ligne{lignesEnEcart.length > 1 ? 's' : ''} en écart — avoir à réclamer au fournisseur
-              </p>
-              <button
-                onClick={openEmailModal}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-orange-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-700 transition-colors shrink-0"
-              >
-                <Mail className="w-3.5 h-3.5" /> Demander l'avoir par email
-              </button>
+      {/* Bannière écarts */}
+      {lignesEnEcart.length > 0 && (() => {
+        const lignesManque = lignesEnEcart.filter(g => (g.qteDoc ?? 0) > g.qteTotale);
+        const lignesSurplus = lignesEnEcart.filter(g => (g.qteDoc ?? 0) < g.qteTotale);
+        const hasManque = lignesManque.length > 0;
+        return (
+          <div className="flex items-start gap-3 rounded-xl border border-orange-200 bg-orange-50 px-4 py-3">
+            <AlertTriangle className="w-4 h-4 text-orange-500 shrink-0 mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <p className="text-sm font-semibold text-orange-800">
+                  {lignesEnEcart.length} ligne{lignesEnEcart.length > 1 ? 's' : ''} en écart —{' '}
+                  {hasManque && lignesSurplus.length > 0
+                    ? 'manque + surplus à régulariser'
+                    : hasManque
+                    ? 'avoir à réclamer au fournisseur'
+                    : 'surplus reçu, à régulariser avec le fournisseur'}
+                </p>
+                {hasManque && (
+                  <button
+                    onClick={openEmailModal}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-orange-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-700 transition-colors shrink-0"
+                  >
+                    <Mail className="w-3.5 h-3.5" /> Demander l'avoir par email
+                  </button>
+                )}
+              </div>
+              <ul className="mt-1 space-y-0.5">
+                {lignesEnEcart.map(g => {
+                  const ecart = (g.qteDoc ?? 0) - g.qteTotale;
+                  return (
+                    <li key={g.ref ?? '_'} className="text-xs text-orange-700 font-mono">
+                      Réf. {g.ref ?? '—'} : doc={g.qteDoc} / reçu={g.qteTotale}
+                      {' '}→ {ecart > 0 ? `−${ecart} (manque)` : `+${Math.abs(ecart)} (surplus)`}
+                    </li>
+                  );
+                })}
+              </ul>
             </div>
-            <ul className="mt-1 space-y-0.5">
-              {lignesEnEcart.map(g => {
-                const ecart = (g.qteDoc ?? 0) - g.qteTotale;
-                return (
-                  <li key={g.ref ?? '_'} className="text-xs text-orange-700 font-mono">
-                    Réf. {g.ref ?? '—'} : doc={g.qteDoc} / reçu={g.qteTotale}
-                    {' '}→ écart {ecart > 0 ? `−${ecart}` : `+${Math.abs(ecart)}`}
-                  </li>
-                );
-              })}
-            </ul>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* KPIs */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">

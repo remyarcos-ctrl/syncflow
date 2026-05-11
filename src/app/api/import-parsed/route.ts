@@ -163,6 +163,7 @@ export async function POST(req: NextRequest) {
             reference_article: l.reference_article,
             designation: l.designation,
             quantite_receptionnee: l.quantite_receptionnee,
+            quantite_document_be: l.quantite_receptionnee,
             quantite_facturee: 0,
             quantite_restante_a_facturer: l.hors_systeme ? 0 : l.quantite_receptionnee,
             hors_systeme: l.hors_systeme ?? false,
