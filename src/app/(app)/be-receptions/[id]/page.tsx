@@ -13,7 +13,7 @@ import { formatEur, formatDate, cn } from '@/utils';
 import {
   ArrowLeft, ExternalLink, Edit2, Save, X, MessageSquare,
   Link2, Unlink, Plus, FileText, ShoppingCart, AlertTriangle,
-  Mail, Trash2, UserPlus, Send, History, Ban, RotateCcw, RefreshCw, Sparkles
+  Mail, Trash2, UserPlus, Send, History, Ban, RotateCcw, RefreshCw, Sparkles, Scissors
 } from 'lucide-react';
 import PDFViewerPanel from '@/components/shared/PDFViewerPanel';
 import { toast } from 'sonner';
@@ -51,6 +51,7 @@ export default function BEDetailPage() {
   const [emailDraft, setEmailDraft] = useState({ to: '', subject: '', body: '' });
   const [selectedCommandeId, setSelectedCommandeId] = useState('');
   const [searchCmd, setSearchCmd] = useState('');
+  const [splitSavModal, setSplitSavModal] = useState<{ ligneId: string; ref: string | null; qteActuelle: number; qteSav: string } | null>(null);
 
   // ── Données ───────────────────────────────────────────────────────────────
   const { data: be } = useQuery<BEReception>({
@@ -419,6 +420,46 @@ export default function BEDetailPage() {
     onSuccess: (_d, { value }) => {
       qc.invalidateQueries({ queryKey: ['lignes_be', id] });
       toast.success(value ? 'Ligne marquée hors système' : 'Ligne réintégrée');
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const splitSavMutation = useMutation({
+    mutationFn: async ({ ligneId, qteSav }: { ligneId: string; qteSav: number }) => {
+      const ligne = lignes.find(l => l.id === ligneId);
+      if (!ligne) throw new Error('Ligne introuvable');
+      const qteActuelle = ligne.quantite_receptionnee ?? 0;
+      if (qteSav <= 0 || qteSav >= qteActuelle)
+        throw new Error(`La quantité SAV doit être entre 1 et ${qteActuelle - 1}`);
+      const nouvelleQte = qteActuelle - qteSav;
+      const qteFact = ligne.quantite_facturee ?? 0;
+      const qteResteFact = Math.max(0, nouvelleQte - qteFact);
+      const maxLigneNo = Math.max(...lignes.map(l => l.ligne_no ?? 0));
+      // Ligne d'origine : on aligne quantite_document_be sur la nouvelle qté pour ne pas créer d'écart fictif (avoir à réclamer)
+      const { error: e1 } = await supabase.from('lignes_be').update({
+        quantite_receptionnee: nouvelleQte,
+        quantite_document_be: nouvelleQte,
+        quantite_restante_a_facturer: qteResteFact,
+      }).eq('id', ligneId);
+      if (e1) throw e1;
+      const { error: e2 } = await supabase.from('lignes_be').insert({
+        be_id: id,
+        ligne_no: maxLigneNo + 1,
+        reference_article: ligne.reference_article,
+        designation: ligne.designation,
+        quantite_receptionnee: qteSav,
+        quantite_document_be: qteSav,
+        quantite_facturee: 0,
+        quantite_restante_a_facturer: 0,
+        hors_systeme: true,
+        commentaire: 'SAV',
+      });
+      if (e2) throw e2;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['lignes_be', id] });
+      setSplitSavModal(null);
+      toast.success('Ligne scindée — portion SAV créée');
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -990,15 +1031,54 @@ export default function BEDetailPage() {
                             <RotateCcw className="w-3 h-3" />
                           </button>
                         </div>
+                      ) : splitSavModal?.ligneId === l.id ? (
+                        <div className="flex items-center gap-1">
+                          <span className="text-xs text-gray-500 mr-1">SAV qté</span>
+                          <Input
+                            type="number"
+                            value={splitSavModal.qteSav}
+                            onChange={e => setSplitSavModal({ ...splitSavModal, qteSav: e.target.value })}
+                            className="h-6 w-16 text-xs text-right font-mono"
+                            autoFocus
+                            onKeyDown={e => {
+                              if (e.key === 'Escape') { setSplitSavModal(null); return; }
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                const qte = parseInt(splitSavModal.qteSav, 10);
+                                if (!isNaN(qte) && qte > 0) splitSavMutation.mutate({ ligneId: l.id, qteSav: qte });
+                              }
+                            }}
+                          />
+                          <button
+                            onClick={() => {
+                              const qte = parseInt(splitSavModal.qteSav, 10);
+                              if (!isNaN(qte) && qte > 0) splitSavMutation.mutate({ ligneId: l.id, qteSav: qte });
+                            }}
+                            className="text-emerald-500 hover:text-emerald-700"
+                            title="Valider"
+                          ><Save className="w-3 h-3" /></button>
+                          <button
+                            onClick={() => setSplitSavModal(null)}
+                            className="text-gray-400 hover:text-gray-600"
+                            title="Annuler"
+                          ><X className="w-3 h-3" /></button>
+                        </div>
                       ) : (
                         <div className="flex items-center gap-1 group/libre">
                           <span className="inline-flex items-center rounded-full bg-gray-50 border border-gray-200 px-2 py-0.5 text-xs font-medium text-gray-400">
                             Libre
                           </span>
                           <button
+                            onClick={() => setSplitSavModal({ ligneId: l.id, ref: l.reference_article, qteActuelle: l.quantite_receptionnee ?? 0, qteSav: '' })}
+                            className="opacity-0 group-hover/libre:opacity-100 p-0.5 rounded hover:bg-violet-50 text-gray-300 hover:text-violet-600 transition-all"
+                            title="Scinder une partie en SAV (hors système)"
+                          >
+                            <Scissors className="w-3 h-3" />
+                          </button>
+                          <button
                             onClick={() => toggleHorsSystemeMutation.mutate({ ligneId: l.id, value: true })}
                             className="opacity-0 group-hover/libre:opacity-100 p-0.5 rounded hover:bg-amber-50 text-gray-300 hover:text-amber-600 transition-all"
-                            title="Marquer comme reçu hors système (commande absente du logiciel)"
+                            title="Marquer toute la ligne comme reçue hors système"
                           >
                             <Ban className="w-3 h-3" />
                           </button>
