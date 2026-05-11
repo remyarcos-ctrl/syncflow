@@ -268,9 +268,11 @@ export default function BEDetailPage() {
   }, [lignes]);
 
   const lignesEnEcart = useMemo(() => {
-    // Grouper par référence pour avoir la vraie qté totale (attribuée + libre)
+    // Grouper par référence pour avoir la vraie qté totale (attribuée + libre).
+    // Les lignes hors_systeme (SAV, retours, etc.) sont exclues — elles ne déclenchent jamais un avoir fournisseur.
     const groupes = new Map<string, { ref: string | null; designation: string | null; qteTotale: number; qteDoc: number | null }>();
     for (const l of lignes) {
+      if (l.hors_systeme) continue;
       const key = l.reference_article ?? `__${l.id}`;
       const g = groupes.get(key);
       if (g) {
