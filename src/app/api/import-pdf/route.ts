@@ -45,8 +45,23 @@ export async function POST(req: NextRequest) {
     details: [] as string[],
   };
 
+  // Persistance : on déplace le PDF de temp/ vers pdf/<timestamp>-<file>.
+  // En cas d'échec de move (collisions, droits), on retombe sur le chemin temp et la suppression de fin n'a pas lieu.
+  const sanitized = String(fileName).replace(/[^a-zA-Z0-9._-]/g, '_');
+  const permanentPath = `pdf/${Date.now()}-${sanitized}`;
+  let pdfPathForUrl = storagePath;
+  let moveSucceeded = false;
   try {
-    const { data: blob, error: dlErr } = await sb.storage.from('documents').download(storagePath);
+    const { error: moveErr } = await sb.storage.from('documents').move(storagePath, permanentPath);
+    if (!moveErr) {
+      pdfPathForUrl = permanentPath;
+      moveSucceeded = true;
+    }
+  } catch { /* fallback to temp path */ }
+  const { data: { publicUrl: pdfUrl } } = sb.storage.from('documents').getPublicUrl(pdfPathForUrl);
+
+  try {
+    const { data: blob, error: dlErr } = await sb.storage.from('documents').download(pdfPathForUrl);
     if (dlErr || !blob) {
       result.erreurs.push(`${fileName} : impossible de télécharger depuis le storage — ${dlErr?.message}`);
       return NextResponse.json(result);
@@ -84,6 +99,7 @@ export async function POST(req: NextRequest) {
           fournisseur: doc.data.fournisseur,
           date_bl: doc.data.date_bl,
           statut_be: 'reçu',
+          pdf_url: pdfUrl,
         }).select('id').single();
 
         if (error || !beRecord) {
@@ -134,6 +150,7 @@ export async function POST(req: NextRequest) {
           total_ttc: doc.data.total_ttc,
           taux_rapprochement: 0,
           statut_facture: 'importée',
+          pdf_url: pdfUrl,
         }).select('id').single();
 
         if (error || !factRecord) {
@@ -190,6 +207,10 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json(result);
   } finally {
-    await sb.storage.from('documents').remove([storagePath]);
+    // Si le move a réussi, le PDF vit dans pdf/ — ne pas le supprimer (utilisé par pdf_url).
+    // Sinon, on nettoie le fichier temp qui est resté en place.
+    if (!moveSucceeded) {
+      await sb.storage.from('documents').remove([storagePath]);
+    }
   }
 }
