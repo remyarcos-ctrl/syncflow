@@ -428,6 +428,30 @@ export default function BEDetailPage() {
     onError: (e: Error) => toast.error(e.message),
   });
 
+  const alignDocMutation = useMutation({
+    mutationFn: async (ref: string | null) => {
+      // Aligne quantite_document_be sur quantite_receptionnee pour toutes les lignes de cette référence sur ce BE.
+      // Utile quand l'écart vient d'une correction de parsing (Claude s'est trompé), pas d'une vraie sous/sur-réception.
+      const cibles = lignes.filter(l => (l.reference_article ?? null) === ref);
+      for (const lb of cibles) {
+        await supabase.from('lignes_be').update({
+          quantite_document_be: lb.quantite_receptionnee,
+        }).eq('id', lb.id);
+      }
+      await supabase.from('journal_activite').insert({
+        type_action: 'alignement_doc_be',
+        entite_type: 'be_reception',
+        entite_id: id,
+        details_action: JSON.stringify({ reference: ref, lignes: cibles.length }),
+      });
+    },
+    onSuccess: (_d, ref) => {
+      qc.invalidateQueries({ queryKey: ['lignes_be', id] });
+      toast.success(`Écart effacé pour ${ref ?? 'la référence'} — doc aligné sur la qté reçue`);
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
   const splitSavMutation = useMutation({
     mutationFn: async ({ ligneId, qteSav }: { ligneId: string; qteSav: number }) => {
       const ligne = lignes.find(l => l.id === ligneId);
@@ -612,9 +636,19 @@ export default function BEDetailPage() {
                 {lignesEnEcart.map(g => {
                   const ecart = (g.qteDoc ?? 0) - g.qteTotale;
                   return (
-                    <li key={g.ref ?? '_'} className="text-xs text-orange-700 font-mono">
-                      Réf. {g.ref ?? '—'} : doc={g.qteDoc} / reçu={g.qteTotale}
-                      {' '}→ {ecart > 0 ? `−${ecart} (manque)` : `+${Math.abs(ecart)} (surplus)`}
+                    <li key={g.ref ?? '_'} className="text-xs text-orange-700 font-mono flex items-center gap-2 flex-wrap">
+                      <span>
+                        Réf. {g.ref ?? '—'} : doc={g.qteDoc} / reçu={g.qteTotale}
+                        {' '}→ {ecart > 0 ? `−${ecart} (manque)` : `+${Math.abs(ecart)} (surplus)`}
+                      </span>
+                      <button
+                        onClick={() => alignDocMutation.mutate(g.ref)}
+                        disabled={alignDocMutation.isPending}
+                        className="inline-flex items-center gap-1 rounded-md border border-orange-300 bg-white px-1.5 py-0.5 text-[10px] font-sans font-medium text-orange-700 hover:bg-orange-100 disabled:opacity-50"
+                        title="Si l'écart vient d'une mauvaise lecture du PDF (Claude s'est trompé), aligner doc sur la qté actuelle pour effacer la fausse alerte"
+                      >
+                        Aligner doc
+                      </button>
                     </li>
                   );
                 })}
