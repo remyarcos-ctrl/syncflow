@@ -240,6 +240,16 @@ export default function CommandeDetailPage() {
     return { qteCmd, qteRecue, qteFact, montantCmd, montantRecuHT, montantFactHT, montantRap };
   }, [lignes, rapprochements]);
 
+  const causeAnomalie = useMemo(() => {
+    if (commande?.statut_commande !== 'en anomalie') return null;
+    const surRecus = lignes.filter(l => computeStatutLigne(l) === 'sur-réceptionné').length;
+    const surFact  = lignes.filter(l => computeStatutLigne(l) === 'sur-facturée').length;
+    const parts: string[] = [];
+    if (surRecus > 0) parts.push(`${surRecus} sur-réceptionné${surRecus > 1 ? 'es' : 'e'}`);
+    if (surFact  > 0) parts.push(`${surFact} sur-facturé${surFact > 1 ? 'es' : 'e'}`);
+    return parts.join(' · ') || null;
+  }, [commande?.statut_commande, lignes]);
+
   // ── Mutations ─────────────────────────────────────────────────────────────
   const saveNotesMutation = useMutation({
     mutationFn: async () => {
@@ -528,9 +538,16 @@ export default function CommandeDetailPage() {
             ))}
           </select>
         ) : (
-          <button onClick={() => setEditingStatut(true)} title="Cliquer pour changer le statut">
-            <StatusBadge status={commande.statut_commande} />
-          </button>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setEditingStatut(true)} title="Cliquer pour changer le statut">
+              <StatusBadge status={commande.statut_commande} />
+            </button>
+            {causeAnomalie && (
+              <span className="text-xs font-medium text-red-600 bg-red-50 border border-red-200 rounded-full px-2.5 py-0.5 shrink-0">
+                {causeAnomalie}
+              </span>
+            )}
+          </div>
         )}
       </div>
 

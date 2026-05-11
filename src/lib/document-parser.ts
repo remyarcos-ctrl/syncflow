@@ -26,6 +26,7 @@ export interface ParsedLigneBE {
   reference_article: string;
   designation: string | null;
   quantite_receptionnee: number;
+  hors_systeme?: boolean;
 }
 
 export interface ParsedBE {
@@ -202,11 +203,12 @@ function processBERaw(raw: Record<string, unknown>): ParsedDocument {
 
   const aggregated = new Map<string, ParsedLigneBE>();
   for (const l of lignes) {
-    const key = normalizeRef(l.reference_article);
+    const isSav = !!(l as ParsedLigneBE & { hors_systeme?: boolean }).hors_systeme;
+    const key = `${normalizeRef(l.reference_article)}|${isSav ? '1' : '0'}`;
     if (aggregated.has(key)) {
       aggregated.get(key)!.quantite_receptionnee += l.quantite_receptionnee;
     } else {
-      aggregated.set(key, { ...l });
+      aggregated.set(key, { ...l, hors_systeme: isSav });
     }
   }
 
@@ -287,7 +289,8 @@ Retourne un tableau JSON (même si un seul document) :
       {
         "reference_article": "référence (IGNORER les codes EXACTEMENT 4 lettres majuscules ex: AAAA, AAFB)",
         "designation": "désignation du produit",
-        "quantite_receptionnee": nombre
+        "quantite_receptionnee": nombre,
+        "hors_systeme": true si la ligne concerne le SAV/Service Après-Vente, false sinon
       }
     ]
   },
@@ -315,8 +318,9 @@ Retourne un tableau JSON (même si un seul document) :
 Règles BE (Colombi-sports) :
 - Ignorer les références EXACTEMENT 4 lettres majuscules (codes position : AAAA, AAFB, etc.)
 - Ignorer les codes EAN/barcodes (chiffres uniquement, 8+ chiffres)
-- Agréger les lignes avec la même référence (additionner les quantités)
+- Agréger les lignes avec la même référence ET le même hors_systeme (additionner les quantités)
 - Pour CARTOUCHE (sans BOITE DE) avec multiplicateur (X 500, PAR 100) → multiplier la quantité
+- Si une ligne mentionne "SAV", "S.A.V.", "Service Après-Vente" ou similaire dans la désignation ou une colonne dédiée → hors_systeme: true
 
 Règles Facture :
 - prix_unitaire = montant_ht / quantite (prix net après remise, pas le prix catalogue)
