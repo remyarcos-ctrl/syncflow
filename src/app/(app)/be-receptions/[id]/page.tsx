@@ -439,7 +439,9 @@ export default function BEDetailPage() {
       const qteFact = ligne.quantite_facturee ?? 0;
       const qteResteFact = Math.max(0, nouvelleQte - qteFact);
       const maxLigneNo = Math.max(...lignes.map(l => l.ligne_no ?? 0));
-      // Ligne d'origine : on aligne quantite_document_be sur la nouvelle qté pour ne pas créer d'écart fictif (avoir à réclamer)
+      // Scission = opération structurelle : on redistribue qte_document_be sur les deux lignes
+      // résultantes (nouvelleQte + qteSav = qteActuelle, donc le total déclaré reste préservé au
+      // niveau du groupe-référence).
       const { error: e1 } = await supabase.from('lignes_be').update({
         quantite_receptionnee: nouvelleQte,
         quantite_document_be: nouvelleQte,
@@ -459,6 +461,17 @@ export default function BEDetailPage() {
         commentaire: 'SAV',
       });
       if (e2) throw e2;
+      await supabase.from('journal_activite').insert({
+        type_action: 'scission_sav',
+        entite_type: 'ligne_be',
+        entite_id: ligneId,
+        details_action: JSON.stringify({
+          reference: ligne.reference_article,
+          qte_originale: qteActuelle,
+          qte_normale: nouvelleQte,
+          qte_sav: qteSav,
+        }),
+      });
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['lignes_be', id] });
