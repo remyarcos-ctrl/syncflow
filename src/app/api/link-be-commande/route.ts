@@ -126,12 +126,15 @@ export async function POST(req: NextRequest) {
   }
 
   // 3. Lignes BE libres (non encore attribuées à une commande)
+  // Exclure hors_systeme (SAV) ET les lignes en cours de retour fournisseur — elles ne doivent jamais
+  // tomber accidentellement dans une commande.
   const { data: lignesBeLibres, error: errLignesBe } = await sb
     .from('lignes_be')
     .select('*')
     .eq('be_id', beId)
     .is('ligne_commande_id', null)
-    .eq('hors_systeme', false);
+    .eq('hors_systeme', false)
+    .is('statut_retour', null);
 
   if (errLignesBe) {
     return NextResponse.json({ error: errLignesBe.message }, { status: 500 });

@@ -260,7 +260,8 @@ export default function BEDetailPage() {
 
   // ── KPIs ──────────────────────────────────────────────────────────────────
   const kpis = useMemo(() => {
-    const lignesActives = lignes.filter(l => !l.hors_systeme);
+    // Excluent hors_systeme (SAV) ET statut_retour (en cours de retour fournisseur)
+    const lignesActives = lignes.filter(l => !l.hors_systeme && !l.statut_retour);
     const qteRecue = lignesActives.reduce((s, l) => s + (l.quantite_receptionnee ?? 0), 0);
     const qteFact = lignesActives.reduce((s, l) => s + (l.quantite_facturee ?? 0), 0);
     const qteReste = lignesActives.reduce((s, l) => s + (l.quantite_restante_a_facturer ?? 0), 0);
@@ -269,10 +270,10 @@ export default function BEDetailPage() {
 
   const lignesEnEcart = useMemo(() => {
     // Grouper par référence pour avoir la vraie qté totale (attribuée + libre).
-    // Les lignes hors_systeme (SAV, retours, etc.) sont exclues — elles ne déclenchent jamais un avoir fournisseur.
+    // Lignes exclues : hors_systeme (SAV) et statut_retour (retour fournisseur) — déjà gérées séparément.
     const groupes = new Map<string, { ref: string | null; designation: string | null; qteTotale: number; qteDoc: number | null }>();
     for (const l of lignes) {
-      if (l.hors_systeme) continue;
+      if (l.hors_systeme || l.statut_retour) continue;
       const key = l.reference_article ?? `__${l.id}`;
       const g = groupes.get(key);
       if (g) {
