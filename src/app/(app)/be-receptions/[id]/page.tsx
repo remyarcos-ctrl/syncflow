@@ -52,6 +52,7 @@ export default function BEDetailPage() {
   const [selectedCommandeId, setSelectedCommandeId] = useState('');
   const [searchCmd, setSearchCmd] = useState('');
   const [splitSavModal, setSplitSavModal] = useState<{ ligneId: string; ref: string | null; qteActuelle: number; qteSav: string } | null>(null);
+  const [retourModal, setRetourModal] = useState<{ ligneId: string; ref: string | null; qte: number; motif: string } | null>(null);
 
   // ── Données ───────────────────────────────────────────────────────────────
   const { data: be } = useQuery<BEReception>({
@@ -268,6 +269,18 @@ export default function BEDetailPage() {
     return { qteRecue, qteFact, qteReste };
   }, [lignes]);
 
+  // Lignes "à arbitrer" : libres (pas de commande), pas hors-système, pas en retour, qté > 0.
+  // C'est le surplus reçu qui n'est rattaché à rien et doit être traité par l'entrepôt.
+  const lignesAArbitrer = useMemo(
+    () => lignes.filter(l =>
+      !l.ligne_commande_id &&
+      !l.hors_systeme &&
+      !l.statut_retour &&
+      (l.quantite_receptionnee ?? 0) > 0
+    ),
+    [lignes],
+  );
+
   const lignesEnEcart = useMemo(() => {
     // Grouper par référence pour avoir la vraie qté totale (attribuée + libre).
     // Lignes exclues : hors_systeme (SAV) et statut_retour (retour fournisseur) — déjà gérées séparément.
@@ -425,6 +438,48 @@ export default function BEDetailPage() {
     onSuccess: (_d, { value }) => {
       qc.invalidateQueries({ queryKey: ['lignes_be', id] });
       toast.success(value ? 'Ligne marquée hors système' : 'Ligne réintégrée');
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const marquerRetourMutation = useMutation({
+    mutationFn: async ({ ligneId, motif }: { ligneId: string; motif: string }) => {
+      const { error } = await supabase.from('lignes_be').update({
+        statut_retour: 'a_retourner',
+        motif_retour: motif || null,
+      }).eq('id', ligneId);
+      if (error) throw error;
+      await supabase.from('journal_activite').insert({
+        type_action: 'marquage_retour',
+        entite_type: 'ligne_be',
+        entite_id: ligneId,
+        details_action: JSON.stringify({ motif }),
+      });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['lignes_be', id] });
+      setRetourModal(null);
+      toast.success('Ligne marquée à retourner — visible dans la page Surplus');
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const creerCmdComplementMutation = useMutation({
+    mutationFn: async (ligneId: string) => {
+      const r = await fetch('/api/creer-commande-complement', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ligneBeId: ligneId }),
+      });
+      const json = await r.json();
+      if (!r.ok) throw new Error(json.error ?? 'Erreur création commande complément');
+      return json as { commande_id: string; numero_commande: string };
+    },
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ['lignes_be', id] });
+      qc.invalidateQueries({ queryKey: ['liaisons_be_commande', id] });
+      qc.invalidateQueries({ queryKey: ['commandes_be', id] });
+      toast.success(`Commande complément créée : ${data.numero_commande}`);
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -604,6 +659,11 @@ export default function BEDetailPage() {
           <p className="text-sm text-gray-500">{be.fournisseur}</p>
         </div>
         <StatusBadge status={be.statut_be} />
+        {lignesAArbitrer.length > 0 && (
+          <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 border border-amber-200 px-2 py-0.5 text-xs font-medium text-amber-700">
+            <AlertTriangle className="w-3 h-3" /> {lignesAArbitrer.length} à arbitrer
+          </span>
+        )}
       </div>
 
       {/* Bannière écarts */}
@@ -1172,6 +1232,105 @@ export default function BEDetailPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Panneau d'arbitrage du surplus */}
+      {lignesAArbitrer.length > 0 && (
+        <Card className="border-amber-200 bg-amber-50/30">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2 text-amber-800">
+              <AlertTriangle className="w-4 h-4" />
+              {lignesAArbitrer.length} ligne{lignesAArbitrer.length > 1 ? 's' : ''} à arbitrer
+              <span className="text-xs font-normal text-amber-700">— surplus reçu sans commande associée</span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pt-1">
+            <p className="text-xs text-amber-700 mb-2">
+              Pour chaque ligne : <strong>retourner au fournisseur</strong>, <strong>créer une commande complément</strong> (pour garder), ou marquer <strong>hors système</strong> (SAV).
+            </p>
+            <div className="space-y-2">
+              {lignesAArbitrer.map(l => (
+                <div key={l.id} className="flex items-center gap-2 rounded-lg border border-amber-200 bg-white p-2.5 flex-wrap">
+                  <div className="flex-1 min-w-[200px]">
+                    <p className="text-xs font-mono font-semibold text-gray-800">{l.reference_article}</p>
+                    <p className="text-xs text-gray-500 truncate">{l.designation}</p>
+                  </div>
+                  <span className="text-sm font-mono font-bold text-amber-700 px-2 py-0.5 rounded bg-amber-100">
+                    {l.quantite_receptionnee} u.
+                  </span>
+                  <button
+                    onClick={() => setRetourModal({ ligneId: l.id, ref: l.reference_article, qte: l.quantite_receptionnee ?? 0, motif: 'Quantité excessive' })}
+                    className="inline-flex items-center gap-1 rounded-md border border-orange-300 bg-white px-2 py-1 text-xs font-medium text-orange-700 hover:bg-orange-50"
+                  >
+                    <Send className="w-3 h-3" /> À retourner
+                  </button>
+                  <button
+                    onClick={() => creerCmdComplementMutation.mutate(l.id)}
+                    disabled={creerCmdComplementMutation.isPending}
+                    className="inline-flex items-center gap-1 rounded-md border border-indigo-300 bg-white px-2 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-50 disabled:opacity-50"
+                  >
+                    <Plus className="w-3 h-3" /> Créer commande
+                  </button>
+                  <button
+                    onClick={() => toggleHorsSystemeMutation.mutate({ ligneId: l.id, value: true })}
+                    className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-2 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50"
+                  >
+                    <Ban className="w-3 h-3" /> Hors système
+                  </button>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Modal "À retourner" */}
+      {retourModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md flex flex-col gap-4 p-6">
+            <div className="flex items-center justify-between">
+              <h2 className="text-base font-semibold text-gray-900 flex items-center gap-2">
+                <Send className="w-4 h-4 text-orange-500" /> Marquer à retourner
+              </h2>
+              <button onClick={() => setRetourModal(null)} className="p-1.5 rounded hover:bg-gray-100 text-gray-400">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <p className="text-xs text-gray-500">
+              Réf. <span className="font-mono font-semibold text-gray-800">{retourModal.ref}</span> — <span className="font-semibold">{retourModal.qte} u.</span>
+            </p>
+            <div>
+              <label className="text-xs font-medium text-gray-500 mb-1 block">Motif</label>
+              <select
+                value={retourModal.motif}
+                onChange={e => setRetourModal({ ...retourModal, motif: e.target.value })}
+                className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-orange-400"
+              >
+                <option>Quantité excessive</option>
+                <option>Marchandise non commandée</option>
+                <option>Erreur de livraison</option>
+                <option>Marchandise endommagée</option>
+                <option>Non-conformité</option>
+                <option>Autre</option>
+              </select>
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
+              <button
+                onClick={() => setRetourModal(null)}
+                className="px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-100 rounded-lg"
+              >
+                Annuler
+              </button>
+              <button
+                onClick={() => marquerRetourMutation.mutate({ ligneId: retourModal.ligneId, motif: retourModal.motif })}
+                disabled={marquerRetourMutation.isPending}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-orange-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-700 disabled:opacity-50"
+              >
+                <Send className="w-3.5 h-3.5" /> Marquer à retourner
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <PDFViewerPanel url={be.pdf_url} open={showPDF} onClose={() => setShowPDF(false)} title={`BE ${be.numero_be}`} />
 
