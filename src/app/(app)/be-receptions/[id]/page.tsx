@@ -442,6 +442,26 @@ export default function BEDetailPage() {
     onError: (e: Error) => toast.error(e.message),
   });
 
+  const deleteLigneMutation = useMutation({
+    mutationFn: async (ligneId: string) => {
+      const r = await fetch('/api/delete-ligne-be', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ligneBeId: ligneId }),
+      });
+      const json = await r.json();
+      if (!r.ok) throw new Error(json.error ?? 'Erreur suppression');
+      return json;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['lignes_be', id] });
+      qc.invalidateQueries({ queryKey: ['be', id] });
+      qc.invalidateQueries({ queryKey: ['commandes_be', id] });
+      toast.success('Ligne supprimée — balances de la commande recalculées');
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
   const marquerRetourMutation = useMutation({
     mutationFn: async ({ ligneId, motif }: { ligneId: string; motif: string }) => {
       const { error } = await supabase.from('lignes_be').update({
@@ -1211,17 +1231,33 @@ export default function BEDetailPage() {
                     </td>
                     <td className="px-4 py-2.5"><StatusBadge status={l.statut_ligne_be} /></td>
                     <td className="px-4 py-2.5 text-center">
-                      {editingLineNotes?.id === l.id ? (
-                        <div className="flex items-center gap-1">
-                          <Input value={editingLineNotes.value} onChange={e => setEditingLineNotes({ id: l.id, value: e.target.value })} className="h-6 text-xs" autoFocus />
-                          <button onClick={() => saveLineNotesMutation.mutate({ lineId: l.id, comment: editingLineNotes.value })} className="text-emerald-500"><Save className="w-3 h-3" /></button>
-                          <button onClick={() => setEditingLineNotes(null)} className="text-gray-400"><X className="w-3 h-3" /></button>
-                        </div>
-                      ) : (
-                        <button onClick={() => setEditingLineNotes({ id: l.id, value: l.commentaire ?? '' })} className="p-1 rounded hover:bg-gray-100" title={l.commentaire ?? ''}>
-                          <MessageSquare className={cn('w-3.5 h-3.5', l.commentaire ? 'text-indigo-500 fill-indigo-100' : 'text-gray-300')} />
-                        </button>
-                      )}
+                      <div className="flex items-center justify-center gap-1 group/note">
+                        {editingLineNotes?.id === l.id ? (
+                          <>
+                            <Input value={editingLineNotes.value} onChange={e => setEditingLineNotes({ id: l.id, value: e.target.value })} className="h-6 text-xs" autoFocus />
+                            <button onClick={() => saveLineNotesMutation.mutate({ lineId: l.id, comment: editingLineNotes.value })} className="text-emerald-500"><Save className="w-3 h-3" /></button>
+                            <button onClick={() => setEditingLineNotes(null)} className="text-gray-400"><X className="w-3 h-3" /></button>
+                          </>
+                        ) : (
+                          <>
+                            <button onClick={() => setEditingLineNotes({ id: l.id, value: l.commentaire ?? '' })} className="p-1 rounded hover:bg-gray-100" title={l.commentaire ?? ''}>
+                              <MessageSquare className={cn('w-3.5 h-3.5', l.commentaire ? 'text-indigo-500 fill-indigo-100' : 'text-gray-300')} />
+                            </button>
+                            <button
+                              onClick={() => {
+                                if (confirm(`Supprimer la ligne ${l.reference_article} (${l.quantite_receptionnee} u.) ?\nLes balances de la commande liée seront recalculées.`)) {
+                                  deleteLigneMutation.mutate(l.id);
+                                }
+                              }}
+                              disabled={deleteLigneMutation.isPending}
+                              className="opacity-0 group-hover/note:opacity-100 p-1 rounded hover:bg-red-50 text-gray-300 hover:text-red-500 transition-all disabled:opacity-50"
+                              title="Supprimer cette ligne (ligne fantôme, doublon, etc.)"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </td>
                   </tr>
                   );
