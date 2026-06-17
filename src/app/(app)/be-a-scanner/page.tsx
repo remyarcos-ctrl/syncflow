@@ -14,7 +14,17 @@ interface Commande {
   fournisseur: string | null;
   date_commande: string | null;
   statut_commande: string | null;
+  bls_centralink: string | null;
 }
+interface BL { type: 'be' | 'note'; ref: string }
+
+const parseBls = (s: string | null): BL[] => {
+  if (!s) return [];
+  try {
+    const arr = JSON.parse(s);
+    return Array.isArray(arr) ? arr.filter((x) => x && x.ref) : [];
+  } catch { return []; }
+};
 interface LigneRecu {
   commande_id: string;
   quantite_receptionnee_reelle: number | null;
@@ -38,7 +48,7 @@ export default function BeAScannerPage() {
     queryFn: async () => {
       const { data } = await supabase
         .from('commandes')
-        .select('id, numero_commande_interne, fournisseur, date_commande, statut_commande');
+        .select('id, numero_commande_interne, fournisseur, date_commande, statut_commande, bls_centralink');
       return data ?? [];
     },
     refetchInterval: 15000,
@@ -78,6 +88,7 @@ export default function BeAScannerPage() {
       ...c,
       recu: recuByCmd.get(c.id) ?? 0,
       aBE: cmdAvecBE.has(normNum(c.numero_commande_interne)),
+      bls: parseBls(c.bls_centralink),
     }));
 
     const aScanner = enrichies
@@ -138,6 +149,7 @@ export default function BeAScannerPage() {
                     <th className="px-4 py-2.5 font-medium">Fournisseur</th>
                     <th className="px-4 py-2.5 font-medium">Date</th>
                     <th className="px-4 py-2.5 font-medium">Statut</th>
+                    <th className="px-4 py-2.5 font-medium">Bon de livraison</th>
                     <th className="px-4 py-2.5 font-medium text-right">Reçu (unités)</th>
                     <th className="px-4 py-2.5"></th>
                   </tr>
@@ -155,6 +167,23 @@ export default function BeAScannerPage() {
                           {c.statut_commande ?? '—'}
                         </span>
                       </td>
+                      <td className="px-4 py-2.5">
+                        {c.bls.length === 0 ? (
+                          <span className="text-xs text-gray-300">—</span>
+                        ) : (
+                          <div className="flex flex-col gap-1">
+                            {c.bls.map((bl, k) => bl.type === 'be' ? (
+                              <span key={k} className="inline-flex items-center w-fit gap-1 px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 text-xs font-mono font-medium">
+                                {bl.ref}
+                              </span>
+                            ) : (
+                              <span key={k} className="inline-flex items-center w-fit gap-1 px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 text-xs" title="Réception sans bon de livraison saisi par la log">
+                                ⚠ {bl.ref}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </td>
                       <td className="px-4 py-2.5 text-right font-medium text-gray-900">{c.recu}</td>
                       <td className="px-4 py-2.5 text-right">
                         <Link href={`/commandes/${c.id}`} className="inline-flex items-center gap-0.5 text-xs text-indigo-600 hover:text-indigo-800">
@@ -170,9 +199,10 @@ export default function BeAScannerPage() {
         </CardContent>
       </Card>
 
-      <p className="text-xs text-gray-400">
-        Astuce : « Reçu (unités) » = total déjà réceptionné côté Centralink (③). Si une commande n&apos;apparaît plus ici après import,
-        c&apos;est que son BE est bien rattaché. Les commandes sans aucun reçu ne sont pas listées (rien à scanner pour l&apos;instant).
+      <p className="text-xs text-gray-400 max-w-3xl">
+        « Bon de livraison » : badge <span className="font-mono text-indigo-600">bleu</span> = n° de BE à scanner ;
+        badge <span className="text-amber-600">⚠ orange</span> = la log a réceptionné <strong>sans saisir de bon de livraison</strong> (note libre)
+        — il n&apos;y a peut-être pas de papier à scanner, à vérifier. « — » = synchro Centralink pas encore relancée.
       </p>
     </div>
   );
