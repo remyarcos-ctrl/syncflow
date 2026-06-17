@@ -210,6 +210,22 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // Trace du coût Claude de cet import (1 ligne par fichier), pour l'onglet Coûts Claude.
+    if (result.cout_eur > 0) {
+      await sb.from('journal_activite').insert({
+        type_action: 'cout_claude',
+        entite_type: 'import',
+        details_action: JSON.stringify({
+          fichier: fileName,
+          cout_eur: result.cout_eur,
+          moteur: result.moteur,
+          bes: result.bes_importes,
+          factures: result.factures_importees,
+          doublons: result.doublons_ignores,
+        }),
+      });
+    }
+
     return NextResponse.json(result);
   } finally {
     // Si le move a réussi, le PDF vit dans pdf/ — ne pas le supprimer (utilisé par pdf_url).

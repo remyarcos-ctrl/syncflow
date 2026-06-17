@@ -5,7 +5,7 @@ import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard, Mail, Package, FileText,
   Link2, AlertTriangle, ClipboardList, Building2, Settings,
-  TrendingUp, X, Upload, Bell, Receipt, Bot, GitCompare
+  TrendingUp, X, Upload, Bell, Receipt, Bot, GitCompare, Coins
 } from 'lucide-react';
 import { cn } from '@/utils';
 
@@ -22,6 +22,7 @@ const navGroups = [
       { label: 'BE / Réceptions',  href: '/be-receptions',       icon: Package },
       { label: 'Rappro. pointage', href: '/rapprochement-pointage', icon: GitCompare },
       { label: 'Import PDF',       href: '/import',              icon: Upload },
+      { label: 'Coûts Claude',     href: '/couts-claude',        icon: Coins },
     ],
   },
   {
