@@ -5,7 +5,7 @@ import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard, Mail, ShoppingCart, Package, FileText,
   Link2, AlertTriangle, ClipboardList, Building2, Settings,
-  TrendingUp, X, PackageOpen, Upload, Tag, Truck, Bell, Receipt, Bot
+  TrendingUp, X, PackageOpen, Upload, Tag, Truck, Bell, Receipt, Bot, GitCompare
 } from 'lucide-react';
 import { cn } from '@/utils';
 
@@ -21,6 +21,7 @@ const navGroups = [
     items: [
       { label: 'Commandes',        href: '/commandes',           icon: ShoppingCart },
       { label: 'BE / Réceptions',  href: '/be-receptions',       icon: Package },
+      { label: 'Rappro. pointage', href: '/rapprochement-pointage', icon: GitCompare },
       { label: 'Réception du jour', href: '/reception-du-jour',  icon: Truck },
       { label: 'Surplus / Libres', href: '/surplus',             icon: PackageOpen },
       { label: 'Import PDF',       href: '/import',              icon: Upload },
