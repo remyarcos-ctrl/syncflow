@@ -3,9 +3,9 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
-  LayoutDashboard, Mail, ShoppingCart, Package, FileText,
+  LayoutDashboard, Mail, Package, FileText,
   Link2, AlertTriangle, ClipboardList, Building2, Settings,
-  TrendingUp, X, PackageOpen, Upload, Tag, Truck, Bell, Receipt, Bot, GitCompare
+  TrendingUp, X, Upload, Bell, Receipt, Bot, GitCompare
 } from 'lucide-react';
 import { cn } from '@/utils';
 
@@ -17,13 +17,10 @@ const navGroups = [
     ],
   },
   {
-    label: 'Achats',
+    label: 'Réceptions',
     items: [
-      { label: 'Commandes',        href: '/commandes',           icon: ShoppingCart },
       { label: 'BE / Réceptions',  href: '/be-receptions',       icon: Package },
       { label: 'Rappro. pointage', href: '/rapprochement-pointage', icon: GitCompare },
-      { label: 'Réception du jour', href: '/reception-du-jour',  icon: Truck },
-      { label: 'Surplus / Libres', href: '/surplus',             icon: PackageOpen },
       { label: 'Import PDF',       href: '/import',              icon: Upload },
     ],
   },
@@ -49,7 +46,6 @@ const navGroups = [
   {
     label: 'Admin',
     items: [
-      { label: 'Catalogue prix',  href: '/prix-reference',    icon: Tag },
       { label: 'Fournisseurs',    href: '/fournisseurs',      icon: Building2 },
       { label: 'Paramètres',      href: '/settings',          icon: Settings },
     ],
