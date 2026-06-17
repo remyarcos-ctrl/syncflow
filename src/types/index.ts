@@ -56,6 +56,17 @@ export interface Fournisseur {
   updated_at: string;
 }
 
+export interface SaisieCL {
+  id: string;
+  numero_be: string;
+  reference_article: string | null;
+  ean13: string | null;
+  quantite_recue: number;
+  commande_ref: string | null;
+  source: string;
+  updated_at: string;
+}
+
 export interface Commande {
   id: string;
   numero_commande_interne: string;

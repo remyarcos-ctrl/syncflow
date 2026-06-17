@@ -19,7 +19,7 @@ import PDFViewerPanel from '@/components/shared/PDFViewerPanel';
 import { toast } from 'sonner';
 import type {
   BEReception, LigneBE, Commande, LigneCommande, Facture,
-  LiaisonBECommande, Rapprochement, ContactFournisseur, JournalActivite
+  LiaisonBECommande, Rapprochement, ContactFournisseur, JournalActivite, SaisieCL
 } from '@/types';
 
 const normalizeRef = (s: string | null | undefined) =>
@@ -114,6 +114,43 @@ export default function BEDetailPage() {
     },
     enabled: factureIds.length > 0, refetchInterval: 5000,
   });
+
+  // ── Saisies de réception Centralink (③) pour ce BE ─────────────────────────
+  const { data: saisiesCl = [] } = useQuery<SaisieCL[]>({
+    queryKey: ['saisies_cl', be?.numero_be],
+    queryFn: async () => {
+      if (!be?.numero_be) return [];
+      const { data } = await supabase.from('saisies_cl').select('*').eq('numero_be', be.numero_be);
+      return data ?? [];
+    },
+    enabled: !!be?.numero_be, refetchInterval: 5000,
+  });
+
+  // Rapprochement ② BE papier (scan) ↔ ③ saisie CL (log) par référence
+  const rappCl = useMemo(() => {
+    const papier = new Map<string, number>();
+    const label = new Map<string, string>();
+    for (const l of lignes) {
+      if (l.statut_retour || l.hors_systeme) continue;
+      const k = normalizeRef(l.reference_article);
+      papier.set(k, (papier.get(k) ?? 0) + (l.quantite_receptionnee ?? 0));
+      if (!label.has(k)) label.set(k, l.reference_article ?? k);
+    }
+    const cl = new Map<string, number>();
+    for (const s of saisiesCl) {
+      const k = normalizeRef(s.reference_article);
+      cl.set(k, (cl.get(k) ?? 0) + (s.quantite_recue ?? 0));
+      if (!label.has(k)) label.set(k, s.reference_article ?? k);
+    }
+    const keys = new Set<string>([...papier.keys(), ...cl.keys()]);
+    const rows = [...keys].map(k => {
+      const p = papier.has(k) ? papier.get(k)! : null;
+      const c = cl.has(k) ? cl.get(k)! : null;
+      return { ref: label.get(k) ?? k, papier: p, cl: c, ecart: (p ?? 0) - (c ?? 0) };
+    }).sort((a, b) => Math.abs(b.ecart) - Math.abs(a.ecart) || a.ref.localeCompare(b.ref));
+    const nbEcarts = rows.filter(r => Math.abs(r.ecart) > 0.001).length;
+    return { rows, nbEcarts, hasCl: saisiesCl.length > 0 };
+  }, [lignes, saisiesCl]);
 
   // Commandes candidates : même fournisseur, non encore liées
   const { data: commandesCandidates = [] } = useQuery<Commande[]>({
@@ -1054,6 +1091,68 @@ export default function BEDetailPage() {
             <p className="text-sm text-gray-600 whitespace-pre-wrap min-h-5">
               {notes || <span className="text-gray-400 italic">Aucune note</span>}
             </p>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Rapprochement ② BL papier ↔ ③ saisie Centralink (pointage log) */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-sm">
+            <RefreshCw className="w-4 h-4 text-indigo-600" />
+            Rapprochement saisie Centralink (③ pointage log)
+            {rappCl.hasCl && (
+              <span className={cn('ml-1 text-xs px-2 py-0.5 rounded-full font-medium',
+                rappCl.nbEcarts === 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700')}>
+                {rappCl.nbEcarts === 0 ? 'pointage conforme' : `${rappCl.nbEcarts} écart(s) de pointage`}
+              </span>
+            )}
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          {!rappCl.hasCl ? (
+            <p className="px-4 py-3 text-sm text-gray-500">
+              Aucune saisie Centralink en base pour ce BE ({be?.numero_be}). Lance le chargement des saisies CL pour activer le rapprochement.
+            </p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-gray-50/50 border-y border-gray-100">
+                    <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500">Réf.</th>
+                    <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500">② BL papier</th>
+                    <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500">③ saisie CL</th>
+                    <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500">Écart</th>
+                    <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500">Verdict</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rappCl.rows.map(r => {
+                    const ko = Math.abs(r.ecart) > 0.001;
+                    return (
+                      <tr key={r.ref} className={cn('border-b border-gray-50', ko && 'bg-amber-50/40')}>
+                        <td className="px-4 py-2 font-mono text-xs">{r.ref}</td>
+                        <td className="px-4 py-2 text-right tabular-nums">{r.papier ?? '—'}</td>
+                        <td className="px-4 py-2 text-right tabular-nums">{r.cl ?? '—'}</td>
+                        <td className={cn('px-4 py-2 text-right font-semibold tabular-nums', ko ? 'text-amber-700' : 'text-gray-300')}>
+                          {ko ? (r.ecart > 0 ? `+${r.ecart}` : r.ecart) : '0'}
+                        </td>
+                        <td className="px-4 py-2 text-xs">
+                          {!ko ? <span className="text-emerald-600">conforme</span>
+                            : r.papier == null ? <span className="text-amber-700">en plus dans CL (absent du BL papier)</span>
+                            : r.cl == null ? <span className="text-amber-700">non saisi par la log</span>
+                            : r.ecart > 0 ? <span className="text-amber-700">log a sous-saisi de {r.ecart}</span>
+                            : <span className="text-amber-700">log a sur-saisi de {-r.ecart}</span>}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              <p className="px-4 py-2.5 text-xs text-gray-400 border-t border-gray-100">
+                ② = ce que tu as scanné (BL papier Colombi). ③ = ce que la log a saisi dans Centralink. Un écart = erreur de pointage interne (à corriger côté Centralink), sans impact sur la facturation Colombi.
+              </p>
+            </div>
           )}
         </CardContent>
       </Card>
