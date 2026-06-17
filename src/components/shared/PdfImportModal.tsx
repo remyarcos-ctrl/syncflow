@@ -16,9 +16,15 @@ interface ApiResult {
   bes_importes: number;
   factures_importees: number;
   doublons_ignores: number;
+  cout_eur: number;
+  moteur: string;
   erreurs: string[];
   details: string[];
 }
+
+// Coût Claude : en centimes sous 1 €, sinon en euros.
+const formatCost = (eur: number): string =>
+  eur < 1 ? `${(eur * 100).toFixed(1).replace('.', ',')} c` : `${eur.toFixed(2).replace('.', ',')} €`;
 
 interface Props {
   open: boolean;
@@ -34,6 +40,7 @@ export default function PdfImportModal({ open, onClose, onSuccess, title = 'Impo
   const [fileResults, setFileResults] = useState<FileResult[]>([]);
   const [running, setRunning] = useState(false);
   const [done, setDone] = useState(false);
+  const [totalCost, setTotalCost] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
   if (!open) return null;
@@ -60,8 +67,10 @@ export default function PdfImportModal({ open, onClose, onSuccess, title = 'Impo
   const handleImport = async () => {
     if (files.length === 0 || running) return;
     setRunning(true);
+    setTotalCost(0);
 
     let totalImported = 0;
+    let coutCumul = 0;
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
@@ -95,13 +104,16 @@ export default function PdfImportModal({ open, onClose, onSuccess, title = 'Impo
         }
         const data = await r.json() as ApiResult;
 
+        coutCumul += data.cout_eur ?? 0;
+        const coutStr = data.cout_eur > 0 ? ` · ${data.moteur} ${formatCost(data.cout_eur)}` : '';
+
         const imported = data.bes_importes + data.factures_importees;
         if (imported > 0) {
           totalImported += imported;
           const msg = data.details[0] ?? `${imported} importé(s)`;
-          updateResult(i, { status: 'done', message: msg });
+          updateResult(i, { status: 'done', message: `${msg}${coutStr}` });
         } else if (data.doublons_ignores > 0) {
-          updateResult(i, { status: 'duplicate', message: 'Doublon — déjà importé' });
+          updateResult(i, { status: 'duplicate', message: `Doublon — déjà importé${coutStr}` });
         } else if (data.erreurs.length > 0) {
           updateResult(i, { status: 'error', message: data.erreurs[0] });
         } else {
@@ -113,6 +125,7 @@ export default function PdfImportModal({ open, onClose, onSuccess, title = 'Impo
       if (i < files.length - 1) await new Promise((res) => setTimeout(res, DELAY_MS));
     }
 
+    setTotalCost(coutCumul);
     if (totalImported > 0) onSuccess();
     setRunning(false);
     setDone(true);
@@ -123,6 +136,7 @@ export default function PdfImportModal({ open, onClose, onSuccess, title = 'Impo
     setFiles([]);
     setFileResults([]);
     setDone(false);
+    setTotalCost(0);
     onClose();
   };
 
@@ -179,6 +193,11 @@ export default function PdfImportModal({ open, onClose, onSuccess, title = 'Impo
                   style={{ width: `${progress}%` }}
                 />
               </div>
+              {done && totalCost > 0 && (
+                <p className="text-xs text-gray-400 text-right pt-0.5">
+                  Coût Claude total : <span className="font-medium text-gray-600">{formatCost(totalCost)}</span>
+                </p>
+              )}
             </div>
           )}
 

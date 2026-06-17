@@ -61,7 +61,6 @@ export default function CommandeDetailPage() {
   const [editingDate, setEditingDate] = useState(false);
   const [dateValue, setDateValue] = useState('');
   const [editingLineNotes, setEditingLineNotes] = useState<{ id: string; value: string } | null>(null);
-  const [editingInitQte, setEditingInitQte] = useState<{ id: string; value: string } | null>(null);
   const [editingQteCmd, setEditingQteCmd] = useState<{ id: string; value: string } | null>(null);
   const [editingDesig, setEditingDesig] = useState<{ id: string; value: string } | null>(null);
   const [editingStatut, setEditingStatut] = useState(false);
@@ -137,31 +136,6 @@ export default function CommandeDetailPage() {
     enabled: !!id, refetchInterval: 5000,
   });
 
-  const { data: initBE } = useQuery<{ id: string } | null>({
-    queryKey: ['init_be', commande?.numero_commande_interne],
-    queryFn: async () => {
-      const { data } = await supabase
-        .from('be_receptions')
-        .select('id')
-        .eq('numero_be', `INIT-${commande!.numero_commande_interne}`)
-        .maybeSingle();
-      return data as { id: string } | null;
-    },
-    enabled: !!commande?.numero_commande_interne,
-  });
-
-  type InitLigne = { ligne_commande_id: string | null; quantite_receptionnee: number };
-  const { data: initLignes = [] } = useQuery<InitLigne[]>({
-    queryKey: ['init_lignes', initBE?.id],
-    queryFn: async () => {
-      const { data } = await supabase
-        .from('lignes_be')
-        .select('ligne_commande_id, quantite_receptionnee')
-        .eq('be_id', initBE!.id);
-      return (data ?? []) as InitLigne[];
-    },
-    enabled: !!initBE?.id,
-  });
 
   // BEs disponibles à lier (même fournisseur, non liés)
   const { data: besDisponibles = [] } = useQuery<BEReception[]>({
@@ -359,26 +333,6 @@ export default function CommandeDetailPage() {
     onError: (e: Error) => toast.error(e.message),
   });
 
-  const initReceptionMutation = useMutation({
-    mutationFn: async ({ ligneCommandeId, quantite }: { ligneCommandeId: string; quantite: number }) => {
-      const r = await fetch('/api/init-reception', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ commandeId: id, ligneCommandeId, quantite }),
-      });
-      if (!r.ok) throw new Error((await r.json() as { error?: string }).error ?? 'Erreur');
-    },
-    onSuccess: (_data, { ligneCommandeId }) => {
-      qc.invalidateQueries({ queryKey: ['lignes_commande', id] });
-      qc.invalidateQueries({ queryKey: ['commande', id] });
-      qc.invalidateQueries({ queryKey: ['init_be', commande?.numero_commande_interne] });
-      qc.invalidateQueries({ queryKey: ['init_lignes'] });
-      qc.invalidateQueries({ queryKey: ['liaisons_be', id] });
-      qc.invalidateQueries({ queryKey: ['bes_commande', id] });
-      setEditingInitQte(prev => prev?.id === ligneCommandeId ? null : prev);
-    },
-    onError: (e: Error) => toast.error(e.message),
-  });
 
   const lookupPrix = async (ref: string) => {
     if (!ref.trim() || !commande?.fournisseur) { setPrixSuggere(null); return; }
@@ -589,7 +543,7 @@ export default function CommandeDetailPage() {
 
         {[
           { label: 'Qté commandée', value: kpis.qteCmd },
-          { label: 'Qté reçue', value: kpis.qteRecue },
+          { label: 'Reçu (saisie CL)', value: kpis.qteRecue },
           { label: 'Qté facturée', value: kpis.qteFact },
           { label: 'Montant total', value: formatEur(commande.montant_total_commande ?? (kpis.montantCmd || null)) },
         ].map(k => (
@@ -876,8 +830,7 @@ export default function CommandeDetailPage() {
                   <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500">Réf.</th>
                   <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500">Désignation</th>
                   <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500" title="Cliquer sur une valeur pour la modifier">Qté cmd ✎</th>
-                  <th className="text-right px-4 py-2.5 text-xs font-semibold text-indigo-400" title="Quantités reçues avant le démarrage de SyncFlow — cliquer pour saisir">Qté init. ✎</th>
-                  <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500">{modeRecu === 'unites' ? 'Qté reçue' : 'Reçu HT €'}</th>
+                  <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500" title="Quantité reçue d'après la saisie de la log dans Centralink (③)">{modeRecu === 'unites' ? 'Reçu (saisie CL)' : 'Reçu HT €'}</th>
                   <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500">Qté facturée</th>
                   <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500">PU €</th>
                   <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500">Total HT</th>
@@ -887,7 +840,6 @@ export default function CommandeDetailPage() {
               </thead>
               <tbody className="divide-y divide-gray-50">
                 {lignes.map(l => {
-                  const initQte = initLignes.find(il => il.ligne_commande_id === l.id)?.quantite_receptionnee ?? null;
                   return (
                   <tr key={l.id} className="hover:bg-gray-50/50">
                     <td className="px-4 py-2.5 text-xs text-gray-400">{l.ligne_no}</td>
@@ -960,42 +912,6 @@ export default function CommandeDetailPage() {
                           title="Cliquer pour modifier la quantité commandée"
                         >
                           {l.quantite_commandee}
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-4 py-2.5 text-right font-mono text-xs">
-                      {editingInitQte?.id === l.id ? (
-                        <div className="flex items-center justify-end gap-1">
-                          <Input
-                            type="number" min="0"
-                            value={editingInitQte.value}
-                            onChange={e => setEditingInitQte({ id: l.id, value: e.target.value })}
-                            onKeyDown={e => {
-                              if (e.key === 'Escape') { setEditingInitQte(null); return; }
-                              if (e.key === 'Enter') {
-                                initReceptionMutation.mutate({ ligneCommandeId: l.id, quantite: parseFloat(editingInitQte.value) || 0 });
-                                const idx = lignes.findIndex(line => line.id === l.id);
-                                if (idx < lignes.length - 1) {
-                                  const next = lignes[idx + 1];
-                                  setEditingInitQte({ id: next.id, value: String(initLignes.find(il => il.ligne_commande_id === next.id)?.quantite_receptionnee ?? '') });
-                                } else {
-                                  setEditingInitQte(null);
-                                }
-                              }
-                            }}
-                            className="w-16 h-6 text-xs"
-                            autoFocus
-                          />
-                          <button onClick={() => initReceptionMutation.mutate({ ligneCommandeId: l.id, quantite: parseFloat(editingInitQte.value) || 0 })} disabled={initReceptionMutation.isPending} className="text-emerald-500 hover:text-emerald-700"><Save className="w-3 h-3" /></button>
-                          <button onClick={() => setEditingInitQte(null)} className="text-gray-400 hover:text-gray-600"><X className="w-3 h-3" /></button>
-                        </div>
-                      ) : (
-                        <span
-                          className="cursor-pointer hover:underline text-indigo-500"
-                          onClick={() => setEditingInitQte({ id: l.id, value: String(initQte ?? '') })}
-                          title="Cliquer pour saisir la quantité reçue avant SyncFlow"
-                        >
-                          {initQte != null ? initQte : <span className="text-gray-300">—</span>}
                         </span>
                       )}
                     </td>

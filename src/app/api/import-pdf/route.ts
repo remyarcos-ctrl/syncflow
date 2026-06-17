@@ -41,6 +41,8 @@ export async function POST(req: NextRequest) {
     bes_importes: 0,
     factures_importees: 0,
     doublons_ignores: 0,
+    cout_eur: 0,
+    moteur: '' as string,
     erreurs: [] as string[],
     details: [] as string[],
   };
@@ -72,7 +74,10 @@ export async function POST(req: NextRequest) {
 
     let docs;
     try {
-      docs = await parsePdfDocuments(base64, fileName);
+      const parsed = await parsePdfDocuments(base64, fileName);
+      docs = parsed.docs;
+      result.cout_eur = parsed.coutEUR;
+      result.moteur = parsed.moteur;
     } catch (err) {
       result.erreurs.push(`${fileName} : erreur Claude API — ${err instanceof Error ? err.message : String(err)}`);
       return NextResponse.json(result);
