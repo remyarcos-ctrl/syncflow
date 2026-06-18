@@ -5,7 +5,7 @@ import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard, Mail, Package, FileText,
   Link2, AlertTriangle, ClipboardList, Building2, Settings,
-  TrendingUp, X, Upload, Bell, Receipt, Bot, GitCompare, Coins, ScanLine
+  TrendingUp, X, Upload, Bell, Receipt, Bot, GitCompare, Coins, ScanLine, ShieldCheck
 } from 'lucide-react';
 import { cn } from '@/utils';
 
@@ -29,6 +29,7 @@ const navGroups = [
   {
     label: 'Finance',
     items: [
+      { label: 'Contrôle facture', href: '/controle-facturation', icon: ShieldCheck },
       { label: 'Factures',        href: '/factures',          icon: FileText },
       { label: 'À facturer',      href: '/a-facturer',        icon: Receipt },
       { label: 'Rapprochements',  href: '/rapprochements',    icon: Link2 },
