@@ -25,6 +25,25 @@ const TYPE_CONFIG: Record<string, { color: string; label: string }> = {
   'prix commande manquant':   { color: 'text-blue-600 bg-blue-50',  label: 'Prix manquant' },
   'quantité incohérente':     { color: 'text-red-600 bg-red-50',    label: 'Qté incohérente' },
   'prix incohérent':          { color: 'text-amber-600 bg-amber-50',label: 'Prix incohérent' },
+  'sur-livraison':            { color: 'text-orange-600 bg-orange-50', label: 'Sur-livraison' },
+  'hors-commande':            { color: 'text-red-600 bg-red-50',    label: 'Hors-commande' },
+  'oubli log':                { color: 'text-red-600 bg-red-50',    label: 'Oubli log' },
+  'sur-saisie log':           { color: 'text-amber-600 bg-amber-50',label: 'Sur-saisie log' },
+};
+
+// Exception + champs du centre unifié (étape 1)
+type Exc = Exception & {
+  origine?: string | null;
+  destinataire?: string | null;
+  reference_article?: string | null;
+  assigne_a?: string | null;
+  echeance?: string | null;
+};
+
+const DEST_CONFIG: Record<string, string> = {
+  Colombi: 'bg-orange-100 text-orange-700',
+  log: 'bg-blue-100 text-blue-700',
+  interne: 'bg-gray-100 text-gray-600',
 };
 
 const PRIORITE_CONFIG: Record<string, string> = {
@@ -41,12 +60,16 @@ export default function ExceptionsPage() {
   const [filterStatut, setFilterStatut] = useState('actives');
   const [filterType, setFilterType] = useState('all');
   const [filterPriorite, setFilterPriorite] = useState('all');
-  const [showDetail, setShowDetail] = useState<Exception | null>(null);
+  const [filterOrigine, setFilterOrigine] = useState('all');
+  const [filterDest, setFilterDest] = useState('all');
+  const [showDetail, setShowDetail] = useState<Exc | null>(null);
   const [comment, setComment] = useState('');
+  const [assigne, setAssigne] = useState('');
+  const [echeance, setEcheance] = useState('');
   const [updating, setUpdating] = useState<string | null>(null);
 
-  const { data: exceptionsResult = { exceptions: [], total: 0 }, isError } = useQuery<{ exceptions: Exception[]; total: number }>({
-    queryKey: ['exceptions', page, filterStatut, filterType, filterPriorite],
+  const { data: exceptionsResult = { exceptions: [], total: 0 }, isError } = useQuery<{ exceptions: Exc[]; total: number }>({
+    queryKey: ['exceptions', page, filterStatut, filterType, filterPriorite, filterOrigine, filterDest],
     queryFn: async () => {
       let query = supabase
         .from('exceptions')
@@ -58,11 +81,13 @@ export default function ExceptionsPage() {
 
       if (filterType !== 'all') query = query.eq('type_exception', filterType);
       if (filterPriorite !== 'all') query = query.eq('niveau_priorite', filterPriorite);
+      if (filterOrigine !== 'all') query = query.eq('origine', filterOrigine);
+      if (filterDest !== 'all') query = query.eq('destinataire', filterDest);
 
       query = query.range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1);
 
       const { data, count } = await query;
-      return { exceptions: data ?? [], total: count ?? 0 };
+      return { exceptions: (data ?? []) as Exc[], total: count ?? 0 };
     },
     staleTime: 30_000,
   });
@@ -127,7 +152,7 @@ export default function ExceptionsPage() {
   const beMap = useMemo(() => Object.fromEntries(bes.map(b => [b.id, b])) as Record<string, Pick<BEReception, 'id' | 'numero_be'>>, [bes]);
   const cmdMap = useMemo(() => Object.fromEntries(commandes.map(c => [c.id, c])) as Record<string, Pick<Commande, 'id' | 'numero_commande_interne'>>, [commandes]);
 
-  const updateStatut = async (exc: Exception, statut: Exception['statut_exception']) => {
+  const updateStatut = async (exc: Exc, statut: Exc['statut_exception']) => {
     setUpdating(exc.id);
     try {
       const { error } = await supabase.from('exceptions').update({
@@ -146,6 +171,35 @@ export default function ExceptionsPage() {
     } finally {
       setUpdating(null);
     }
+  };
+
+  // Sauvegarde assignation / échéance / commentaire (sans changer le statut)
+  const saveDetail = async (exc: Exc) => {
+    setUpdating(exc.id);
+    try {
+      const { error } = await supabase.from('exceptions').update({
+        commentaire: comment || null,
+        assigne_a: assigne || null,
+        echeance: echeance || null,
+        statut_exception: exc.statut_exception === 'ouverte' && assigne ? 'en cours' : exc.statut_exception,
+      }).eq('id', exc.id);
+      if (error) throw error;
+      qc.invalidateQueries({ queryKey: ['exceptions'] });
+      setShowDetail(null);
+      toast.success('Enregistré');
+    } catch (e) {
+      console.error(e);
+      toast.error('Erreur');
+    } finally {
+      setUpdating(null);
+    }
+  };
+
+  const ouvrirDetail = (exc: Exc) => {
+    setShowDetail(exc);
+    setComment(exc.commentaire ?? '');
+    setAssigne(exc.assigne_a ?? '');
+    setEcheance(exc.echeance ?? '');
   };
 
   return (
@@ -195,6 +249,16 @@ export default function ExceptionsPage() {
           <option value="all">Toutes priorités</option>
           {['faible', 'moyenne', 'haute', 'critique'].map(p => <option key={p} value={p}>{p}</option>)}
         </select>
+        <select value={filterOrigine} onChange={e => { setFilterOrigine(e.target.value); setPage(1); }}
+          className="h-9 rounded-lg border border-gray-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+          <option value="all">Toutes sources</option>
+          {['réception', 'pointage', 'facturation'].map(o => <option key={o} value={o}>{o}</option>)}
+        </select>
+        <select value={filterDest} onChange={e => { setFilterDest(e.target.value); setPage(1); }}
+          className="h-9 rounded-lg border border-gray-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+          <option value="all">Tous destinataires</option>
+          {['Colombi', 'log', 'interne'].map(d => <option key={d} value={d}>{d}</option>)}
+        </select>
       </div>
 
       {/* Table */}
@@ -203,11 +267,11 @@ export default function ExceptionsPage() {
           <thead>
             <tr className="bg-gray-50/50 border-b border-gray-100">
               <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Type</th>
-              <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Priorité</th>
+              <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Source</th>
               <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Motif</th>
+              <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Destinataire</th>
               <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Facture</th>
               <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">BE</th>
-              <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Date</th>
               <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Statut</th>
               <th className="px-4 py-3"></th>
             </tr>
@@ -221,10 +285,11 @@ export default function ExceptionsPage() {
                     <span className={cn('text-xs font-medium px-2 py-0.5 rounded-full', tc.color)}>{tc.label}</span>
                   </td>
                   <td className="px-4 py-3">
-                    <span className={cn('text-xs font-medium px-2 py-0.5 rounded-full border', PRIORITE_CONFIG[exc.niveau_priorite] ?? '')}>{exc.niveau_priorite}</span>
+                    <span className="text-xs text-gray-600">{exc.origine ?? '—'}</span>
                   </td>
-                  <td className="px-4 py-3 text-xs text-gray-700 max-w-[200px]">
+                  <td className="px-4 py-3 text-xs text-gray-700 max-w-[220px]">
                     <div className="truncate">{exc.motif}</div>
+                    {exc.reference_article && <div className="text-[11px] text-gray-400 font-mono">{exc.reference_article}</div>}
                     {exc.explication_ia && (
                       <p className="text-xs text-gray-500 mt-0.5 max-w-xs truncate">{exc.explication_ia}</p>
                     )}
@@ -241,6 +306,9 @@ export default function ExceptionsPage() {
                       </button>
                     )}
                   </td>
+                  <td className="px-4 py-3">
+                    {exc.destinataire && <span className={cn('text-xs px-2 py-0.5 rounded-full', DEST_CONFIG[exc.destinataire] ?? 'bg-gray-100 text-gray-600')}>{exc.destinataire}</span>}
+                  </td>
                   <td className="px-4 py-3 text-xs">
                     {exc.facture_id && factureMap[exc.facture_id] && (
                       <Link href={`/factures/${exc.facture_id}`} className="text-indigo-600 hover:underline">{factureMap[exc.facture_id].numero_facture}</Link>
@@ -251,7 +319,6 @@ export default function ExceptionsPage() {
                       <Link href={`/be-receptions/${exc.be_id}`} className="text-indigo-600 hover:underline">{beMap[exc.be_id].numero_be}</Link>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-xs text-gray-500">{formatDate(exc.created_at)}</td>
                   <td className="px-4 py-3">
                     <span className={cn('text-xs px-1.5 py-0.5 rounded',
                       exc.statut_exception === 'résolue' ? 'bg-emerald-100 text-emerald-700' :
@@ -290,7 +357,7 @@ export default function ExceptionsPage() {
                           <button
                             title="Détail"
                             disabled={updating === exc.id}
-                            onClick={() => { setShowDetail(exc); setComment(exc.commentaire ?? ''); }}
+                            onClick={() => ouvrirDetail(exc)}
                             className={cn(
                               'p-1.5 rounded text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors',
                               updating === exc.id && 'opacity-40 cursor-not-allowed',
@@ -315,7 +382,7 @@ export default function ExceptionsPage() {
                           <button
                             title="Détail"
                             disabled={updating === exc.id}
-                            onClick={() => { setShowDetail(exc); setComment(exc.commentaire ?? ''); }}
+                            onClick={() => ouvrirDetail(exc)}
                             className={cn(
                               'p-1.5 rounded text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors',
                               updating === exc.id && 'opacity-40 cursor-not-allowed',
@@ -357,12 +424,33 @@ export default function ExceptionsPage() {
                 <p className="text-sm text-indigo-800">{showDetail.suggestion_ia}</p>
               </div>
             )}
+            {(showDetail.origine || showDetail.destinataire) && (
+              <div className="flex gap-2 mb-2 text-xs">
+                {showDetail.origine && <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">source : {showDetail.origine}</span>}
+                {showDetail.destinataire && <span className={cn('px-2 py-0.5 rounded-full', DEST_CONFIG[showDetail.destinataire] ?? 'bg-gray-100 text-gray-600')}>{showDetail.destinataire}</span>}
+              </div>
+            )}
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-xs text-gray-400">Assigné à</label>
+                <input value={assigne} onChange={e => setAssigne(e.target.value)} placeholder="Colombi / log / nom…"
+                  className="w-full border border-gray-200 rounded-lg p-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              </div>
+              <div>
+                <label className="text-xs text-gray-400">Échéance</label>
+                <input type="date" value={echeance} onChange={e => setEcheance(e.target.value)}
+                  className="w-full border border-gray-200 rounded-lg p-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              </div>
+            </div>
             <textarea
               value={comment}
               onChange={e => setComment(e.target.value)}
               placeholder="Commentaire / note de résolution..."
               className="w-full border border-gray-200 rounded-lg p-2 text-sm resize-none h-20 focus:outline-none focus:ring-2 focus:ring-indigo-500 mt-3"
             />
+            <Button variant="outline" size="sm" className="w-full mt-2" disabled={updating === showDetail.id} onClick={() => saveDetail(showDetail)}>
+              Enregistrer assignation / note
+            </Button>
             {['ouverte', 'en cours'].includes(showDetail.statut_exception) && (
               <div className="flex gap-2 mt-3">
                 <Button size="sm" onClick={() => updateStatut(showDetail, 'résolue')} className="flex-1">
