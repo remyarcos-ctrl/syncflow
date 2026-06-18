@@ -18,10 +18,10 @@ export interface ResolutionRow {
 
 export interface EcartPointage {
   ref: string;
-  papier: number | null; // ② somme lignes_be (hors retour / hors_systeme)
-  cl: number | null;     // ③ somme saisies_cl
-  ecart: number;         // papier - cl  (>0 = log a sous-saisi, <0 = log a sur-saisi)
-  dansCommande: boolean; // la référence existe-t-elle dans au moins une commande ?
+  papier: number | null;       // ② somme lignes_be (hors retour / hors_systeme)
+  cl: number | null;           // ③ somme saisies_cl
+  ecart: number;               // papier - cl  (>0 = ② a plus que ③, <0 = ③ a plus que ②)
+  commandeEnAttente: boolean;  // existe-t-il une commande avec du reliquat à recevoir pour cette réf ?
   statut: StatutResolution;
   note: string | null;
 }
@@ -36,7 +36,7 @@ export function comparerPointage(
   lignesBe: LigneBeLite[],
   saisies: SaisieLite[],
   resolutions: ResolutionRow[] = [],
-  refsCommandees?: Set<string>, // réfs normalisées présentes dans au moins une commande
+  refsReliquat?: Set<string>, // réfs normalisées ayant une commande avec reliquat à recevoir
 ): EcartPointage[] {
   const papier = new Map<string, number>();
   const label = new Map<string, string>();
@@ -70,7 +70,7 @@ export function comparerPointage(
         papier: p,
         cl: c,
         ecart: (p ?? 0) - (c ?? 0),
-        dansCommande: refsCommandees ? refsCommandees.has(k) : true,
+        commandeEnAttente: refsReliquat ? refsReliquat.has(k) : false,
         statut: (r?.statut as StatutResolution) ?? 'à analyser',
         note: r?.note ?? null,
       };
@@ -78,24 +78,23 @@ export function comparerPointage(
     .sort((a, b) => Math.abs(b.ecart) - Math.abs(a.ecart) || a.ref.localeCompare(b.ref));
 }
 
-// Verdict lisible d'un écart (côté pointage log)
-export function verdictPointage(e: EcartPointage): { label: string; ok: boolean } {
-  if (!aEcart(e)) return { label: 'conforme', ok: true };
-  if (e.papier == null) return { label: 'en plus dans CL (absent du BL papier)', ok: false };
-  if (e.cl == null) return e.dansCommande
-    ? { label: 'non saisi par la log', ok: false }
-    : { label: 'hors commande (envoi Colombi non commandé)', ok: false };
-  return { label: e.ecart > 0 ? `log a sous-saisi de ${e.ecart}` : `log a sur-saisi de ${-e.ecart}`, ok: false };
-}
+export type CauseCode = 'conforme' | 'oubli_log' | 'sur_saisie' | 'hors_commande';
 
-export type CauseCode = 'conforme' | 'ecart_qte' | 'hors_commande' | 'non_saisi' | 'en_plus_cl';
-
-// Cause structurée d'un écart, pour classer/filtrer/exporter.
+// Cause structurée d'un écart (modèle directionnel).
+// Centralink (③) ne booke que le commandé ; le BL papier (②) contient tout le reçu.
+//  - ③ > ②            → la log a saisi plus que le papier → sur-saisie (erreur log)
+//  - ② > ③ + reliquat → du commandé attendu n'a pas été saisi → oubli log (erreur log)
+//  - ② > ③ sans reliquat → reçu hors-commande / sur-livraison → à investiguer (Colombi)
 export function causeEcart(e: EcartPointage): { code: CauseCode; label: string } {
   if (!aEcart(e)) return { code: 'conforme', label: 'Conforme' };
-  if (e.papier == null) return { code: 'en_plus_cl', label: 'En plus dans CL' };
-  if (e.cl == null) return e.dansCommande
-    ? { code: 'non_saisi', label: 'Non saisi (oubli log)' }
-    : { code: 'hors_commande', label: 'Hors commande' };
-  return { code: 'ecart_qte', label: 'Écart quantité' };
+  if (e.ecart < 0) return { code: 'sur_saisie', label: 'Sur-saisie log (③ > ②)' };
+  return e.commandeEnAttente
+    ? { code: 'oubli_log', label: 'Oubli log (commande en attente)' }
+    : { code: 'hors_commande', label: 'Hors commande — à investiguer' };
+}
+
+// Verdict lisible (réutilise la cause).
+export function verdictPointage(e: EcartPointage): { label: string; ok: boolean } {
+  const c = causeEcart(e);
+  return { label: c.label, ok: c.code === 'conforme' };
 }

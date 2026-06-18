@@ -53,11 +53,11 @@ export default function RapprochementPointagePage() {
     refetchInterval: 10000,
   });
 
-  // Références présentes dans au moins une commande → pour distinguer hors-commande / oubli log
-  const { data: refsCmd = [] } = useQuery<{ reference_article: string | null }[]>({
+  // Réfs ayant une commande avec reliquat à recevoir → distingue oubli log / hors-commande
+  const { data: refsCmd = [] } = useQuery<{ reference_article: string | null; quantite_restante_a_recevoir: number | null }[]>({
     queryKey: ['rp_refs_cmd'],
     queryFn: async () => {
-      const { data } = await supabase.from('lignes_commande').select('reference_article');
+      const { data } = await supabase.from('lignes_commande').select('reference_article, quantite_restante_a_recevoir');
       return data ?? [];
     },
     refetchInterval: 30000,
@@ -81,13 +81,16 @@ export default function RapprochementPointagePage() {
       arr.push({ reference_article: r.reference_article, statut: r.statut, note: r.note });
       resByBe.set(r.numero_be, arr);
     }
-    const refsCommandees = new Set(refsCmd.map(r => normalizeRef(r.reference_article)).filter(Boolean));
+    const refsReliquat = new Set(
+      refsCmd.filter(r => (r.quantite_restante_a_recevoir ?? 0) > 0.001)
+        .map(r => normalizeRef(r.reference_article)).filter(Boolean),
+    );
 
     return bes
       .map(be => {
         const sa = saisiesByBe.get(be.numero_be) ?? [];
         if (!sa.length) return null; // pas de saisie CL → pas rapprochable
-        const rows = comparerPointage(lignesByBe.get(be.id) ?? [], sa, resByBe.get(be.numero_be) ?? [], refsCommandees);
+        const rows = comparerPointage(lignesByBe.get(be.id) ?? [], sa, resByBe.get(be.numero_be) ?? [], refsReliquat);
         const ecarts = rows.filter(aEcart);
         const aAnalyser = ecarts.filter(e => !STATUTS_RESOLUS.has(e.statut));
         return { be, nbRefs: rows.length, nbEcarts: ecarts.length, nbAAnalyser: aAnalyser.length, ecarts };
@@ -100,10 +103,9 @@ export default function RapprochementPointagePage() {
     .sort((a, b) => b.nbAAnalyser - a.nbAAnalyser || b.nbEcarts - a.nbEcarts);
 
   const kpiBesRapprochables = parBe.length;
-  const kpiBesAvecEcart = avecEcarts.length;
   const kpiEcartsAAnalyser = avecEcarts.reduce((s, b) => s + b.nbAAnalyser, 0);
 
-  const causeCounts: Record<CauseCode, number> = { conforme: 0, ecart_qte: 0, hors_commande: 0, non_saisi: 0, en_plus_cl: 0 };
+  const causeCounts: Record<CauseCode, number> = { conforme: 0, oubli_log: 0, sur_saisie: 0, hors_commande: 0 };
   for (const b of avecEcarts) for (const e of b.ecarts) if (aEcart(e)) causeCounts[causeEcart(e).code]++;
 
   const exportCsv = () => {
@@ -140,24 +142,24 @@ export default function RapprochementPointagePage() {
           <div className="text-xs text-gray-400">avec saisie Centralink</div>
         </CardContent></Card>
         <Card><CardContent className="p-4">
-          <div className="text-xs text-gray-500">BE avec écarts</div>
-          <div className={cn('text-2xl font-bold', kpiBesAvecEcart ? 'text-amber-600' : 'text-emerald-600')}>{kpiBesAvecEcart}</div>
-          <div className="text-xs text-gray-400">au moins 1 écart de pointage</div>
-        </CardContent></Card>
-        <Card><CardContent className="p-4">
           <div className="text-xs text-gray-500">Écarts à analyser</div>
           <div className={cn('text-2xl font-bold', kpiEcartsAAnalyser ? 'text-red-600' : 'text-emerald-600')}>{kpiEcartsAAnalyser}</div>
           <div className="text-xs text-gray-400">non encore traités</div>
         </CardContent></Card>
         <Card><CardContent className="p-4">
           <div className="text-xs text-gray-500">Oublis log</div>
-          <div className={cn('text-2xl font-bold', causeCounts.non_saisi ? 'text-red-600' : 'text-gray-400')}>{causeCounts.non_saisi}</div>
-          <div className="text-xs text-gray-400">commandé, non saisi en CL</div>
+          <div className={cn('text-2xl font-bold', causeCounts.oubli_log ? 'text-red-600' : 'text-gray-400')}>{causeCounts.oubli_log}</div>
+          <div className="text-xs text-gray-400">commande en attente, non saisi</div>
+        </CardContent></Card>
+        <Card><CardContent className="p-4">
+          <div className="text-xs text-gray-500">Sur-saisie log</div>
+          <div className={cn('text-2xl font-bold', causeCounts.sur_saisie ? 'text-red-600' : 'text-gray-400')}>{causeCounts.sur_saisie}</div>
+          <div className="text-xs text-gray-400">③ &gt; ② (CL a plus que le BL)</div>
         </CardContent></Card>
         <Card><CardContent className="p-4">
           <div className="text-xs text-gray-500">Hors commande</div>
           <div className={cn('text-2xl font-bold', causeCounts.hors_commande ? 'text-orange-600' : 'text-gray-400')}>{causeCounts.hors_commande}</div>
-          <div className="text-xs text-gray-400">envoi Colombi non commandé</div>
+          <div className="text-xs text-gray-400">à investiguer (Colombi)</div>
         </CardContent></Card>
       </div>
 
