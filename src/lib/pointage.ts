@@ -4,7 +4,7 @@
 // Principe : ③ fait foi par défaut, un écart est remonté pour décision.
 // ============================================================
 import type { LigneBE, SaisieCL } from '@/types';
-import { quantitesConcordent } from './conditionnement';
+import { quantitesConcordent, facteurConditionnement } from './conditionnement';
 
 export const normalizeRef = (s: string | null | undefined) =>
   String(s ?? '').toUpperCase().replace(/O/g, '0').replace(/[^A-Z0-9]/g, '');
@@ -22,6 +22,7 @@ export interface EcartPointage {
   papier: number | null;       // ② somme lignes_be (hors retour / hors_systeme)
   cl: number | null;           // ③ somme saisies_cl
   ecart: number;               // papier - cl  (>0 = ② a plus que ③, <0 = ③ a plus que ②)
+  facteur: number;             // facteur de conditionnement utilisé pour réconcilier (1 si aucun)
   commandeEnAttente: boolean;  // existe-t-il une commande avec du reliquat à recevoir pour cette réf ?
   statut: StatutResolution;
   note: string | null;
@@ -70,12 +71,16 @@ export function comparerPointage(
       const r = res.get(k);
       // Réconciliation conditionnement : si ② et ③ concordent via le facteur
       // (ex. 45 cartons × 500 = 22 500 pièces), pas d'écart.
-      const concord = p != null && c != null && quantitesConcordent(p, c, desig.get(k));
+      const concordDirect = p != null && c != null && Math.abs(p - c) <= 0.001;
+      const n = facteurConditionnement(desig.get(k));
+      const concordFacteur = p != null && c != null && n > 1 && (Math.abs(p * n - c) <= 0.001 || Math.abs(c * n - p) <= 0.001);
+      const concord = concordDirect || concordFacteur;
       return {
         ref: label.get(k) ?? k,
         papier: p,
         cl: c,
         ecart: concord ? 0 : (p ?? 0) - (c ?? 0),
+        facteur: concordFacteur ? n : 1,
         commandeEnAttente: refsReliquat ? refsReliquat.has(k) : false,
         statut: (r?.statut as StatutResolution) ?? 'à analyser',
         note: r?.note ?? null,

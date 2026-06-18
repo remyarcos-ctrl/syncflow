@@ -1139,7 +1139,12 @@ export default function BEDetailPage() {
                     return (
                       <tr key={r.ref} className={cn('border-b border-gray-50', ko && 'bg-amber-50/40')}>
                         <td className="px-4 py-2 font-mono text-xs">{r.ref}</td>
-                        <td className="px-4 py-2 text-right tabular-nums">{r.papier ?? '—'}</td>
+                        <td className="px-4 py-2 text-right tabular-nums">
+                          {r.papier ?? '—'}
+                          {r.facteur > 1 && r.papier != null && (
+                            <span className="text-[11px] text-gray-400"> ×{r.facteur} = {r.papier * r.facteur}</span>
+                          )}
+                        </td>
                         <td className="px-4 py-2 text-right tabular-nums">{r.cl ?? '—'}</td>
                         <td className={cn('px-4 py-2 text-right font-semibold tabular-nums', ko ? 'text-amber-700' : 'text-gray-300')}>
                           {ko ? (r.ecart > 0 ? `+${r.ecart}` : r.ecart) : '0'}
