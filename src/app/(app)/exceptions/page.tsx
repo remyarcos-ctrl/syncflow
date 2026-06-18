@@ -152,6 +152,20 @@ export default function ExceptionsPage() {
     staleTime: 30000,
   });
 
+  // Réfs dont une commande attend encore de la marchandise (reliquat > 0)
+  // → la log n'a probablement pas fini de saisir : l'anomalie est « peut-être en cours ».
+  const { data: refsAttente = new Set<string>() } = useQuery<Set<string>>({
+    queryKey: ['refs-en-attente'],
+    queryFn: async () => {
+      const { data } = await supabase.from('lignes_commande').select('reference_article, quantite_restante_a_recevoir').limit(9999);
+      const norm = (s: string | null) => String(s ?? '').toUpperCase().replace(/O/g, '0').replace(/[^A-Z0-9]/g, '');
+      return new Set((data ?? []).filter(l => (l.quantite_restante_a_recevoir ?? 0) > 0.001).map(l => norm(l.reference_article)).filter(Boolean));
+    },
+    staleTime: 30000,
+  });
+  const enCours = (ref: string | null | undefined) =>
+    refsAttente.has(String(ref ?? '').toUpperCase().replace(/O/g, '0').replace(/[^A-Z0-9]/g, ''));
+
   const factureMap = useMemo(() => Object.fromEntries(factures.map(f => [f.id, f])) as Record<string, Pick<Facture, 'id' | 'numero_facture'>>, [factures]);
   const beMap = useMemo(() => Object.fromEntries(bes.map(b => [b.id, b])) as Record<string, Pick<BEReception, 'id' | 'numero_be'>>, [bes]);
   const cmdMap = useMemo(() => Object.fromEntries(commandes.map(c => [c.id, c])) as Record<string, Pick<Commande, 'id' | 'numero_commande_interne'>>, [commandes]);
@@ -365,6 +379,11 @@ export default function ExceptionsPage() {
                   <td className="px-4 py-3 text-xs text-gray-700 max-w-[220px]">
                     <div className="truncate">{exc.motif}</div>
                     {exc.reference_article && <div className="text-[11px] text-gray-400 font-mono">{exc.reference_article}</div>}
+                    {enCours(exc.reference_article) && (
+                      <span className="inline-block mt-0.5 text-[11px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-600" title="La commande attend encore de la marchandise côté Centralink — la log n'a peut-être pas fini de saisir">
+                        ⏳ saisie peut-être en cours
+                      </span>
+                    )}
                     {exc.explication_ia && (
                       <p className="text-xs text-gray-500 mt-0.5 max-w-xs truncate">{exc.explication_ia}</p>
                     )}
