@@ -2,8 +2,10 @@
 
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
+
+const CLASSEMENTS = ['à classer', 'pièce détachée', 'sur-livraison Colombi', 'hors-commande Colombi', 'commandé autrement', 'résolu'];
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { cn } from '@/utils';
 import { PackageCheck, ChevronRight } from 'lucide-react';
@@ -55,6 +57,32 @@ export default function ControleReceptionPage() {
     refetchInterval: 15000,
   });
 
+  const { data: resolutions = [] } = useQuery<{ be_id: string; reference_article: string; classement: string }[]>({
+    queryKey: ['cr_resolutions'],
+    queryFn: async () => {
+      const { data, error } = await supabase.from('reception_resolution').select('be_id, reference_article, classement');
+      if (error) return [];
+      return data ?? [];
+    },
+    refetchInterval: 15000,
+  });
+
+  const qc = useQueryClient();
+  const classer = useMutation({
+    mutationFn: async (v: { be_id: string; reference_article: string; classement: string }) => {
+      await fetch('/api/reception-resolution', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(v),
+      });
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['cr_resolutions'] }),
+  });
+
+  const classementByKey = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const r of resolutions) m.set(`${r.be_id}|${r.reference_article}`, r.classement);
+    return m;
+  }, [resolutions]);
+
   const beById = useMemo(() => new Map(bes.map((b) => [b.id, b])), [bes]);
 
   const controles = useMemo(
@@ -64,13 +92,14 @@ export default function ControleReceptionPage() {
   );
 
   const kpis = useMemo(() => {
-    const k = { lignes: controles.length, sur: 0, hors: 0 };
+    const k = { lignes: controles.length, sur: 0, hors: 0, aClasser: 0 };
     for (const c of controles) {
       if (c.verdict === 'sur_livraison') k.sur++;
       else if (c.verdict === 'hors_commande') k.hors++;
+      if (estAnomalieReception(c.verdict) && (classementByKey.get(`${c.be_id}|${c.ref}`) ?? 'à classer') === 'à classer') k.aClasser++;
     }
     return k;
-  }, [controles]);
+  }, [controles, classementByKey]);
 
   const lignes = useMemo(() => {
     const arr = filtre === 'anomalies' ? controles.filter((c) => estAnomalieReception(c.verdict)) : controles;
@@ -90,10 +119,11 @@ export default function ControleReceptionPage() {
         </p>
       </div>
 
-      <div className="grid grid-cols-3 gap-3">
-        <Card><CardHeader className="pb-1"><CardTitle className="text-xs font-medium text-gray-500">Lignes de BE</CardTitle></CardHeader><CardContent><p className="text-2xl font-semibold text-gray-900">{kpis.lignes}</p></CardContent></Card>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <Card><CardHeader className="pb-1"><CardTitle className="text-xs font-medium text-gray-500">Sur-livraisons</CardTitle></CardHeader><CardContent><p className="text-2xl font-semibold text-orange-600">{kpis.sur}</p></CardContent></Card>
         <Card><CardHeader className="pb-1"><CardTitle className="text-xs font-medium text-gray-500">Hors commande</CardTitle></CardHeader><CardContent><p className="text-2xl font-semibold text-red-600">{kpis.hors}</p></CardContent></Card>
+        <Card><CardHeader className="pb-1"><CardTitle className="text-xs font-medium text-gray-500">À classer</CardTitle></CardHeader><CardContent><p className={cn('text-2xl font-semibold', kpis.aClasser ? 'text-indigo-600' : 'text-emerald-600')}>{kpis.aClasser}</p></CardContent></Card>
+        <Card><CardHeader className="pb-1"><CardTitle className="text-xs font-medium text-gray-500">Lignes de BE</CardTitle></CardHeader><CardContent><p className="text-2xl font-semibold text-gray-900">{kpis.lignes}</p></CardContent></Card>
       </div>
 
       <div className="flex rounded-lg border border-gray-200 bg-gray-50 p-0.5 w-fit">
@@ -127,6 +157,7 @@ export default function ControleReceptionPage() {
                     <th className="px-3 py-2.5 font-medium text-right bg-blue-50/50">① Commandé</th>
                     <th className="px-3 py-2.5 font-medium text-right bg-green-50/50">③ Reçu total</th>
                     <th className="px-3 py-2.5 font-medium">Verdict</th>
+                    <th className="px-3 py-2.5 font-medium">Classement</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -152,6 +183,24 @@ export default function ControleReceptionPage() {
                           <span className={cn('inline-block px-1.5 py-0.5 rounded text-xs font-medium', badge[c.verdict])}>
                             {verdictReceptionLabel[c.verdict]}
                           </span>
+                        </td>
+                        <td className="px-3 py-2.5">
+                          {(() => {
+                            const k = `${c.be_id}|${c.ref}`;
+                            const cur = classementByKey.get(k) ?? 'à classer';
+                            return (
+                              <select
+                                value={cur}
+                                onChange={(e) => classer.mutate({ be_id: c.be_id, reference_article: c.ref, classement: e.target.value })}
+                                className={cn(
+                                  'rounded border px-1.5 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-indigo-400',
+                                  cur === 'à classer' ? 'border-gray-200 text-gray-400' : 'border-indigo-200 bg-indigo-50 text-indigo-700',
+                                )}
+                              >
+                                {CLASSEMENTS.map((o) => <option key={o} value={o}>{o}</option>)}
+                              </select>
+                            );
+                          })()}
                         </td>
                       </tr>
                     );
