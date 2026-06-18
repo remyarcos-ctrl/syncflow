@@ -233,6 +233,23 @@ export default function ExceptionsPage() {
   };
 
   const [listeModal, setListeModal] = useState<{ titre: string; texte: string; mailto?: string } | null>(null);
+  const [detecting, setDetecting] = useState(false);
+
+  const detecter = async () => {
+    setDetecting(true);
+    try {
+      const r = await fetch('/api/detect-anomalies', { method: 'POST' });
+      const d = await r.json() as { inserees?: number; detail?: Record<string, number>; error?: string };
+      if (d.error) { toast.error(d.error); return; }
+      toast.success(`${d.inserees} nouvelle(s) · réception ${d.detail?.réception ?? 0}, pointage ${d.detail?.pointage ?? 0}, facturation ${d.detail?.facturation ?? 0}`);
+      qc.invalidateQueries({ queryKey: ['exceptions'] });
+      qc.invalidateQueries({ queryKey: ['exceptions-kpis'] });
+    } catch {
+      toast.error('Erreur de détection');
+    } finally {
+      setDetecting(false);
+    }
+  };
 
   const genererListe = async (dest: 'Colombi' | 'log') => {
     const rows = await fetchActives(dest);
@@ -309,6 +326,7 @@ export default function ExceptionsPage() {
 
       {/* Actions */}
       <div className="flex flex-wrap gap-2 mb-4">
+        <Button size="sm" disabled={detecting} onClick={detecter}>{detecting ? 'Détection…' : '🔄 Détecter les anomalies'}</Button>
         <Button variant="outline" size="sm" onClick={() => genererListe('Colombi')}>📩 Réclamer à Colombi</Button>
         <Button variant="outline" size="sm" onClick={() => genererListe('log')}>🛠 Demander correction à la log</Button>
         <Button variant="outline" size="sm" onClick={exportCsv}>⬇ Exporter (CSV{filterDest !== 'all' ? ` · ${filterDest}` : ''})</Button>
