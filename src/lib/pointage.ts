@@ -4,6 +4,7 @@
 // Principe : ③ fait foi par défaut, un écart est remonté pour décision.
 // ============================================================
 import type { LigneBE, SaisieCL } from '@/types';
+import { quantitesConcordent } from './conditionnement';
 
 export const normalizeRef = (s: string | null | undefined) =>
   String(s ?? '').toUpperCase().replace(/O/g, '0').replace(/[^A-Z0-9]/g, '');
@@ -27,7 +28,7 @@ export interface EcartPointage {
 }
 
 type LigneBeLite = Pick<LigneBE, 'reference_article' | 'quantite_receptionnee'> &
-  Partial<Pick<LigneBE, 'statut_retour' | 'hors_systeme'>>;
+  Partial<Pick<LigneBE, 'statut_retour' | 'hors_systeme' | 'designation'>>;
 type SaisieLite = Pick<SaisieCL, 'reference_article' | 'quantite_recue'>;
 
 export const aEcart = (e: { ecart: number }) => Math.abs(e.ecart) > 0.001;
@@ -40,6 +41,7 @@ export function comparerPointage(
 ): EcartPointage[] {
   const papier = new Map<string, number>();
   const label = new Map<string, string>();
+  const desig = new Map<string, string>();
   for (const l of lignesBe) {
     // Pointage = comparer le BL papier (②) à ce que la log a saisi (③).
     // On compte TOUTES les lignes du BL — y compris hors_systeme et retours —
@@ -48,6 +50,7 @@ export function comparerPointage(
     if (!k) continue;
     papier.set(k, (papier.get(k) ?? 0) + (l.quantite_receptionnee ?? 0));
     if (!label.has(k)) label.set(k, l.reference_article ?? k);
+    if (!desig.has(k) && l.designation) desig.set(k, l.designation);
   }
   const cl = new Map<string, number>();
   for (const s of saisies) {
@@ -65,11 +68,14 @@ export function comparerPointage(
       const p = papier.has(k) ? papier.get(k)! : null;
       const c = cl.has(k) ? cl.get(k)! : null;
       const r = res.get(k);
+      // Réconciliation conditionnement : si ② et ③ concordent via le facteur
+      // (ex. 45 cartons × 500 = 22 500 pièces), pas d'écart.
+      const concord = p != null && c != null && quantitesConcordent(p, c, desig.get(k));
       return {
         ref: label.get(k) ?? k,
         papier: p,
         cl: c,
-        ecart: (p ?? 0) - (c ?? 0),
+        ecart: concord ? 0 : (p ?? 0) - (c ?? 0),
         commandeEnAttente: refsReliquat ? refsReliquat.has(k) : false,
         statut: (r?.statut as StatutResolution) ?? 'à analyser',
         note: r?.note ?? null,

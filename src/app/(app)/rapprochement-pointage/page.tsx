@@ -28,7 +28,7 @@ export default function RapprochementPointagePage() {
   const { data: lignes = [] } = useQuery<LigneBE[]>({
     queryKey: ['rp_lignes_be'],
     queryFn: async () => {
-      const { data } = await supabase.from('lignes_be').select('be_id, reference_article, quantite_receptionnee, statut_retour, hors_systeme');
+      const { data } = await supabase.from('lignes_be').select('be_id, reference_article, designation, quantite_receptionnee, statut_retour, hors_systeme');
       return (data as LigneBE[]) ?? [];
     },
     refetchInterval: 10000,
