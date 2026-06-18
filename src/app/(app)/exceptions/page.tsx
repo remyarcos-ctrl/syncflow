@@ -46,6 +46,10 @@ const DEST_CONFIG: Record<string, string> = {
   interne: 'bg-gray-100 text-gray-600',
 };
 
+// Lien direct vers la page de réception Centralink d'un BE (pour vérifier la saisie log)
+const lienCentralinkBE = (numeroBe: string) =>
+  `https://sd.centralink.fr/admin/order/delivery_note?q=${encodeURIComponent(numeroBe)}`;
+
 const PRIORITE_CONFIG: Record<string, string> = {
   haute:    'bg-red-100 text-red-700 border-red-200',
   moyenne:  'bg-orange-100 text-orange-700 border-orange-200',
@@ -387,7 +391,11 @@ export default function ExceptionsPage() {
                   </td>
                   <td className="px-4 py-3 text-xs">
                     {exc.be_id && beMap[exc.be_id] && (
-                      <Link href={`/be-receptions/${exc.be_id}`} className="text-indigo-600 hover:underline">{beMap[exc.be_id].numero_be}</Link>
+                      <div className="flex items-center gap-1.5">
+                        <Link href={`/be-receptions/${exc.be_id}`} className="text-indigo-600 hover:underline">{beMap[exc.be_id].numero_be}</Link>
+                        <a href={lienCentralinkBE(beMap[exc.be_id].numero_be)} target="_blank" rel="noreferrer"
+                          title="Vérifier la saisie dans Centralink" className="text-gray-400 hover:text-indigo-600">↗</a>
+                      </div>
                     )}
                   </td>
                   <td className="px-4 py-3">
@@ -489,6 +497,11 @@ export default function ExceptionsPage() {
               {showDetail.be_id && beMap[showDetail.be_id] && <div><p className="text-gray-400">BE</p><Link href={`/be-receptions/${showDetail.be_id}`} className="text-indigo-600 hover:underline">{beMap[showDetail.be_id].numero_be}</Link></div>}
               {showDetail.commande_id && cmdMap[showDetail.commande_id] && <div><p className="text-gray-400">Commande</p><Link href={`/commandes/${showDetail.commande_id}`} className="text-indigo-600 hover:underline">{cmdMap[showDetail.commande_id].numero_commande_interne}</Link></div>}
             </div>
+            {showDetail.be_id && beMap[showDetail.be_id] && (
+              <a href={lienCentralinkBE(beMap[showDetail.be_id].numero_be)} target="_blank" rel="noreferrer" className="block mb-3">
+                <Button variant="outline" size="sm" className="w-full">↗ Vérifier ce BE dans Centralink</Button>
+              </a>
+            )}
             {showDetail.suggestion_ia && (
               <div className="mt-3 p-3 bg-indigo-50 border border-indigo-100 rounded-lg">
                 <p className="text-xs font-medium text-indigo-700 mb-1">💡 Suggestion IA</p>
