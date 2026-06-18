@@ -29,6 +29,7 @@ export interface ControleReception {
   totalRecu: number | null;      // ③ total reçu Centralink (lignes positives)
   totalRetour: number;           // total retourné (lignes négatives = retours acheteuse)
   surLivraisonNette: number;     // reçu − commandé − retours (>0 = sur-livraison à traiter)
+  doubleSaisie: boolean;         // reçu = multiple exact du commandé → double saisie log probable
   verdict: VerdictReception;
 }
 
@@ -45,23 +46,34 @@ export function controlerReceptions(
 ): ControleReception[] {
   // Par référence : total commandé + total reçu (Centralink, autoritaire)
   // Par référence : commandé (lignes +), reçu (lignes +), retours (lignes − = retours acheteuse).
-  const parRef = new Map<string, { cmd: number; recu: number; retour: number }>();
+  // Détection double saisie : sur une ligne, reçu = multiple exact (≥2) du commandé
+  // → la log a saisi la réception plusieurs fois. On retient le « vrai » reçu (= commandé).
+  const parRef = new Map<string, { cmd: number; recu: number; retour: number; dbl: boolean }>();
   for (const l of lignesCmd) {
     const k = normalizeRef(l.reference_article);
     if (!k) continue;
-    const cur = parRef.get(k) ?? { cmd: 0, recu: 0, retour: 0 };
+    const cur = parRef.get(k) ?? { cmd: 0, recu: 0, retour: 0, dbl: false };
     const q = Number(l.quantite_commandee) || 0;
-    if (q >= 0) cur.cmd += q;
-    else cur.retour += -q; // commande négative = retour vers Colombi
-    cur.recu += Math.max(0, Number(l.quantite_receptionnee_reelle) || 0);
+    const r = Math.max(0, Number(l.quantite_receptionnee_reelle) || 0);
+    if (q >= 0) {
+      cur.cmd += q;
+      if (q > 0 && r > q && Number.isInteger(r / q) && r / q >= 2) {
+        cur.recu += q;       // double saisie : on corrige (vrai reçu = commandé)
+        cur.dbl = true;
+      } else {
+        cur.recu += r;
+      }
+    } else {
+      cur.retour += -q;       // commande négative = retour vers Colombi
+      cur.recu += r;
+    }
     parRef.set(k, cur);
   }
 
   return lignesBe.map((l) => {
     const k = normalizeRef(l.reference_article);
     const agg = parRef.get(k);
-    // Sur-livraison NETTE : ce que Colombi a livré en trop, MOINS ce qu'on a déjà
-    // retourné (la commande négative résout la sur-livraison → attente avoir).
+    // Sur-livraison NETTE : reçu (corrigé des doubles) − commandé − retours.
     const surLiv = agg ? agg.recu - agg.cmd - agg.retour : 0;
     let verdict: VerdictReception = 'conforme';
     if (!agg) verdict = 'hors_commande';
@@ -75,6 +87,7 @@ export function controlerReceptions(
       totalRecu: agg ? agg.recu : null,
       totalRetour: agg ? agg.retour : 0,
       surLivraisonNette: surLiv,
+      doubleSaisie: agg ? agg.dbl : false,
       verdict,
     };
   });

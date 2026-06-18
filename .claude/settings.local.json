@@ -19,7 +19,13 @@
       "Bash(xargs grep *)",
       "Bash(git add *)",
       "Bash(git commit *)",
-      "Bash(git config *)"
+      "Bash(git config *)",
+      "Bash(git merge *)",
+      "Bash(git -C \"C:\\\\Users\\\\Compta-02\\\\syncflow\\\\.claude\\\\worktrees\\\\agent-a97dba56\" status --short)",
+      "Bash(git reset *)",
+      "Bash(git push *)",
+      "Bash(grep -E \"\\\\.tsx$\")",
+      "Skill(claude-api)"
     ]
   }
 }

@@ -33,7 +33,7 @@ export async function POST() {
     sb.from('lignes_facture').select('id, facture_id, ligne_no, reference_article, designation, quantite_facturee, pu_facture, montant_ht, numero_be_detecte'),
     sb.from('factures').select('id'),
     sb.from('commandes').select('id, numero_commande_interne, bls_centralink'),
-    sb.from('exceptions').select('be_id, facture_id, reference_article, type_exception, origine')
+    sb.from('exceptions').select('be_id, facture_id, commande_id, reference_article, type_exception, origine')
       .in('origine', ['réception', 'pointage', 'facturation']),
   ]);
 
@@ -45,7 +45,7 @@ export async function POST() {
 
   // clés déjà présentes
   const seen = new Set(
-    (exR.data ?? []).map((e) => `${e.origine}|${e.be_id ?? e.facture_id ?? ''}|${normalizeRef(e.reference_article)}|${e.type_exception}`),
+    (exR.data ?? []).map((e) => `${e.origine}|${e.be_id ?? e.facture_id ?? e.commande_id ?? ''}|${normalizeRef(e.reference_article)}|${e.type_exception}`),
   );
   const key = (o: string, ancre: string, ref: string, type: string) => `${o}|${ancre}|${normalizeRef(ref)}|${type}`;
   const nouvelles: NewExc[] = [];
@@ -98,6 +98,27 @@ export async function POST() {
     });
   }
 
+  // ── 3b) DOUBLE SAISIE (reçu = multiple exact du commandé) → log ──────────────
+  const cmdNum = new Map((cmdR.data ?? []).map((c) => [c.id, c.numero_commande_interne]));
+  const dblVus = new Set<string>();
+  for (const l of lignesCmd) {
+    const q = Number(l.quantite_commandee) || 0;
+    const r = Number(l.quantite_receptionnee_reelle) || 0;
+    if (q <= 0 || r <= q || !Number.isInteger(r / q) || r / q < 2) continue;
+    const ref = l.reference_article ?? '';
+    const dk = `${l.commande_id}|${normalizeRef(ref)}`;
+    if (dblVus.has(dk)) continue;
+    dblVus.add(dk);
+    if (seen.has(key('réception', l.commande_id, ref, 'sur-saisie log'))) continue;
+    nouvelles.push({
+      origine: 'réception', destinataire: 'log', type_exception: 'sur-saisie log',
+      commande_id: l.commande_id, reference_article: ref,
+      motif: `Double saisie probable ${ref} sur ${cmdNum.get(l.commande_id) ?? ''} : reçu ${r} = ${r / q}× commandé ${q} — à corriger dans Centralink`,
+      valeur_attendue: q, valeur_obtenue: r, ecart: r - q,
+      statut_exception: 'ouverte', niveau_priorite: 'moyenne',
+    });
+  }
+
   // ── 4) NUMÉROS DE BE IMPOSSIBLES (faute de frappe log : mois > 12) → log ─────
   const beVus = new Set<string>();
   for (const c of (cmdR.data ?? [])) {
@@ -112,7 +133,7 @@ export async function POST() {
       const badN = b.ref.toUpperCase();
       if (beVus.has(badN)) continue;
       beVus.add(badN);
-      if (seen.has(key('pointage', '', badN, 'numéro BE invalide'))) continue;
+      if (seen.has(key('pointage', c.id, badN, 'numéro BE invalide'))) continue;
       nouvelles.push({
         origine: 'pointage', destinataire: 'log', type_exception: 'numéro BE invalide',
         commande_id: c.id, reference_article: badN,
