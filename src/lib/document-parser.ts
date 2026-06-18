@@ -249,20 +249,9 @@ function processBERaw(raw: Record<string, unknown>): ParsedDocument {
     }
   }
 
-  const finalLignes = Array.from(aggregated.values()).map((l) => {
-    const desig = (l.designation ?? '').toUpperCase();
-    const isMunition = /CARTOUCHE/.test(desig) && !/BOITE\s+DE|BOÎTE\s+DE/.test(desig);
-    if (isMunition) {
-      const condMatch = desig.match(/[X×*]\s*(\d{2,})|PAR\s+(\d+)|LOT\s+DE\s+(\d+)/);
-      if (condMatch) {
-        const factor = parseInt(condMatch[1] ?? condMatch[2] ?? condMatch[3] ?? '1');
-        if (factor > 1 && factor <= 10000 && l.quantite_receptionnee < factor) {
-          l.quantite_receptionnee = l.quantite_receptionnee * factor;
-        }
-      }
-    }
-    return l;
-  });
+  // Pas de multiplication par le conditionnement : la quantité du BL est prise telle quelle
+  // (le « X500 / X1000 » fait partie du nom produit). Comparer ② et ③ dans la même unité.
+  const finalLignes = Array.from(aggregated.values());
 
   return {
     type: 'be',
@@ -356,7 +345,7 @@ Règles BE (Colombi-sports) :
 - Ignorer les références EXACTEMENT 4 lettres majuscules (codes position : AAAA, AAFB, etc.)
 - Ignorer les codes EAN/barcodes (chiffres uniquement, 8+ chiffres)
 - Agréger les lignes avec la même référence ET le même hors_systeme (additionner les quantités)
-- Pour CARTOUCHE (sans BOITE DE) avec multiplicateur (X 500, PAR 100) → multiplier la quantité
+- quantite_receptionnee = LA QUANTITÉ EXACTE écrite dans la colonne quantité du BL. NE JAMAIS multiplier par le conditionnement : « X500 », « X1000 », « PAR 100 » font partie du NOM du produit (boîte/lot de N), PAS un multiplicateur. Ex : « GOMMETTES D19 X1000 » avec quantité 50 → quantite_receptionnee: 50 (surtout pas 50000).
 - Si une ligne mentionne "SAV", "S.A.V.", "Service Après-Vente" ou similaire dans la désignation ou une colonne dédiée → hors_systeme: true
 
 Règles Facture :
