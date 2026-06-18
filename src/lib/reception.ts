@@ -47,8 +47,10 @@ export function controlerReceptions(
     const k = normalizeRef(l.reference_article);
     if (!k) continue;
     const cur = parRef.get(k) ?? { cmd: 0, recu: 0 };
-    cur.cmd += Number(l.quantite_commandee) || 0;
-    cur.recu += Number(l.quantite_receptionnee_reelle) || 0;
+    // On ignore les lignes négatives (reliquats annulés) : elles rabaisseraient
+    // à tort le total commandé et créeraient de fausses sur-livraisons.
+    cur.cmd += Math.max(0, Number(l.quantite_commandee) || 0);
+    cur.recu += Math.max(0, Number(l.quantite_receptionnee_reelle) || 0);
     parRef.set(k, cur);
   }
 
