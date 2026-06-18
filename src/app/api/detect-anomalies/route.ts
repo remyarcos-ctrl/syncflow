@@ -77,6 +77,13 @@ export async function POST() {
   const refsReliquat = new Set(
     lignesCmd.filter((l) => (l.quantite_restante_a_recevoir ?? 0) > 0.001).map((l) => normalizeRef(l.reference_article)).filter(Boolean),
   );
+  // Réfs reçues quelque part dans Centralink (reçu > 0) → saisies, même si sous un autre BE.
+  const recuParRef = new Map<string, number>();
+  for (const l of lignesCmd) {
+    const k = normalizeRef(l.reference_article);
+    recuParRef.set(k, (recuParRef.get(k) ?? 0) + (Number(l.quantite_receptionnee_reelle) || 0));
+  }
+  const refsRecues = new Set([...recuParRef].filter(([, v]) => v > 0).map(([k]) => k));
   const lbeByBe = new Map<string, LigneBE[]>();
   for (const l of lignesBe) { const a = lbeByBe.get(l.be_id) ?? []; a.push(l as unknown as LigneBE); lbeByBe.set(l.be_id, a); }
   const saisByBe = new Map<string, SaisieCL[]>();
@@ -84,7 +91,7 @@ export async function POST() {
   const TYPE_P: Record<string, string> = { oubli_log: 'oubli log', sur_saisie: 'sur-saisie log' };
   for (const be of bes) {
     const sa = saisByBe.get(be.numero_be); if (!sa?.length) continue;
-    const rows = comparerPointage(lbeByBe.get(be.id) ?? [], sa, [], refsReliquat);
+    const rows = comparerPointage(lbeByBe.get(be.id) ?? [], sa, [], refsReliquat, refsRecues);
     for (const e of rows) {
       const code = causeEcart(e).code;
       if (code !== 'oubli_log' && code !== 'sur_saisie') continue;

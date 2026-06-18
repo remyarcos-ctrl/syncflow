@@ -54,10 +54,10 @@ export default function RapprochementPointagePage() {
   });
 
   // Réfs ayant une commande avec reliquat à recevoir → distingue oubli log / hors-commande
-  const { data: refsCmd = [] } = useQuery<{ reference_article: string | null; quantite_restante_a_recevoir: number | null }[]>({
+  const { data: refsCmd = [] } = useQuery<{ reference_article: string | null; quantite_restante_a_recevoir: number | null; quantite_receptionnee_reelle: number | null }[]>({
     queryKey: ['rp_refs_cmd'],
     queryFn: async () => {
-      const { data } = await supabase.from('lignes_commande').select('reference_article, quantite_restante_a_recevoir');
+      const { data } = await supabase.from('lignes_commande').select('reference_article, quantite_restante_a_recevoir, quantite_receptionnee_reelle');
       return data ?? [];
     },
     refetchInterval: 30000,
@@ -85,12 +85,18 @@ export default function RapprochementPointagePage() {
       refsCmd.filter(r => (r.quantite_restante_a_recevoir ?? 0) > 0.001)
         .map(r => normalizeRef(r.reference_article)).filter(Boolean),
     );
+    const recuParRef = new Map<string, number>();
+    for (const r of refsCmd) {
+      const k = normalizeRef(r.reference_article);
+      recuParRef.set(k, (recuParRef.get(k) ?? 0) + (Number(r.quantite_receptionnee_reelle) || 0));
+    }
+    const refsRecues = new Set([...recuParRef].filter(([, v]) => v > 0).map(([k]) => k));
 
     return bes
       .map(be => {
         const sa = saisiesByBe.get(be.numero_be) ?? [];
         if (!sa.length) return null; // pas de saisie CL → pas rapprochable
-        const rows = comparerPointage(lignesByBe.get(be.id) ?? [], sa, resByBe.get(be.numero_be) ?? [], refsReliquat);
+        const rows = comparerPointage(lignesByBe.get(be.id) ?? [], sa, resByBe.get(be.numero_be) ?? [], refsReliquat, refsRecues);
         const ecarts = rows.filter(aEcart);
         const aAnalyser = ecarts.filter(e => !STATUTS_RESOLUS.has(e.statut));
         return { be, nbRefs: rows.length, nbEcarts: ecarts.length, nbAAnalyser: aAnalyser.length, ecarts };

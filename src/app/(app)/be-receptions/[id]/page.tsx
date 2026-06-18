@@ -140,11 +140,24 @@ export default function BEDetailPage() {
     enabled: !!be?.numero_be, refetchInterval: 5000,
   });
 
+  // Réfs reçues quelque part dans Centralink (reçu > 0) → saisies, même sous un autre BE
+  const { data: refsRecues = new Set<string>() } = useQuery<Set<string>>({
+    queryKey: ['refs-recues'],
+    queryFn: async () => {
+      const { data } = await supabase.from('lignes_commande').select('reference_article, quantite_receptionnee_reelle').limit(9999);
+      const norm = (s: string | null) => String(s ?? '').toUpperCase().replace(/O/g, '0').replace(/[^A-Z0-9]/g, '');
+      const m = new Map<string, number>();
+      for (const l of data ?? []) { const k = norm(l.reference_article); m.set(k, (m.get(k) ?? 0) + (Number(l.quantite_receptionnee_reelle) || 0)); }
+      return new Set([...m].filter(([, v]) => v > 0).map(([k]) => k));
+    },
+    staleTime: 30000,
+  });
+
   // Rapprochement ② BE papier ↔ ③ saisie CL (logique partagée @/lib/pointage)
   const rappCl = useMemo(() => {
-    const rows = comparerPointage(lignes, saisiesCl, pointageResolutions);
+    const rows = comparerPointage(lignes, saisiesCl, pointageResolutions, undefined, refsRecues);
     return { rows, nbEcarts: rows.filter(aEcart).length, hasCl: saisiesCl.length > 0 };
-  }, [lignes, saisiesCl, pointageResolutions]);
+  }, [lignes, saisiesCl, pointageResolutions, refsRecues]);
 
   const saveResolution = useMutation({
     mutationFn: async (p: { reference_article: string; statut?: string; note?: string | null }) => {
@@ -1150,7 +1163,7 @@ export default function BEDetailPage() {
                           {ko ? (r.ecart > 0 ? `+${r.ecart}` : r.ecart) : '0'}
                         </td>
                         <td className="px-4 py-2 text-xs">
-                          {!ko ? <span className="text-emerald-600">conforme</span>
+                          {!ko ? (r.saisiAilleurs ? <span className="text-gray-500">saisi sous un autre BE ✓</span> : <span className="text-emerald-600">conforme</span>)
                             : r.papier == null ? <span className="text-amber-700">en plus dans CL (absent du BL papier)</span>
                             : r.cl == null ? <span className="text-amber-700">non saisi par la log</span>
                             : r.ecart > 0 ? <span className="text-amber-700">log a sous-saisi de {r.ecart}</span>

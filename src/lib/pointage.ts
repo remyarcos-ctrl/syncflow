@@ -23,6 +23,7 @@ export interface EcartPointage {
   cl: number | null;           // ③ somme saisies_cl
   ecart: number;               // papier - cl  (>0 = ② a plus que ③, <0 = ③ a plus que ②)
   facteur: number;             // facteur de conditionnement utilisé pour réconcilier (1 si aucun)
+  saisiAilleurs: boolean;      // absent de la saisie de CE BE, mais reçu ailleurs dans Centralink
   commandeEnAttente: boolean;  // existe-t-il une commande avec du reliquat à recevoir pour cette réf ?
   statut: StatutResolution;
   note: string | null;
@@ -39,6 +40,7 @@ export function comparerPointage(
   saisies: SaisieLite[],
   resolutions: ResolutionRow[] = [],
   refsReliquat?: Set<string>, // réfs normalisées ayant une commande avec reliquat à recevoir
+  refsRecues?: Set<string>,   // réfs reçues quelque part dans Centralink (reçu > 0) → saisies ailleurs
 ): EcartPointage[] {
   const papier = new Map<string, number>();
   const label = new Map<string, string>();
@@ -74,13 +76,16 @@ export function comparerPointage(
       const concordDirect = p != null && c != null && Math.abs(p - c) <= 0.001;
       const n = facteurConditionnement(desig.get(k));
       const concordFacteur = p != null && c != null && n > 1 && (Math.abs(p * n - c) <= 0.001 || Math.abs(c * n - p) <= 0.001);
-      const concord = concordDirect || concordFacteur;
+      // Présent au BL mais pas saisi sous CE BE, pourtant reçu ailleurs dans Centralink → saisi sous un autre BE (pas un oubli).
+      const saisiAilleurs = p != null && c == null && !!refsRecues?.has(k);
+      const concord = concordDirect || concordFacteur || saisiAilleurs;
       return {
         ref: label.get(k) ?? k,
         papier: p,
         cl: c,
         ecart: concord ? 0 : (p ?? 0) - (c ?? 0),
         facteur: concordFacteur ? n : 1,
+        saisiAilleurs,
         commandeEnAttente: refsReliquat ? refsReliquat.has(k) : false,
         statut: (r?.statut as StatutResolution) ?? 'à analyser',
         note: r?.note ?? null,
