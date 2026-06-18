@@ -1,8 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { controlerReceptions, normalizeRef, type LigneBeInput, type LigneCmdInput } from '@/lib/reception';
-import { comparerPointage, causeEcart } from '@/lib/pointage';
-import type { LigneBE, SaisieCL } from '@/types';
 import {
   controlerLignesFacture,
   type LigneFactureInput, type LigneCommandeInput, type CommandeInput, type SaisieInput,
@@ -42,7 +40,6 @@ export async function POST() {
   const lignesBe = lbeR.data ?? [];
   const lignesCmd = (lcR.data ?? []);
   const saisies = saisR.data ?? [];
-  const bes = beR.data ?? [];
   const lignesFact = (lfR.data ?? []) as LigneFactureInput[];
   const commandes = (cmdR.data ?? []) as CommandeInput[];
 
@@ -57,9 +54,13 @@ export async function POST() {
   const beForRecep = lignesBe.filter((l) => !l.hors_systeme && (l.quantite_receptionnee ?? 0) > 0) as LigneBeInput[];
   const recep = controlerReceptions(beForRecep, lignesCmd as LigneCmdInput[]);
   const TYPE_R: Record<string, string> = { sur_livraison: 'sur-livraison', hors_commande: 'hors-commande' };
+  const recepVus = new Set<string>(); // dédoublonnage : 1 anomalie par référence (pas par BE)
   for (const c of recep) {
     if (c.verdict !== 'sur_livraison' && c.verdict !== 'hors_commande') continue;
     const type = TYPE_R[c.verdict];
+    const dk = `${type}|${normalizeRef(c.ref)}`;
+    if (recepVus.has(dk)) continue;
+    recepVus.add(dk);
     if (seen.has(key('réception', c.be_id, c.ref, type))) continue;
     const ecart = c.verdict === 'sur_livraison' ? (c.totalRecu ?? 0) - (c.totalCommande ?? 0) : c.qteBe;
     nouvelles.push({
@@ -73,38 +74,9 @@ export async function POST() {
     });
   }
 
-  // ── 2) POINTAGE → log ───────────────────────────────────────────────────────
-  const refsReliquat = new Set(
-    lignesCmd.filter((l) => (l.quantite_restante_a_recevoir ?? 0) > 0.001).map((l) => normalizeRef(l.reference_article)).filter(Boolean),
-  );
-  // Réfs reçues quelque part dans Centralink (reçu > 0) → saisies, même si sous un autre BE.
-  const recuParRef = new Map<string, number>();
-  for (const l of lignesCmd) {
-    const k = normalizeRef(l.reference_article);
-    recuParRef.set(k, (recuParRef.get(k) ?? 0) + (Number(l.quantite_receptionnee_reelle) || 0));
-  }
-  const refsRecues = new Set([...recuParRef].filter(([, v]) => v > 0).map(([k]) => k));
-  const lbeByBe = new Map<string, LigneBE[]>();
-  for (const l of lignesBe) { const a = lbeByBe.get(l.be_id) ?? []; a.push(l as unknown as LigneBE); lbeByBe.set(l.be_id, a); }
-  const saisByBe = new Map<string, SaisieCL[]>();
-  for (const s of saisies) { const a = saisByBe.get(s.numero_be) ?? []; a.push(s as unknown as SaisieCL); saisByBe.set(s.numero_be, a); }
-  const TYPE_P: Record<string, string> = { oubli_log: 'oubli log', sur_saisie: 'sur-saisie log' };
-  for (const be of bes) {
-    const sa = saisByBe.get(be.numero_be); if (!sa?.length) continue;
-    const rows = comparerPointage(lbeByBe.get(be.id) ?? [], sa, [], refsReliquat, refsRecues);
-    for (const e of rows) {
-      const code = causeEcart(e).code;
-      if (code !== 'oubli_log' && code !== 'sur_saisie') continue;
-      const type = TYPE_P[code];
-      if (seen.has(key('pointage', be.id, e.ref, type))) continue;
-      nouvelles.push({
-        origine: 'pointage', destinataire: 'log', type_exception: type, be_id: be.id, reference_article: e.ref,
-        motif: `${causeEcart(e).label} — ${e.ref} : BL ${e.papier ?? 0} / CL ${e.cl ?? 0}`,
-        valeur_attendue: e.papier, valeur_obtenue: e.cl, ecart: e.ecart,
-        statut_exception: 'ouverte', niveau_priorite: 'moyenne',
-      });
-    }
-  }
+  // ── (Pointage ②↔③ retiré du centre : un BE couvre plusieurs commandes, donc
+  //     la comparaison par n° de BE est structurellement bruitée. Il reste
+  //     consultable dans l'écran « Rappro. pointage ».) ──────────────────────────
 
   // ── 3) FACTURATION → Colombi ────────────────────────────────────────────────
   const factControles = controlerLignesFacture(
