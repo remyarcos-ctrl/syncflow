@@ -25,8 +25,10 @@ export interface ControleReception {
   ref: string;
   designation: string | null;
   qteBe: number;            // ② reçu sur ce BE
-  totalCommande: number | null;  // ① total commandé (toutes commandes de la réf)
-  totalRecu: number | null;      // ③ total reçu Centralink (toutes commandes)
+  totalCommande: number | null;  // ① total commandé (lignes positives)
+  totalRecu: number | null;      // ③ total reçu Centralink (lignes positives)
+  totalRetour: number;           // total retourné (lignes négatives = retours acheteuse)
+  surLivraisonNette: number;     // reçu − commandé − retours (>0 = sur-livraison à traiter)
   verdict: VerdictReception;
 }
 
@@ -42,14 +44,15 @@ export function controlerReceptions(
   lignesCmd: LigneCmdInput[],
 ): ControleReception[] {
   // Par référence : total commandé + total reçu (Centralink, autoritaire)
-  const parRef = new Map<string, { cmd: number; recu: number }>();
+  // Par référence : commandé (lignes +), reçu (lignes +), retours (lignes − = retours acheteuse).
+  const parRef = new Map<string, { cmd: number; recu: number; retour: number }>();
   for (const l of lignesCmd) {
     const k = normalizeRef(l.reference_article);
     if (!k) continue;
-    const cur = parRef.get(k) ?? { cmd: 0, recu: 0 };
-    // On ignore les lignes négatives (reliquats annulés) : elles rabaisseraient
-    // à tort le total commandé et créeraient de fausses sur-livraisons.
-    cur.cmd += Math.max(0, Number(l.quantite_commandee) || 0);
+    const cur = parRef.get(k) ?? { cmd: 0, recu: 0, retour: 0 };
+    const q = Number(l.quantite_commandee) || 0;
+    if (q >= 0) cur.cmd += q;
+    else cur.retour += -q; // commande négative = retour vers Colombi
     cur.recu += Math.max(0, Number(l.quantite_receptionnee_reelle) || 0);
     parRef.set(k, cur);
   }
@@ -57,9 +60,12 @@ export function controlerReceptions(
   return lignesBe.map((l) => {
     const k = normalizeRef(l.reference_article);
     const agg = parRef.get(k);
+    // Sur-livraison NETTE : ce que Colombi a livré en trop, MOINS ce qu'on a déjà
+    // retourné (la commande négative résout la sur-livraison → attente avoir).
+    const surLiv = agg ? agg.recu - agg.cmd - agg.retour : 0;
     let verdict: VerdictReception = 'conforme';
     if (!agg) verdict = 'hors_commande';
-    else if (agg.recu > agg.cmd + 0.001) verdict = 'sur_livraison';
+    else if (surLiv > 0.001) verdict = 'sur_livraison';
     return {
       be_id: l.be_id,
       ref: l.reference_article ?? k,
@@ -67,6 +73,8 @@ export function controlerReceptions(
       qteBe: Number(l.quantite_receptionnee) || 0,
       totalCommande: agg ? agg.cmd : null,
       totalRecu: agg ? agg.recu : null,
+      totalRetour: agg ? agg.retour : 0,
+      surLivraisonNette: surLiv,
       verdict,
     };
   });

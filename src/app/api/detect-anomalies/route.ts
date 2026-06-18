@@ -62,11 +62,11 @@ export async function POST() {
     if (recepVus.has(dk)) continue;
     recepVus.add(dk);
     if (seen.has(key('réception', c.be_id, c.ref, type))) continue;
-    const ecart = c.verdict === 'sur_livraison' ? (c.totalRecu ?? 0) - (c.totalCommande ?? 0) : c.qteBe;
+    const ecart = c.verdict === 'sur_livraison' ? c.surLivraisonNette : c.qteBe;
     nouvelles.push({
       origine: 'réception', destinataire: 'Colombi', type_exception: type, be_id: c.be_id, reference_article: c.ref,
       motif: c.verdict === 'sur_livraison'
-        ? `Sur-livraison ${c.ref} : commandé ${c.totalCommande} / reçu ${c.totalRecu} (+${ecart})`
+        ? `Sur-livraison ${c.ref} : commandé ${c.totalCommande} / reçu ${c.totalRecu}${c.totalRetour ? ` / déjà retourné ${c.totalRetour}` : ''} → +${ecart} à traiter`
         : `Hors commande ${c.ref} : reçu ${c.qteBe}, jamais commandé`,
       valeur_attendue: c.verdict === 'sur_livraison' ? c.totalCommande : null,
       valeur_obtenue: c.verdict === 'sur_livraison' ? c.totalRecu : c.qteBe,
