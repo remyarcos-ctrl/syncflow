@@ -29,6 +29,18 @@ const rowCls: Record<VerdictReception, string> = {
 
 export default function ControleReceptionPage() {
   const [filtre, setFiltre] = useState<'anomalies' | 'tous'>('anomalies');
+  const [feed, setFeed] = useState<{ loading: boolean; msg: string | null }>({ loading: false, msg: null });
+
+  const remonter = async () => {
+    setFeed({ loading: true, msg: null });
+    try {
+      const r = await fetch('/api/detect-anomalies', { method: 'POST' });
+      const d = await r.json() as { inserees?: number; deja_presentes?: number; error?: string };
+      setFeed({ loading: false, msg: d.error ? `Erreur : ${d.error}` : `${d.inserees} nouvelle(s) anomalie(s) envoyée(s) au centre · ${d.deja_presentes} déjà présentes.` });
+    } catch {
+      setFeed({ loading: false, msg: 'Erreur réseau' });
+    }
+  };
 
   const { data: bes = [] } = useQuery<BeMeta[]>({
     queryKey: ['cr_bes'],
@@ -126,14 +138,21 @@ export default function ControleReceptionPage() {
         <Card><CardHeader className="pb-1"><CardTitle className="text-xs font-medium text-gray-500">Lignes de BE</CardTitle></CardHeader><CardContent><p className="text-2xl font-semibold text-gray-900">{kpis.lignes}</p></CardContent></Card>
       </div>
 
-      <div className="flex rounded-lg border border-gray-200 bg-gray-50 p-0.5 w-fit">
-        {(['anomalies', 'tous'] as const).map((f) => (
-          <button key={f} onClick={() => setFiltre(f)}
-            className={cn('rounded-md px-4 py-1.5 text-sm font-medium transition-all',
-              filtre === f ? 'bg-white text-indigo-700 shadow-sm' : 'text-gray-500 hover:text-gray-700')}>
-            {f === 'anomalies' ? 'Anomalies seulement' : 'Toutes les lignes'}
-          </button>
-        ))}
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex rounded-lg border border-gray-200 bg-gray-50 p-0.5 w-fit">
+          {(['anomalies', 'tous'] as const).map((f) => (
+            <button key={f} onClick={() => setFiltre(f)}
+              className={cn('rounded-md px-4 py-1.5 text-sm font-medium transition-all',
+                filtre === f ? 'bg-white text-indigo-700 shadow-sm' : 'text-gray-500 hover:text-gray-700')}>
+              {f === 'anomalies' ? 'Anomalies seulement' : 'Toutes les lignes'}
+            </button>
+          ))}
+        </div>
+        <button onClick={remonter} disabled={feed.loading}
+          className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-sm font-medium text-indigo-700 hover:bg-indigo-100 disabled:opacity-50">
+          {feed.loading ? 'Envoi…' : '↑ Remonter au centre d\'anomalies'}
+        </button>
+        {feed.msg && <span className="text-xs text-gray-500">{feed.msg}</span>}
       </div>
 
       <Card>
