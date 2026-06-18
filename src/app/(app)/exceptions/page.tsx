@@ -29,6 +29,7 @@ const TYPE_CONFIG: Record<string, { color: string; label: string }> = {
   'hors-commande':            { color: 'text-red-600 bg-red-50',    label: 'Hors-commande' },
   'oubli log':                { color: 'text-red-600 bg-red-50',    label: 'Oubli log' },
   'sur-saisie log':           { color: 'text-amber-600 bg-amber-50',label: 'Sur-saisie log' },
+  'numéro BE invalide':       { color: 'text-purple-600 bg-purple-50', label: 'N° BE invalide' },
 };
 
 // Exception + champs du centre unifié (étape 1)

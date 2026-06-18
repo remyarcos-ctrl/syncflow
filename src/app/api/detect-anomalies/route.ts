@@ -17,7 +17,7 @@ function adminSb() {
 
 interface NewExc {
   origine: string; destinataire: string; type_exception: string;
-  be_id?: string | null; facture_id?: string | null; reference_article: string;
+  be_id?: string | null; facture_id?: string | null; commande_id?: string | null; reference_article: string;
   motif: string; valeur_attendue: number | null; valeur_obtenue: number | null; ecart: number | null;
   statut_exception: string; niveau_priorite: string;
 }
@@ -34,7 +34,7 @@ export async function POST() {
     sb.from('be_receptions').select('id, numero_be'),
     sb.from('lignes_facture').select('id, facture_id, ligne_no, reference_article, designation, quantite_facturee, pu_facture, montant_ht, numero_be_detecte'),
     sb.from('factures').select('id'),
-    sb.from('commandes').select('id, numero_commande_interne'),
+    sb.from('commandes').select('id, numero_commande_interne, bls_centralink'),
     sb.from('exceptions').select('be_id, facture_id, reference_article, type_exception, origine')
       .in('origine', ['réception', 'pointage', 'facturation']),
   ]);
@@ -124,6 +124,31 @@ export async function POST() {
       ecart: c.verdict === 'ecart_prix' ? c.ecartPrixPct : c.ecartQteRecu,
       statut_exception: 'ouverte', niveau_priorite: c.verdict === 'sur_facturation' ? 'haute' : 'moyenne',
     });
+  }
+
+  // ── 4) NUMÉROS DE BE IMPOSSIBLES (faute de frappe log : mois > 12) → log ─────
+  const beVus = new Set<string>();
+  for (const c of (cmdR.data ?? [])) {
+    let bls: { type?: string; ref?: string }[] = [];
+    try { bls = JSON.parse(c.bls_centralink || '[]'); } catch { bls = []; }
+    for (const b of bls) {
+      if (b.type !== 'be' || !b.ref) continue;
+      const m = b.ref.match(/^BE-(\d{2})-(\d{2})-/i);
+      if (!m) continue;
+      const mois = parseInt(m[2], 10);
+      if (mois >= 1 && mois <= 12) continue; // mois valide
+      const badN = b.ref.toUpperCase();
+      if (beVus.has(badN)) continue;
+      beVus.add(badN);
+      if (seen.has(key('pointage', '', badN, 'numéro BE invalide'))) continue;
+      nouvelles.push({
+        origine: 'pointage', destinataire: 'log', type_exception: 'numéro BE invalide',
+        commande_id: c.id, reference_article: badN,
+        motif: `N° de BE impossible « ${badN} » (mois ${m[2]}) — probable faute de frappe à corriger dans Centralink`,
+        valeur_attendue: null, valeur_obtenue: null, ecart: null,
+        statut_exception: 'ouverte', niveau_priorite: 'faible',
+      });
+    }
   }
 
   let inserted = 0;
