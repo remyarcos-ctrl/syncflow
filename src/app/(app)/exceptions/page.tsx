@@ -50,6 +50,9 @@ const DEST_CONFIG: Record<string, string> = {
 // Lien direct vers la page de réception Centralink d'un BE (pour vérifier la saisie log)
 const lienCentralinkBE = (numeroBe: string) =>
   `https://sd.centralink.fr/admin/order/delivery_note?q=${encodeURIComponent(numeroBe)}`;
+// Lien direct vers la page d'une commande Centralink (section Bon de Livraison)
+const lienCentralinkCmd = (numero: string) =>
+  `https://sd.centralink.fr/admin/order/view/${String(numero).replace(/[^0-9]/g, '')}`;
 
 const PRIORITE_CONFIG: Record<string, string> = {
   haute:    'bg-red-100 text-red-700 border-red-200',
@@ -417,6 +420,13 @@ export default function ExceptionsPage() {
                           title="Vérifier la saisie dans Centralink" className="text-gray-400 hover:text-indigo-600">↗</a>
                       </div>
                     )}
+                    {!exc.be_id && exc.commande_id && cmdMap[exc.commande_id] && (
+                      <div className="flex items-center gap-1.5">
+                        <Link href={`/commandes/${exc.commande_id}`} className="text-indigo-600 hover:underline">{cmdMap[exc.commande_id].numero_commande_interne}</Link>
+                        <a href={lienCentralinkCmd(cmdMap[exc.commande_id].numero_commande_interne)} target="_blank" rel="noreferrer"
+                          title="Ouvrir la commande dans Centralink (corriger le n° de BL)" className="text-gray-400 hover:text-indigo-600">↗</a>
+                      </div>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     <span className={cn('text-xs px-1.5 py-0.5 rounded',
@@ -520,6 +530,11 @@ export default function ExceptionsPage() {
             {showDetail.be_id && beMap[showDetail.be_id] && (
               <a href={lienCentralinkBE(beMap[showDetail.be_id].numero_be)} target="_blank" rel="noreferrer" className="block mb-3">
                 <Button variant="outline" size="sm" className="w-full">↗ Vérifier ce BE dans Centralink</Button>
+              </a>
+            )}
+            {!showDetail.be_id && showDetail.commande_id && cmdMap[showDetail.commande_id] && (
+              <a href={lienCentralinkCmd(cmdMap[showDetail.commande_id].numero_commande_interne)} target="_blank" rel="noreferrer" className="block mb-3">
+                <Button variant="outline" size="sm" className="w-full">↗ Ouvrir la commande {cmdMap[showDetail.commande_id].numero_commande_interne} dans Centralink</Button>
               </a>
             )}
             {showDetail.suggestion_ia && (
