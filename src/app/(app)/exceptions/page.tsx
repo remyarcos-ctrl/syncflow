@@ -202,6 +202,52 @@ export default function ExceptionsPage() {
     setEcheance(exc.echeance ?? '');
   };
 
+  // ── Actions ────────────────────────────────────────────────────────────────
+  const telecharger = (contenu: string, nom: string, mime = 'text/plain') => {
+    const blob = new Blob(['﻿' + contenu], { type: `${mime};charset=utf-8;` });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = nom;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
+  // Récupère les anomalies actives (optionnellement par destinataire)
+  const fetchActives = async (dest?: string): Promise<Exc[]> => {
+    let q = supabase.from('exceptions').select('*')
+      .in('statut_exception', ['ouverte', 'en cours']).order('type_exception');
+    if (dest) q = q.eq('destinataire', dest);
+    const { data } = await q;
+    return (data ?? []) as Exc[];
+  };
+
+  const exportCsv = async () => {
+    const rows = await fetchActives(filterDest !== 'all' ? filterDest : undefined);
+    if (!rows.length) { toast.info('Aucune anomalie active à exporter'); return; }
+    const head = ['Type', 'Source', 'Destinataire', 'Référence', 'Motif', 'Attendu', 'Obtenu', 'Écart', 'Statut', 'Assigné', 'Échéance'];
+    const csv = [head, ...rows.map(e => [
+      e.type_exception, e.origine ?? '', e.destinataire ?? '', e.reference_article ?? '', e.motif ?? '',
+      e.valeur_attendue ?? '', e.valeur_obtenue ?? '', e.ecart ?? '', e.statut_exception, e.assigne_a ?? '', e.echeance ?? '',
+    ])].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(';')).join('\r\n');
+    telecharger(csv, `anomalies${filterDest !== 'all' ? '-' + filterDest : ''}.csv`, 'text/csv');
+  };
+
+  const [listeModal, setListeModal] = useState<{ titre: string; texte: string; mailto?: string } | null>(null);
+
+  const genererListe = async (dest: 'Colombi' | 'log') => {
+    const rows = await fetchActives(dest);
+    if (!rows.length) { toast.info(`Aucune anomalie active pour ${dest}`); return; }
+    const lignes = rows.map(e => `- ${e.reference_article ? e.reference_article + ' : ' : ''}${e.motif}`).join('\n');
+    const texte = dest === 'Colombi'
+      ? `Bonjour,\n\nEn rapprochant vos livraisons et factures avec nos commandes, nous constatons les écarts suivants :\n\n${lignes}\n\nMerci de bien vouloir régulariser (avoir / reprise / correction selon le cas).\n\nCordialement,`
+      : `Anomalies de saisie à régulariser dans Centralink (${rows.length}) :\n\n${lignes}\n\nMerci de vérifier et corriger.`;
+    setListeModal({
+      titre: dest === 'Colombi' ? `Réclamation Colombi (${rows.length})` : `Corrections log (${rows.length})`,
+      texte,
+      mailto: dest === 'Colombi' ? `mailto:?subject=${encodeURIComponent('Écarts livraisons / factures')}&body=${encodeURIComponent(texte)}` : undefined,
+    });
+  };
+
   return (
     <div>
       <PageHeader
@@ -259,6 +305,13 @@ export default function ExceptionsPage() {
           <option value="all">Tous destinataires</option>
           {['Colombi', 'log', 'interne'].map(d => <option key={d} value={d}>{d}</option>)}
         </select>
+      </div>
+
+      {/* Actions */}
+      <div className="flex flex-wrap gap-2 mb-4">
+        <Button variant="outline" size="sm" onClick={() => genererListe('Colombi')}>📩 Réclamer à Colombi</Button>
+        <Button variant="outline" size="sm" onClick={() => genererListe('log')}>🛠 Demander correction à la log</Button>
+        <Button variant="outline" size="sm" onClick={exportCsv}>⬇ Exporter (CSV{filterDest !== 'all' ? ` · ${filterDest}` : ''})</Button>
       </div>
 
       {/* Table */}
@@ -461,6 +514,28 @@ export default function ExceptionsPage() {
               </div>
             )}
             <Button variant="outline" className="w-full mt-2" size="sm" onClick={() => setShowDetail(null)}>Fermer</Button>
+          </div>
+        </div>
+      )}
+
+      {/* Modale liste générée (réclamation / corrections) */}
+      {listeModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm">
+          <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-lg">
+            <h2 className="text-base font-semibold text-gray-900 mb-3">{listeModal.titre}</h2>
+            <textarea
+              readOnly
+              value={listeModal.texte}
+              className="w-full border border-gray-200 rounded-lg p-2 text-xs font-mono resize-none h-64 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+            <div className="flex flex-wrap gap-2 mt-3">
+              <Button size="sm" onClick={() => { navigator.clipboard.writeText(listeModal.texte); toast.success('Copié'); }}>Copier</Button>
+              <Button variant="outline" size="sm" onClick={() => telecharger(listeModal.texte, `${listeModal.titre}.txt`)}>Télécharger</Button>
+              {listeModal.mailto && (
+                <a href={listeModal.mailto}><Button variant="outline" size="sm">Ouvrir dans le mail</Button></a>
+              )}
+              <Button variant="ghost" size="sm" className="ml-auto" onClick={() => setListeModal(null)}>Fermer</Button>
+            </div>
           </div>
         </div>
       )}
