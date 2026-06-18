@@ -58,7 +58,8 @@ export default function ControleReceptionPage() {
   const beById = useMemo(() => new Map(bes.map((b) => [b.id, b])), [bes]);
 
   const controles = useMemo(
-    () => controlerReceptions(lignesBe.filter((l) => !l.hors_systeme), lignesCmd),
+    // on exclut le SAV (hors_systeme) et les lignes négatives (retours)
+    () => controlerReceptions(lignesBe.filter((l) => !l.hors_systeme && l.quantite_receptionnee > 0), lignesCmd),
     [lignesBe, lignesCmd],
   );
 
