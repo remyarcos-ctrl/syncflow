@@ -21,6 +21,7 @@ export interface EcartPointage {
   papier: number | null; // ② somme lignes_be (hors retour / hors_systeme)
   cl: number | null;     // ③ somme saisies_cl
   ecart: number;         // papier - cl  (>0 = log a sous-saisi, <0 = log a sur-saisi)
+  dansCommande: boolean; // la référence existe-t-elle dans au moins une commande ?
   statut: StatutResolution;
   note: string | null;
 }
@@ -35,6 +36,7 @@ export function comparerPointage(
   lignesBe: LigneBeLite[],
   saisies: SaisieLite[],
   resolutions: ResolutionRow[] = [],
+  refsCommandees?: Set<string>, // réfs normalisées présentes dans au moins une commande
 ): EcartPointage[] {
   const papier = new Map<string, number>();
   const label = new Map<string, string>();
@@ -68,6 +70,7 @@ export function comparerPointage(
         papier: p,
         cl: c,
         ecart: (p ?? 0) - (c ?? 0),
+        dansCommande: refsCommandees ? refsCommandees.has(k) : true,
         statut: (r?.statut as StatutResolution) ?? 'à analyser',
         note: r?.note ?? null,
       };
@@ -79,6 +82,20 @@ export function comparerPointage(
 export function verdictPointage(e: EcartPointage): { label: string; ok: boolean } {
   if (!aEcart(e)) return { label: 'conforme', ok: true };
   if (e.papier == null) return { label: 'en plus dans CL (absent du BL papier)', ok: false };
-  if (e.cl == null) return { label: 'non saisi par la log', ok: false };
+  if (e.cl == null) return e.dansCommande
+    ? { label: 'non saisi par la log', ok: false }
+    : { label: 'hors commande (envoi Colombi non commandé)', ok: false };
   return { label: e.ecart > 0 ? `log a sous-saisi de ${e.ecart}` : `log a sur-saisi de ${-e.ecart}`, ok: false };
+}
+
+export type CauseCode = 'conforme' | 'ecart_qte' | 'hors_commande' | 'non_saisi' | 'en_plus_cl';
+
+// Cause structurée d'un écart, pour classer/filtrer/exporter.
+export function causeEcart(e: EcartPointage): { code: CauseCode; label: string } {
+  if (!aEcart(e)) return { code: 'conforme', label: 'Conforme' };
+  if (e.papier == null) return { code: 'en_plus_cl', label: 'En plus dans CL' };
+  if (e.cl == null) return e.dansCommande
+    ? { code: 'non_saisi', label: 'Non saisi (oubli log)' }
+    : { code: 'hors_commande', label: 'Hors commande' };
+  return { code: 'ecart_qte', label: 'Écart quantité' };
 }

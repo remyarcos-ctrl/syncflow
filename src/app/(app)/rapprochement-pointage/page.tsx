@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { formatDate, cn } from '@/utils';
 import { RefreshCw, AlertTriangle, CheckCircle2, ChevronRight, Download } from 'lucide-react';
-import { comparerPointage, aEcart, verdictPointage, type ResolutionRow } from '@/lib/pointage';
+import { comparerPointage, aEcart, verdictPointage, causeEcart, normalizeRef, type ResolutionRow, type CauseCode } from '@/lib/pointage';
 import type { BEReception, LigneBE, SaisieCL } from '@/types';
 
 const STATUTS_RESOLUS = new Set(['vérifié', 'corrigé', 'accepté', 'ignoré']);
@@ -53,6 +53,16 @@ export default function RapprochementPointagePage() {
     refetchInterval: 10000,
   });
 
+  // Références présentes dans au moins une commande → pour distinguer hors-commande / oubli log
+  const { data: refsCmd = [] } = useQuery<{ reference_article: string | null }[]>({
+    queryKey: ['rp_refs_cmd'],
+    queryFn: async () => {
+      const { data } = await supabase.from('lignes_commande').select('reference_article');
+      return data ?? [];
+    },
+    refetchInterval: 30000,
+  });
+
   // Calcul des écarts par BE
   const parBe = useMemo(() => {
     const lignesByBe = new Map<string, LigneBE[]>();
@@ -71,18 +81,19 @@ export default function RapprochementPointagePage() {
       arr.push({ reference_article: r.reference_article, statut: r.statut, note: r.note });
       resByBe.set(r.numero_be, arr);
     }
+    const refsCommandees = new Set(refsCmd.map(r => normalizeRef(r.reference_article)).filter(Boolean));
 
     return bes
       .map(be => {
         const sa = saisiesByBe.get(be.numero_be) ?? [];
         if (!sa.length) return null; // pas de saisie CL → pas rapprochable
-        const rows = comparerPointage(lignesByBe.get(be.id) ?? [], sa, resByBe.get(be.numero_be) ?? []);
+        const rows = comparerPointage(lignesByBe.get(be.id) ?? [], sa, resByBe.get(be.numero_be) ?? [], refsCommandees);
         const ecarts = rows.filter(aEcart);
         const aAnalyser = ecarts.filter(e => !STATUTS_RESOLUS.has(e.statut));
         return { be, nbRefs: rows.length, nbEcarts: ecarts.length, nbAAnalyser: aAnalyser.length, ecarts };
       })
       .filter((x): x is NonNullable<typeof x> => x !== null);
-  }, [bes, lignes, saisies, resolutions]);
+  }, [bes, lignes, saisies, resolutions, refsCmd]);
 
   const avecEcarts = parBe.filter(b => b.nbEcarts > 0);
   const liste = (filtre === 'a_analyser' ? avecEcarts.filter(b => b.nbAAnalyser > 0) : avecEcarts)
@@ -92,12 +103,15 @@ export default function RapprochementPointagePage() {
   const kpiBesAvecEcart = avecEcarts.length;
   const kpiEcartsAAnalyser = avecEcarts.reduce((s, b) => s + b.nbAAnalyser, 0);
 
+  const causeCounts: Record<CauseCode, number> = { conforme: 0, ecart_qte: 0, hors_commande: 0, non_saisi: 0, en_plus_cl: 0 };
+  for (const b of avecEcarts) for (const e of b.ecarts) if (aEcart(e)) causeCounts[causeEcart(e).code]++;
+
   const exportCsv = () => {
-    const head = ['BE', 'Référence', '② BL papier', '③ saisie CL', 'Écart', 'Verdict', 'Statut', 'Note'];
+    const head = ['BE', 'Référence', '② BL papier', '③ saisie CL', 'Écart', 'Cause', 'Verdict', 'Statut', 'Note'];
     const rows = (filtre === 'a_analyser' ? avecEcarts.filter(b => b.nbAAnalyser > 0) : avecEcarts)
       .flatMap(b => b.ecarts
         .filter(e => filtre === 'tous' || !STATUTS_RESOLUS.has(e.statut))
-        .map(e => [b.be.numero_be, e.ref, e.papier ?? '', e.cl ?? '', e.ecart, verdictPointage(e).label, e.statut, e.note ?? '']));
+        .map(e => [b.be.numero_be, e.ref, e.papier ?? '', e.cl ?? '', e.ecart, causeEcart(e).label, verdictPointage(e).label, e.statut, e.note ?? '']));
     const csv = [head, ...rows]
       .map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(';'))
       .join('\r\n');
@@ -119,7 +133,7 @@ export default function RapprochementPointagePage() {
       </div>
 
       {/* KPIs */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
         <Card><CardContent className="p-4">
           <div className="text-xs text-gray-500">BE rapprochables</div>
           <div className="text-2xl font-bold text-gray-900">{kpiBesRapprochables}</div>
@@ -134,6 +148,16 @@ export default function RapprochementPointagePage() {
           <div className="text-xs text-gray-500">Écarts à analyser</div>
           <div className={cn('text-2xl font-bold', kpiEcartsAAnalyser ? 'text-red-600' : 'text-emerald-600')}>{kpiEcartsAAnalyser}</div>
           <div className="text-xs text-gray-400">non encore traités</div>
+        </CardContent></Card>
+        <Card><CardContent className="p-4">
+          <div className="text-xs text-gray-500">Oublis log</div>
+          <div className={cn('text-2xl font-bold', causeCounts.non_saisi ? 'text-red-600' : 'text-gray-400')}>{causeCounts.non_saisi}</div>
+          <div className="text-xs text-gray-400">commandé, non saisi en CL</div>
+        </CardContent></Card>
+        <Card><CardContent className="p-4">
+          <div className="text-xs text-gray-500">Hors commande</div>
+          <div className={cn('text-2xl font-bold', causeCounts.hors_commande ? 'text-orange-600' : 'text-gray-400')}>{causeCounts.hors_commande}</div>
+          <div className="text-xs text-gray-400">envoi Colombi non commandé</div>
         </CardContent></Card>
       </div>
 
