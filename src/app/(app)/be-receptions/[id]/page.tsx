@@ -127,6 +127,35 @@ export default function BEDetailPage() {
     enabled: !!be?.numero_be, refetchInterval: 5000,
   });
 
+  // Commandes servies par ce BE — dérivées de Centralink (saisies log), lecture seule.
+  const commandeRefsServies = useMemo(
+    () => [...new Set(saisiesCl.map(s => s.commande_ref).filter(Boolean))] as string[],
+    [saisiesCl],
+  );
+  const { data: commandesServiesData = [] } = useQuery<Commande[]>({
+    queryKey: ['commandes_servies_be', commandeRefsServies.join()],
+    queryFn: async () => {
+      if (!commandeRefsServies.length) return [];
+      const { data } = await supabase.from('commandes').select('*').in('numero_commande_interne', commandeRefsServies);
+      return data ?? [];
+    },
+    enabled: commandeRefsServies.length > 0, refetchInterval: 10000,
+  });
+  const commandesServies = useMemo(() => {
+    const byRef = new Map<string, { qte: number; refs: Set<string> }>();
+    for (const s of saisiesCl) {
+      if (!s.commande_ref) continue;
+      const cur = byRef.get(s.commande_ref) ?? { qte: 0, refs: new Set<string>() };
+      cur.qte += s.quantite_recue ?? 0;
+      if (s.reference_article) cur.refs.add(s.reference_article);
+      byRef.set(s.commande_ref, cur);
+    }
+    return [...byRef.entries()].map(([ref, v]) => {
+      const cmd = commandesServiesData.find(c => c.numero_commande_interne === ref);
+      return { ref, cmdId: cmd?.id ?? null, statut: cmd?.statut_commande ?? null, fournisseur: cmd?.fournisseur ?? null, qte: v.qte, nbRefs: v.refs.size };
+    }).sort((a, b) => a.ref.localeCompare(b.ref));
+  }, [saisiesCl, commandesServiesData]);
+
   // Décisions de résolution des écarts de pointage
   const { data: pointageResolutions = [] } = useQuery<{ reference_article: string; statut: string; note: string | null }[]>({
     queryKey: ['pointage_resolution', be?.numero_be],
@@ -325,17 +354,9 @@ export default function BEDetailPage() {
     return { qteRecue, qteFact, qteReste };
   }, [lignes]);
 
-  // Lignes "à arbitrer" : libres (pas de commande), pas hors-système, pas en retour, qté > 0.
-  // C'est le surplus reçu qui n'est rattaché à rien et doit être traité par l'entrepôt.
-  const lignesAArbitrer = useMemo(
-    () => lignes.filter(l =>
-      !l.ligne_commande_id &&
-      !l.hors_systeme &&
-      !l.statut_retour &&
-      (l.quantite_receptionnee ?? 0) > 0
-    ),
-    [lignes],
-  );
+  // « À arbitrer » retiré : l'attribution manuelle BE→commande est supprimée (le reçu vient
+  // de Centralink). Le surplus/hors-commande réel est désormais traité dans le Centre d'anomalies.
+  const lignesAArbitrer = useMemo<LigneBE[]>(() => [], []);
 
   const lignesEnEcart = useMemo(() => {
     // Grouper par référence pour avoir la vraie qté totale (attribuée + libre).
@@ -822,51 +843,28 @@ export default function BEDetailPage() {
         {/* Commandes liées */}
         <Card className="border-indigo-100">
           <CardContent className="pt-4 pb-4">
-            <div className="flex items-center justify-between mb-3">
-              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1.5">
-                <ShoppingCart className="w-3.5 h-3.5 text-indigo-500" /> Commande(s) liée(s) ({commandes.length})
-              </p>
-              <div className="flex items-center gap-1.5">
-                <Button
-                  size="sm" variant="outline" className="h-6 text-xs"
-                  onClick={() => scanGmailMutation.mutate()}
-                  disabled={scanGmailMutation.isPending}
-                  title="Chercher des commandes dans Gmail"
-                >
-                  {scanGmailMutation.isPending
-                    ? <RefreshCw className="w-3 h-3 animate-spin" />
-                    : <RefreshCw className="w-3 h-3" />}
-                  <span className="ml-1">Gmail</span>
-                </Button>
-                <Button size="sm" variant="outline" className="h-6 text-xs" onClick={() => setShowLinkCommande(v => !v)}>
-                  <Plus className="w-3 h-3 mr-1" /> Ajouter
-                </Button>
-              </div>
-            </div>
-            {commandes.length === 0 ? (
-              <p className="text-xs text-amber-600 italic">Non lié à une commande</p>
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1.5 mb-3">
+              <ShoppingCart className="w-3.5 h-3.5 text-indigo-500" /> Commande(s) servie(s) ({commandesServies.length})
+              <span className="text-[10px] text-gray-300 normal-case font-normal ml-1">depuis Centralink</span>
+            </p>
+            {commandesServies.length === 0 ? (
+              <p className="text-xs text-amber-600 italic">Aucune réception saisie dans Centralink pour ce BE</p>
             ) : (
               <div className="space-y-1">
-                {commandes.map(c => {
-                  const liaison = liaisons.find(l => l.commande_id === c.id);
-                  return (
-                    <div key={c.id} className="flex items-center justify-between group px-2 py-1.5 rounded-lg hover:bg-indigo-50 transition-colors">
-                      <Link href={`/commandes/${c.id}`} className="flex items-center gap-2 flex-1">
-                        <span className="text-sm font-medium text-indigo-700 font-mono">#{c.numero_commande_interne}</span>
-                        <span className="text-xs text-gray-400">{c.fournisseur}</span>
-                        <StatusBadge status={c.statut_commande} />
+                {commandesServies.map(c => (
+                  <div key={c.ref} className="flex items-center justify-between px-2 py-1.5 rounded-lg hover:bg-indigo-50 transition-colors">
+                    {c.cmdId ? (
+                      <Link href={`/commandes/${c.cmdId}`} className="flex items-center gap-2 flex-1">
+                        <span className="text-sm font-medium text-indigo-700 font-mono">{c.ref}</span>
+                        {c.fournisseur && <span className="text-xs text-gray-400">{c.fournisseur}</span>}
+                        {c.statut && <StatusBadge status={c.statut} />}
                       </Link>
-                      {liaison && (
-                        <button
-                          onClick={() => unlinkCommandeMutation.mutate(liaison)}
-                          className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-red-50 text-gray-300 hover:text-red-500 transition-all"
-                        >
-                          <Unlink className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                    </div>
-                  );
-                })}
+                    ) : (
+                      <span className="text-sm font-mono text-gray-500 flex-1">{c.ref} <span className="text-[10px] text-gray-400">· commande absente de syncflow</span></span>
+                    )}
+                    <span className="text-xs text-gray-500 whitespace-nowrap">{c.nbRefs} réf · <span className="font-medium text-emerald-600">{c.qte} reçu</span></span>
+                  </div>
+                ))}
               </div>
             )}
 

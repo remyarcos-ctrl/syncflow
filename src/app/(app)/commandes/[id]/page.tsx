@@ -512,7 +512,7 @@ export default function CommandeDetailPage() {
           <CardContent className="pt-4 pb-4">
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1.5 mb-3">
               <Package className="w-3.5 h-3.5 text-amber-500" /> BE / réceptions ({besRecus.length})
-              <span className="text-[10px] text-gray-300 normal-case font-normal ml-1">d'après Centralink</span>
+              <span className="text-[10px] text-gray-300 normal-case font-normal ml-1">depuis Centralink</span>
             </p>
             {besRecus.length === 0 ? (
               <p className="text-xs text-amber-600 italic">Aucune réception saisie dans Centralink pour cette commande</p>
