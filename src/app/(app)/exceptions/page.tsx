@@ -277,6 +277,29 @@ export default function ExceptionsPage() {
     }
   };
 
+  // Hors-commande gardé en stock sans commande (ancien fonctionnement) → résolu + trace.
+  const garderEnStock = async (exc: Exc) => {
+    setUpdating(exc.id);
+    try {
+      const base = (comment || exc.commentaire || '').trim();
+      const { error } = await supabase.from('exceptions').update({
+        statut_exception: 'résolue',
+        commentaire: `Gardé en stock sans commande (ancien fonctionnement).${base ? ' ' + base : ''}`,
+      }).eq('id', exc.id);
+      if (error) throw error;
+      qc.invalidateQueries({ queryKey: ['exceptions'] });
+      qc.invalidateQueries({ queryKey: ['exceptions-kpis'] });
+      setShowDetail(null);
+      setComment('');
+      toast.success('Classé : gardé en stock (ancien fonctionnement)');
+    } catch (e) {
+      console.error(e);
+      toast.error('Erreur');
+    } finally {
+      setUpdating(null);
+    }
+  };
+
   const ouvrirDetail = (exc: Exc) => {
     setShowDetail(exc);
     setComment(exc.commentaire ?? '');
@@ -646,6 +669,12 @@ export default function ExceptionsPage() {
                   <Button variant="outline" size="sm" className="w-full mb-2 border-teal-200 text-teal-700 hover:bg-teal-50"
                     disabled={updating === showDetail.id} onClick={() => classerSav(showDetail, false)}>
                     📦 Classer : pièce détachée SAV (hors Centralink)
+                  </Button>
+                )}
+                {(showDetail.type_exception as string) === 'hors-commande' && ['ouverte', 'en cours'].includes(showDetail.statut_exception) && (
+                  <Button variant="outline" size="sm" className="w-full mb-2 border-gray-200 text-gray-600 hover:bg-gray-50"
+                    disabled={updating === showDetail.id} onClick={() => garderEnStock(showDetail)}>
+                    📥 Gardé en stock (sans commande — ancien fonctionnement)
                   </Button>
                 )}
               </>
