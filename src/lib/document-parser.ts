@@ -327,8 +327,8 @@ Retourne un tableau JSON (même si un seul document) :
         "reference_article": "référence (IGNORER les codes EXACTEMENT 4 lettres majuscules ex: AAAA, AAFB)",
         "designation": "désignation du produit",
         "quantite_receptionnee": nombre,
-        "prix_unitaire": prix NET unitaire après remises (= colonne « Prix UHT » × (1 − remises R1/R2/R3)) ou null,
-        "montant_ht": Total HT de la ligne (dernière colonne) ou null,
+        "prix_unitaire": prix NET unitaire = valeur de la colonne « Prix UHT » (lue telle quelle, ex: 3.09) MOINS les remises R1/R2/R3 affichées. ⚠️ NE JAMAIS le calculer en divisant le Total HT par la Quantité (ce serait circulaire et inutile). Lis le prix dans SA colonne. null si absent.,
+        "montant_ht": valeur de la colonne « Total HT » (dernière colonne, lue telle quelle, ex: 133.38) ou null,
         "hors_systeme": true si la ligne concerne le SAV/Service Après-Vente, false sinon
       }
     ]
