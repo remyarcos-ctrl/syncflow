@@ -171,6 +171,18 @@ export default function ExceptionsPage() {
   const enCours = (ref: string | null | undefined) =>
     refsAttente.has(String(ref ?? '').toUpperCase().replace(/O/g, '0').replace(/[^A-Z0-9]/g, ''));
 
+  // Réfs connues comme pièces détachées SAV (hors Centralink).
+  const { data: refsSav = new Set<string>() } = useQuery<Set<string>>({
+    queryKey: ['refs-sav'],
+    queryFn: async () => {
+      const { data } = await supabase.from('refs_sav').select('reference_article');
+      return new Set((data ?? []).map(r => String(r.reference_article ?? '')));
+    },
+    staleTime: 30000,
+  });
+  const estRefSav = (ref: string | null | undefined) =>
+    refsSav.has(String(ref ?? '').toUpperCase().replace(/O/g, '0').replace(/[^A-Z0-9]/g, ''));
+
   const factureMap = useMemo(() => Object.fromEntries(factures.map(f => [f.id, f])) as Record<string, Pick<Facture, 'id' | 'numero_facture'>>, [factures]);
   const beMap = useMemo(() => Object.fromEntries(bes.map(b => [b.id, b])) as Record<string, Pick<BEReception, 'id' | 'numero_be'>>, [bes]);
   const cmdMap = useMemo(() => Object.fromEntries(commandes.map(c => [c.id, c])) as Record<string, Pick<Commande, 'id' | 'numero_commande_interne'>>, [commandes]);
@@ -226,12 +238,13 @@ export default function ExceptionsPage() {
       const r = await fetch('/api/classer-sav', {
         method: retirer ? 'DELETE' : 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reference_article: exc.reference_article }),
+        body: JSON.stringify({ reference_article: exc.reference_article, exception_id: exc.id }),
       });
       const d = await r.json() as { ok?: boolean; error?: string };
       if (d.error) { toast.error(d.error); return; }
       qc.invalidateQueries({ queryKey: ['exceptions'] });
       qc.invalidateQueries({ queryKey: ['exceptions-kpis'] });
+      qc.invalidateQueries({ queryKey: ['refs-sav'] });
       setShowDetail(null);
       toast.success(retirer ? `${exc.reference_article} retirée du SAV` : `${exc.reference_article} classée pièce SAV`);
     } catch {
@@ -412,6 +425,11 @@ export default function ExceptionsPage() {
                         ⏳ saisie peut-être en cours
                       </span>
                     )}
+                    {estRefSav(exc.reference_article) && exc.destinataire !== 'SAV' && (exc.type_exception as string) === 'sur-livraison' && (
+                      <span className="inline-block mt-0.5 ml-1 text-[11px] px-1.5 py-0.5 rounded bg-teal-50 text-teal-600" title="Cette référence est aussi une pièce détachée SAV — vérifie si le surplus est un envoi SAV avant de réclamer à Colombi">
+                        ⚠ réf aussi SAV
+                      </span>
+                    )}
                     {exc.explication_ia && (
                       <p className="text-xs text-gray-500 mt-0.5 max-w-xs truncate">{exc.explication_ia}</p>
                     )}
@@ -573,18 +591,25 @@ export default function ExceptionsPage() {
                 {showDetail.destinataire && <span className={cn('px-2 py-0.5 rounded-full', DEST_CONFIG[showDetail.destinataire] ?? 'bg-gray-100 text-gray-600')}>{showDetail.destinataire}</span>}
               </div>
             )}
-            {(showDetail.type_exception as string) === 'hors-commande' && (
-              showDetail.destinataire === 'SAV' ? (
-                <Button variant="outline" size="sm" className="w-full mb-2" disabled={updating === showDetail.id}
-                  onClick={() => classerSav(showDetail, true)}>
-                  ↩ Retirer du SAV (redevient réclamation Colombi)
-                </Button>
-              ) : (
-                <Button variant="outline" size="sm" className="w-full mb-2 border-teal-200 text-teal-700 hover:bg-teal-50"
-                  disabled={updating === showDetail.id} onClick={() => classerSav(showDetail, false)}>
-                  📦 Classer : pièce détachée SAV (hors Centralink)
-                </Button>
-              )
+            {['hors-commande', 'sur-livraison'].includes(showDetail.type_exception as string) && (
+              <>
+                {estRefSav(showDetail.reference_article) && showDetail.destinataire !== 'SAV' && (
+                  <div className="mb-2 p-2 rounded-lg bg-teal-50 border border-teal-100 text-xs text-teal-700">
+                    ⚠ Réf aussi pièce SAV — vérifie si ce surplus est un envoi SAV avant de réclamer à Colombi.
+                  </div>
+                )}
+                {showDetail.destinataire === 'SAV' ? (
+                  <Button variant="outline" size="sm" className="w-full mb-2" disabled={updating === showDetail.id}
+                    onClick={() => classerSav(showDetail, true)}>
+                    ↩ Retirer du SAV (redevient réclamation Colombi)
+                  </Button>
+                ) : (
+                  <Button variant="outline" size="sm" className="w-full mb-2 border-teal-200 text-teal-700 hover:bg-teal-50"
+                    disabled={updating === showDetail.id} onClick={() => classerSav(showDetail, false)}>
+                    📦 Classer : pièce détachée SAV (hors Centralink)
+                  </Button>
+                )}
+              </>
             )}
             <div className="grid grid-cols-2 gap-2">
               <div>

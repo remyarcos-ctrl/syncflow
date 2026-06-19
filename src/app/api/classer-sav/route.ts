@@ -9,42 +9,47 @@ function adminSb() {
   );
 }
 
-// POST   : classe une référence en pièce détachée SAV (hors Centralink).
-//          → ajoute la réf à refs_sav + bascule ses anomalies hors-commande ouvertes
-//            vers le destinataire « SAV » (priorité faible). Géré pour toujours.
-// DELETE  : retire la réf du SAV → ses anomalies hors-commande repassent « Colombi ».
+// POST   : classe une référence / une anomalie en pièce détachée SAV (hors Centralink).
+//   - enregistre la réf dans refs_sav → ses futures « hors-commande » iront en SAV,
+//     et ses sur-livraisons porteront le badge « réf aussi SAV ».
+//   - bascule l'anomalie cliquée (exception_id, peu importe son type) vers SAV.
+//   - bascule aussi toutes ses hors-commande ouvertes (cas non ambigu : jamais commandé).
+// DELETE  : opération inverse (retire la réf du SAV, repasse les anomalies en Colombi).
 async function handle(req: Request, retirer: boolean) {
   const sb = adminSb();
-  let body: { reference_article?: string; note?: string };
+  let body: { reference_article?: string; exception_id?: string; note?: string };
   try { body = await req.json(); } catch { body = {}; }
   const refLabel = (body.reference_article ?? '').trim();
   const ref = normalizeRef(refLabel);
   if (!ref) return NextResponse.json({ error: 'Référence manquante' }, { status: 400 });
 
-  if (retirer) {
-    await sb.from('refs_sav').delete().eq('reference_article', ref);
-    const { error } = await sb.from('exceptions')
-      .update({ destinataire: 'Colombi', niveau_priorite: 'moyenne' })
-      .eq('type_exception', 'hors-commande').eq('destinataire', 'SAV')
-      .in('statut_exception', ['ouverte', 'en cours']).eq('reference_article', refLabel);
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-    return NextResponse.json({ ok: true, sav: false, reference_article: ref });
+  const dest = retirer ? 'Colombi' : 'SAV';
+  const prio = retirer ? 'moyenne' : 'faible';
+
+  if (retirer) await sb.from('refs_sav').delete().eq('reference_article', ref);
+  else {
+    const up = await sb.from('refs_sav')
+      .upsert({ reference_article: ref, ref_label: refLabel, note: body.note ?? null }, { onConflict: 'reference_article' });
+    if (up.error) return NextResponse.json({ error: up.error.message }, { status: 500 });
   }
 
-  const up = await sb.from('refs_sav')
-    .upsert({ reference_article: ref, ref_label: refLabel, note: body.note ?? null }, { onConflict: 'reference_article' });
-  if (up.error) return NextResponse.json({ error: up.error.message }, { status: 500 });
+  // 1) l'anomalie cliquée (n'importe quel type : hors-commande OU sur-livraison)
+  if (body.exception_id) {
+    const { error } = await sb.from('exceptions')
+      .update({ destinataire: dest, niveau_priorite: prio })
+      .eq('id', body.exception_id);
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  }
 
-  // Bascule les anomalies hors-commande ouvertes de cette réf vers SAV.
-  const { error } = await sb.from('exceptions')
-    .update({
-      destinataire: 'SAV', niveau_priorite: 'faible',
-      motif: `Pièce détachée SAV ${refLabel} : livrée hors commande (hors Centralink)`,
-    })
-    .eq('type_exception', 'hors-commande')
-    .in('statut_exception', ['ouverte', 'en cours']).eq('reference_article', refLabel);
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ ok: true, sav: true, reference_article: ref });
+  // 2) toutes les hors-commande ouvertes de cette réf (cas non ambigu)
+  const bulk = await sb.from('exceptions')
+    .update({ destinataire: dest, niveau_priorite: prio })
+    .eq('type_exception', 'hors-commande').eq('reference_article', refLabel)
+    .eq('destinataire', retirer ? 'SAV' : 'Colombi')
+    .in('statut_exception', ['ouverte', 'en cours']);
+  if (bulk.error) return NextResponse.json({ error: bulk.error.message }, { status: 500 });
+
+  return NextResponse.json({ ok: true, sav: !retirer, reference_article: ref });
 }
 
 export async function POST(req: Request) { return handle(req, false); }
