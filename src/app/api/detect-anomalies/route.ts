@@ -5,6 +5,9 @@ import {
   controlerLignesFacture,
   type LigneFactureInput, type LigneCommandeInput, type CommandeInput, type SaisieInput,
 } from '@/lib/facturation';
+import { quantitesConcordent } from '@/lib/conditionnement';
+
+const nbe = (s: string | null | undefined) => String(s ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 
 function adminSb() {
   return createClient(
@@ -149,6 +152,47 @@ export async function POST() {
       valeur_attendue: q, valeur_obtenue: r, ecart: r - q,
       statut_exception: 'ouverte', niveau_priorite: 'moyenne',
     });
+  }
+
+  // ── 3c) POINTAGE ②↔③ : la log a-t-elle saisi conformément au BL papier ? ──────
+  // Compare, PAR BE, le scan papier (②) à la saisie log (③, section Bon de Livraison).
+  // Sur-saisie (③ > ② papier, hors conditionnement) = doublon / erreur de saisie → log.
+  const lbByBe = new Map<string, Map<string, { qte: number; desig: string | null }>>();
+  for (const l of lignesBe) {
+    if (l.hors_systeme) continue;
+    const m = lbByBe.get(l.be_id) ?? new Map<string, { qte: number; desig: string | null }>();
+    const k = normalizeRef(l.reference_article);
+    const cur = m.get(k) ?? { qte: 0, desig: l.designation ?? null };
+    cur.qte += Number(l.quantite_receptionnee) || 0;
+    if (!cur.desig && l.designation) cur.desig = l.designation;
+    m.set(k, cur); lbByBe.set(l.be_id, m);
+  }
+  const beNumById = new Map((beR.data ?? []).map((b) => [b.id, b.numero_be]));
+  const beIdByNum = new Map((beR.data ?? []).map((b) => [nbe(b.numero_be), b.id]));
+  const saisieByBeRef = new Map<string, number>();
+  for (const s of saisies) {
+    const beId = beIdByNum.get(nbe(s.numero_be));
+    if (!beId) continue;
+    const kk = beId + '|' + normalizeRef(s.reference_article);
+    saisieByBeRef.set(kk, (saisieByBeRef.get(kk) ?? 0) + (Number(s.quantite_recue) || 0));
+  }
+  for (const [beId, refs] of lbByBe) {
+    for (const [k, info] of refs) {
+      const sv = saisieByBeRef.get(beId + '|' + k) ?? 0;
+      if (sv <= 0 || info.qte <= 0) continue;               // besoin des deux côtés
+      if (quantitesConcordent(info.qte, sv, info.desig)) continue; // conditionnement OK
+      if (sv <= info.qte + 0.001) continue;                  // on ne remonte que la SUR-saisie ③>②
+      if (seen.has(key('pointage', beId, k, 'sur-saisie log'))) continue;
+      const numBe = beNumById.get(beId) ?? '';
+      const mult = Number.isInteger(sv / info.qte) ? sv / info.qte : null;
+      nouvelles.push({
+        origine: 'pointage', destinataire: 'log', type_exception: 'sur-saisie log',
+        be_id: beId, reference_article: k,
+        motif: `Sur-saisie ${k} sur ${numBe} : BL papier ② ${info.qte} / saisie Centralink ③ ${sv}${mult ? ` (×${mult})` : ''} — à vérifier/corriger dans Centralink`,
+        valeur_attendue: info.qte, valeur_obtenue: sv, ecart: sv - info.qte,
+        statut_exception: 'ouverte', niveau_priorite: mult && mult >= 2 ? 'haute' : 'moyenne',
+      });
+    }
   }
 
   // ── 4) NUMÉROS DE BE IMPOSSIBLES (faute de frappe log : mois > 12) → log ─────
