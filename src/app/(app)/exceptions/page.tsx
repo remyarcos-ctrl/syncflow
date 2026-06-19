@@ -86,6 +86,7 @@ export default function ExceptionsPage() {
         .order('created_at', { ascending: false });
 
       if (filterStatut === 'actives') query = query.in('statut_exception', ['ouverte', 'en cours']);
+      else if (filterStatut === 'à analyser') query = query.eq('statut_exception', 'ouverte').eq('destinataire', 'Colombi');
       else if (filterStatut === 'résolues') query = query.in('statut_exception', ['résolue', 'ignorée']);
 
       if (filterType !== 'all') query = query.eq('type_exception', filterType);
@@ -104,19 +105,19 @@ export default function ExceptionsPage() {
   const { exceptions, total } = exceptionsResult;
 
   // Separate lightweight query for KPI counts (always active exceptions)
-  const { data: kpiData = { total: 0, haute: 0, prixEcart: 0, qteEcart: 0 } } = useQuery<{ total: number; haute: number; prixEcart: number; qteEcart: number }>({
+  const { data: kpiData = { total: 0, aAnalyser: 0, haute: 0, log: 0 } } = useQuery<{ total: number; aAnalyser: number; haute: number; log: number }>({
     queryKey: ['exceptions-kpis'],
     queryFn: async () => {
       const { data } = await supabase
         .from('exceptions')
-        .select('type_exception, niveau_priorite')
+        .select('type_exception, niveau_priorite, statut_exception, destinataire')
         .in('statut_exception', ['ouverte', 'en cours']);
       const rows = data ?? [];
       return {
         total: rows.length,
+        aAnalyser: rows.filter(e => e.statut_exception === 'ouverte' && e.destinataire === 'Colombi').length,
         haute: rows.filter(e => ['haute', 'critique'].includes(e.niveau_priorite)).length,
-        prixEcart: rows.filter(e => e.type_exception === 'écart prix').length,
-        qteEcart: rows.filter(e => ['surfacturation quantité', 'réception incomplète', 'quantité incohérente'].includes(e.type_exception)).length,
+        log: rows.filter(e => e.destinataire === 'log').length,
       };
     },
     staleTime: 30_000,
@@ -409,15 +410,31 @@ export default function ExceptionsPage() {
         </div>
       )}
 
+      {/* Bandeau « à analyser » : les décisions qui t'attendent */}
+      {kpiData.aAnalyser > 0 && filterStatut !== 'à analyser' && (
+        <button
+          onClick={() => { setFilterStatut('à analyser'); setPage(1); }}
+          className="w-full mb-4 flex items-center gap-3 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-left hover:bg-indigo-100 transition-colors"
+        >
+          <span className="text-lg">🆕</span>
+          <span className="text-sm font-medium text-indigo-800">
+            {kpiData.aAnalyser} anomalie{kpiData.aAnalyser > 1 ? 's' : ''} à analyser
+          </span>
+          <span className="text-xs text-indigo-500 ml-1">— décision{kpiData.aAnalyser > 1 ? 's' : ''} en attente</span>
+          <span className="ml-auto text-xs text-indigo-600 font-medium">Voir →</span>
+        </button>
+      )}
+
       {/* KPIs */}
       <div className="grid grid-cols-4 gap-4 mb-5">
         {[
-          { label: 'Actives', value: kpiData.total, color: 'text-gray-900' },
+          { label: '🆕 À analyser', value: kpiData.aAnalyser, color: 'text-indigo-600', onClick: () => { setFilterStatut('à analyser'); setPage(1); } },
+          { label: 'Actives', value: kpiData.total, color: 'text-gray-900', onClick: () => { setFilterStatut('actives'); setPage(1); } },
           { label: 'Haute priorité', value: kpiData.haute, color: 'text-red-600' },
-          { label: 'Écarts prix', value: kpiData.prixEcart, color: 'text-amber-600' },
-          { label: 'Écarts quantité', value: kpiData.qteEcart, color: 'text-orange-600' },
+          { label: 'À corriger (log)', value: kpiData.log, color: 'text-blue-600', onClick: () => { setFilterStatut('actives'); setFilterDest('log'); setPage(1); } },
         ].map(k => (
-          <div key={k.label} className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
+          <div key={k.label} onClick={k.onClick}
+            className={cn('bg-white rounded-xl border border-gray-100 shadow-sm p-4', k.onClick && 'cursor-pointer hover:border-indigo-200 hover:shadow')}>
             <p className="text-xs text-gray-500">{k.label}</p>
             <p className={`text-2xl font-bold mt-1 ${k.color}`}>{k.value}</p>
           </div>
@@ -426,7 +443,7 @@ export default function ExceptionsPage() {
 
       {/* Filtres */}
       <div className="flex gap-3 mb-4 flex-wrap items-center">
-        {['actives', 'résolues', 'toutes'].map(s => (
+        {['à analyser', 'actives', 'résolues', 'toutes'].map(s => (
           <button key={s} onClick={() => { setFilterStatut(s); setPage(1); }}
             className={cn('px-3 py-1.5 rounded-lg text-xs font-medium transition-colors',
               filterStatut === s ? 'bg-indigo-600 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50')}>
