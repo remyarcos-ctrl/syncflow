@@ -169,19 +169,32 @@ export default function BEDetailPage() {
     enabled: !!be?.numero_be, refetchInterval: 5000,
   });
 
-  // Reçu TOTAL Centralink par réf (« Livré », toutes commandes) → sert au pointage et à l'affichage.
-  const { data: recuParRef = new Map<string, number>() } = useQuery<Map<string, number>>({
-    queryKey: ['recu-par-ref'],
+  // Réfs reçues quelque part dans Centralink (GLOBAL) → détecte « saisi sous un autre BE ».
+  const { data: refsRecues = new Set<string>() } = useQuery<Set<string>>({
+    queryKey: ['refs-recues'],
     queryFn: async () => {
       const { data } = await supabase.from('lignes_commande').select('reference_article, quantite_receptionnee_reelle').limit(9999);
+      const norm = (s: string | null) => String(s ?? '').toUpperCase().replace(/O/g, '0').replace(/[^A-Z0-9]/g, '');
+      const set = new Set<string>();
+      for (const l of data ?? []) { if ((Number(l.quantite_receptionnee_reelle) || 0) > 0) set.add(norm(l.reference_article)); }
+      return set;
+    },
+    staleTime: 30000,
+  });
+  // « Livré total CL » = reçu Centralink de la réf, SUR LES COMMANDES SERVIES PAR CE BE (pas global).
+  const commandeIdsServies = useMemo(() => commandesServiesData.map(c => c.id), [commandesServiesData]);
+  const { data: recuParRef = new Map<string, number>() } = useQuery<Map<string, number>>({
+    queryKey: ['recu-par-ref-be', commandeIdsServies.join()],
+    queryFn: async () => {
+      if (!commandeIdsServies.length) return new Map<string, number>();
+      const { data } = await supabase.from('lignes_commande').select('reference_article, quantite_receptionnee_reelle').in('commande_id', commandeIdsServies);
       const norm = (s: string | null) => String(s ?? '').toUpperCase().replace(/O/g, '0').replace(/[^A-Z0-9]/g, '');
       const m = new Map<string, number>();
       for (const l of data ?? []) { const k = norm(l.reference_article); m.set(k, (m.get(k) ?? 0) + (Number(l.quantite_receptionnee_reelle) || 0)); }
       return m;
     },
-    staleTime: 30000,
+    enabled: commandeIdsServies.length > 0, staleTime: 30000,
   });
-  const refsRecues = useMemo(() => new Set([...recuParRef].filter(([, v]) => v > 0).map(([k]) => k)), [recuParRef]);
 
   // Rapprochement ② BE papier ↔ ③ saisie CL (logique partagée @/lib/pointage)
   const rappCl = useMemo(() => {
@@ -1161,7 +1174,7 @@ export default function BEDetailPage() {
                     <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500">Réf.</th>
                     <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500">② BL papier</th>
                     <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500" title="Saisie de la log sous CE BE">③ saisie CL</th>
-                    <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500" title="« Livré » total dans Centralink pour cette réf — toutes commandes et livraisons confondues">Livré total CL</th>
+                    <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500" title="« Livré » dans Centralink pour cette réf, sur les commandes servies par ce BE (toutes livraisons)">Livré CL</th>
                     <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500">Écart</th>
                     <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500">Verdict</th>
                     <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500">Suivi</th>
@@ -1180,7 +1193,7 @@ export default function BEDetailPage() {
                           )}
                         </td>
                         <td className="px-4 py-2 text-right tabular-nums">{r.cl ?? '—'}</td>
-                        <td className="px-4 py-2 text-right tabular-nums text-gray-500" title="Reçu total Centralink (toutes commandes/livraisons)">{r.recuTotal ?? '—'}</td>
+                        <td className="px-4 py-2 text-right tabular-nums text-gray-500" title="Reçu Centralink sur les commandes servies par ce BE">{r.recuTotal ?? '—'}</td>
                         <td className={cn('px-4 py-2 text-right font-semibold tabular-nums', ko ? 'text-amber-700' : 'text-gray-300')}>
                           {ko ? (r.ecart > 0 ? `+${r.ecart}` : r.ecart) : '0'}
                         </td>
