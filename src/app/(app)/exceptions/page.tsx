@@ -254,6 +254,29 @@ export default function ExceptionsPage() {
     }
   };
 
+  // Disposition d'une sur-livraison Colombi : on garde (régularisé) ou on retourne (avoir attendu).
+  const disposerSurLiv = async (exc: Exc, mode: 'garde' | 'retour') => {
+    setUpdating(exc.id);
+    try {
+      const base = (comment || exc.commentaire || '').trim();
+      const patch = mode === 'garde'
+        ? { statut_exception: 'résolue', commentaire: `Gardé — régularisé par nouvelle commande.${base ? ' ' + base : ''}` }
+        : { statut_exception: 'en cours', commentaire: `Retour — avoir attendu.${base ? ' ' + base : ''}` };
+      const { error } = await supabase.from('exceptions').update(patch).eq('id', exc.id);
+      if (error) throw error;
+      qc.invalidateQueries({ queryKey: ['exceptions'] });
+      qc.invalidateQueries({ queryKey: ['exceptions-kpis'] });
+      setShowDetail(null);
+      setComment('');
+      toast.success(mode === 'garde' ? 'Sur-livraison gardée (régularisée)' : 'Retour enregistré — avoir attendu');
+    } catch (e) {
+      console.error(e);
+      toast.error('Erreur');
+    } finally {
+      setUpdating(null);
+    }
+  };
+
   const ouvrirDetail = (exc: Exc) => {
     setShowDetail(exc);
     setComment(exc.commentaire ?? '');
@@ -589,6 +612,22 @@ export default function ExceptionsPage() {
               <div className="flex gap-2 mb-2 text-xs">
                 {showDetail.origine && <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">source : {showDetail.origine}</span>}
                 {showDetail.destinataire && <span className={cn('px-2 py-0.5 rounded-full', DEST_CONFIG[showDetail.destinataire] ?? 'bg-gray-100 text-gray-600')}>{showDetail.destinataire}</span>}
+              </div>
+            )}
+            {(showDetail.type_exception as string) === 'sur-livraison' && ['ouverte', 'en cours'].includes(showDetail.statut_exception) && (
+              <div className="mb-2 p-2 rounded-lg bg-gray-50 border border-gray-100">
+                <p className="text-xs text-gray-500 mb-1.5">Décision sur le surplus :</p>
+                <div className="flex gap-2">
+                  <Button variant="outline" size="sm" className="flex-1 border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+                    disabled={updating === showDetail.id} onClick={() => disposerSurLiv(showDetail, 'garde')}>
+                    ✅ Gardé (régularisé)
+                  </Button>
+                  <Button variant="outline" size="sm" className="flex-1 border-orange-200 text-orange-700 hover:bg-orange-50"
+                    disabled={updating === showDetail.id} onClick={() => disposerSurLiv(showDetail, 'retour')}>
+                    ↩ Retour / avoir attendu
+                  </Button>
+                </div>
+                <p className="text-[11px] text-gray-400 mt-1">« Gardé » = tu crées une commande dans Centralink pour le surplus → résolue. « Retour » = avoir attendu, reste suivi.</p>
               </div>
             )}
             {['hors-commande', 'sur-livraison'].includes(showDetail.type_exception as string) && (
