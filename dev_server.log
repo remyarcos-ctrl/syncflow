@@ -1,0 +1,12 @@
+
+> syncflow@0.1.0 dev
+> next dev
+
+▲ Next.js 16.2.4 (Turbopack)
+- Local:         http://localhost:3000
+- Network:       http://10.10.11.120:3000
+- Environments: .env.local
+✓ Ready in 1187ms
+
+[parsePdfDocuments:BE-25-12-1641] moteur=haiku · 48 ligne(s) · coût≈0.033 € ($0.036)
+ POST /api/rescan-be 200 in 28.5s (next.js: 914ms, application-code: 27.6s)
