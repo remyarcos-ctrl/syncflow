@@ -182,6 +182,12 @@ export async function POST() {
     const k = normalizeRef(s.reference_article);
     saisieTotalByRef.set(k, (saisieTotalByRef.get(k) ?? 0) + (Number(s.quantite_recue) || 0));
   }
+  // Réfs réellement commandées (un oubli de saisie n'a de sens que là-dessus : les pièces SAV
+  // et le hors-commande sont hors-Centralink, donc ③ = 0 est NORMAL, pas un oubli).
+  const refsCommandees = new Set<string>();
+  for (const l of lignesCmd) {
+    if ((Number(l.quantite_commandee) || 0) > 0) refsCommandees.add(normalizeRef(l.reference_article));
+  }
   for (const [beId, refs] of lbByBe) {
     for (const [k, info] of refs) {
       if (info.qte <= 0) continue;
@@ -200,7 +206,9 @@ export async function POST() {
           statut_exception: 'ouverte', niveau_priorite: mult && mult >= 2 ? 'haute' : 'moyenne',
         });
       } else {
-        // SOUS-saisie (③ < ②) : oubli SEULEMENT si le manque n'est pas saisi sous un autre BE.
+        // SOUS-saisie (③ < ②) : oubli SEULEMENT si la réf est commandée (sinon SAV/hors-Centralink)
+        // ET si le manque n'est pas saisi sous un autre BE.
+        if (!refsCommandees.has(k)) continue;                           // SAV / hors-commande → pas un oubli
         const ailleurs = (saisieTotalByRef.get(k) ?? 0) - sv;            // ③ de cette réf sous d'AUTRES BE
         const manque = info.qte - sv;
         if (ailleurs >= manque - 0.001) continue;                       // tout est saisi (ailleurs) → pas un oubli
