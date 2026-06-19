@@ -69,10 +69,14 @@ export async function POST() {
     const ecart = c.verdict === 'sur_livraison' ? c.surLivraisonNette : c.qteBe;
     // Pièce détachée SAV connue, livrée hors commande → destinataire SAV (info, pas Colombi).
     const estSav = c.verdict === 'hors_commande' && refsSav.has(normalizeRef(c.ref));
+    // Sur-réception (reçu > commandé = « Attendu négatif » dans Centralink) : presque
+    // toujours une manipulation/erreur de saisie (Livré gonflé) → vers la log par défaut,
+    // pas Colombi. Reclassable en Colombi (Gardé/Retour) si c'est une vraie sur-livraison.
+    const destinataire = c.verdict === 'sur_livraison' ? 'log' : (estSav ? 'SAV' : 'Colombi');
     nouvelles.push({
-      origine: 'réception', destinataire: estSav ? 'SAV' : 'Colombi', type_exception: type, be_id: c.be_id, reference_article: c.ref,
+      origine: 'réception', destinataire, type_exception: type, be_id: c.be_id, reference_article: c.ref,
       motif: c.verdict === 'sur_livraison'
-        ? `Sur-livraison ${c.ref} : commandé ${c.totalCommande} / reçu ${c.totalRecu}${c.totalRetour ? ` / déjà retourné ${c.totalRetour}` : ''} → +${ecart} à traiter`
+        ? `Sur-saisie probable ${c.ref} : reçu ${c.totalRecu} > commandé ${c.totalCommande} (Attendu négatif)${c.totalRetour ? `, déjà retourné ${c.totalRetour}` : ''} — Livré gonflé, à corriger dans Centralink`
         : estSav
           ? `Pièce détachée SAV ${c.ref} : reçu ${c.qteBe}, livrée hors commande (hors Centralink)`
           : `Hors commande ${c.ref} : reçu ${c.qteBe}, jamais commandé`,
