@@ -48,6 +48,8 @@ export interface ParsedLigneBE {
   reference_article: string;
   designation: string | null;
   quantite_receptionnee: number;
+  prix_unitaire?: number | null;   // prix NET unitaire (après remises) — sert à l'auto-vérif
+  montant_ht?: number | null;      // Total HT de la ligne — sert à l'auto-vérif
   hors_systeme?: boolean;
 }
 
@@ -232,11 +234,20 @@ function processBERaw(raw: Record<string, unknown>): ParsedDocument {
   const be = raw as unknown as ParsedBE;
   const lignes = (be.lignes ?? [])
     .filter((l) => l.reference_article && !isPositionCode(l.reference_article) && !isEanBarcode(l.reference_article))
-    .map((l) => ({
-      ...l,
-      quantite_receptionnee: Number(l.quantite_receptionnee) || 0,
-      designation: l.designation ?? null,
-    }));
+    .map((l) => {
+      let qte = Number(l.quantite_receptionnee) || 0;
+      const pu = Number(l.prix_unitaire) || 0;
+      const mt = Number(l.montant_ht) || 0;
+      // Auto-vérif : la quantité doit valoir Total HT ÷ prix net. Si elle diverge GROSSIÈREMENT
+      // (> 50 %, ex. parseur qui lit 5000 au lieu de 54), on la recalcule depuis le montant.
+      // Seuil large pour ne jamais corriger une simple imprécision de remise/arrondi.
+      if (pu > 0 && mt > 0) {
+        const qteCalc = mt / pu;
+        const ratio = qteCalc > 0 ? qte / qteCalc : 1;
+        if (qteCalc >= 1 && (ratio > 1.5 || ratio < 0.67)) qte = Math.round(qteCalc);
+      }
+      return { ...l, quantite_receptionnee: qte, designation: l.designation ?? null };
+    });
 
   const aggregated = new Map<string, ParsedLigneBE>();
   for (const l of lignes) {
@@ -316,6 +327,8 @@ Retourne un tableau JSON (même si un seul document) :
         "reference_article": "référence (IGNORER les codes EXACTEMENT 4 lettres majuscules ex: AAAA, AAFB)",
         "designation": "désignation du produit",
         "quantite_receptionnee": nombre,
+        "prix_unitaire": prix NET unitaire après remises (= colonne « Prix UHT » × (1 − remises R1/R2/R3)) ou null,
+        "montant_ht": Total HT de la ligne (dernière colonne) ou null,
         "hors_systeme": true si la ligne concerne le SAV/Service Après-Vente, false sinon
       }
     ]
