@@ -345,7 +345,9 @@ Règles BE (Colombi-sports) :
 - Ignorer les références EXACTEMENT 4 lettres majuscules (codes position : AAAA, AAFB, etc.)
 - Ignorer les codes EAN/barcodes (chiffres uniquement, 8+ chiffres)
 - Agréger les lignes avec la même référence ET le même hors_systeme (additionner les quantités)
-- quantite_receptionnee = LA QUANTITÉ EXACTE écrite dans la colonne quantité du BL. NE JAMAIS multiplier par le conditionnement : « X500 », « X1000 », « PAR 100 » font partie du NOM du produit (boîte/lot de N), PAS un multiplicateur. Ex : « GOMMETTES D19 X1000 » avec quantité 50 → quantite_receptionnee: 50 (surtout pas 50000).
+- quantite_receptionnee = la valeur de la colonne « Quantité » du BL.
+  ⚠️ PIÈGE COLONNES : le BL Colombi a DEUX colonnes voisines, « Quantité » PUIS « Unité ». La colonne « Unité » vaut presque toujours 1 (= unité de vente). Il faut IMPÉRATIVEMENT prendre « Quantité », JAMAIS « Unité ». Ordre des colonnes : Code article · Désignation/EAN · N° de série · Cde client · Référence · **Quantité** · Unité · Prix UHT · R1 · R2 · R3 · Total HT. Exemple réel : ligne « 17655 … 10 1 18.24 » → la Quantité est 10 et l'Unité est 1 → quantite_receptionnee: 10 (surtout PAS 1). Autre repère : le Total HT = Quantité × Prix net ; si « quantité × prix » ne tombe pas sur le Total HT, c'est que tu as pris l'Unité au lieu de la Quantité — corrige.
+  NE JAMAIS multiplier par le conditionnement : « X500 », « X1000 », « PAR 100 » font partie du NOM du produit (boîte/lot de N), PAS un multiplicateur. Ex : « GOMMETTES D19 X1000 » avec quantité 50 → quantite_receptionnee: 50 (surtout pas 50000).
 - Si une ligne mentionne "SAV", "S.A.V.", "Service Après-Vente" ou similaire dans la désignation ou une colonne dédiée → hors_systeme: true
 
 Règles Facture :
