@@ -344,6 +344,21 @@ export default function BEDetailPage() {
 
   useEffect(() => { if (be) setNotes(be.commentaire ?? ''); }, [be]);
 
+  // Re-scanner le BL : re-parse le PDF stocké avec le parser à jour et corrige les quantités.
+  const rescanMutation = useMutation({
+    mutationFn: async () => {
+      const r = await fetch('/api/rescan-be', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ beId: id }) });
+      const j = await r.json();
+      if (!r.ok || j.error) throw new Error(j.error ?? 'Erreur');
+      return j as { corrigees: number };
+    },
+    onSuccess: (d) => {
+      qc.invalidateQueries({ queryKey: ['lignes_be', id] });
+      toast.success(d.corrigees > 0 ? `${d.corrigees} quantité(s) corrigée(s) d'après le PDF` : 'Scan déjà conforme au PDF');
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
   // ── KPIs ──────────────────────────────────────────────────────────────────
   const kpis = useMemo(() => {
     // Excluent hors_systeme (SAV) ET statut_retour (en cours de retour fournisseur)
@@ -833,9 +848,15 @@ export default function BEDetailPage() {
         ))}
       </div>
       {be.pdf_url && (
-        <Button variant="outline" size="sm" onClick={() => setShowPDF(true)}>
-          <FileText className="w-3.5 h-3.5 mr-1.5" /> Voir le PDF
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => setShowPDF(true)}>
+            <FileText className="w-3.5 h-3.5 mr-1.5" /> Voir le PDF
+          </Button>
+          <Button variant="outline" size="sm" disabled={rescanMutation.isPending} onClick={() => rescanMutation.mutate()}
+            title="Re-lit le PDF avec le parser à jour et corrige les quantités (sans toucher aux SAV/retours)">
+            <RefreshCw className={cn('w-3.5 h-3.5 mr-1.5', rescanMutation.isPending && 'animate-spin')} /> {rescanMutation.isPending ? 'Re-scan…' : 'Re-scanner le BL'}
+          </Button>
+        </div>
       )}
 
       {/* Commandes, Factures et Contacts */}
