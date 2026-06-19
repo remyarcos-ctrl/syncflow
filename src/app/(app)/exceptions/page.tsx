@@ -277,6 +277,32 @@ export default function ExceptionsPage() {
     }
   };
 
+  // Sur-livraison qui est en fait une erreur/manipulation de saisie (Attendu négatif :
+  // Livré gonflé, vrai reçu = commandé) → vers la log pour correction, pas Colombi.
+  const routerVersLog = async (exc: Exc) => {
+    setUpdating(exc.id);
+    try {
+      const base = (comment || exc.commentaire || '').trim();
+      const { error } = await supabase.from('exceptions').update({
+        destinataire: 'log',
+        statut_exception: 'en cours',
+        niveau_priorite: 'moyenne',
+        commentaire: `Erreur de saisie (Attendu négatif) — Livré gonflé, vrai reçu = commandé. À corriger dans Centralink.${base ? ' ' + base : ''}`,
+      }).eq('id', exc.id);
+      if (error) throw error;
+      qc.invalidateQueries({ queryKey: ['exceptions'] });
+      qc.invalidateQueries({ queryKey: ['exceptions-kpis'] });
+      setShowDetail(null);
+      setComment('');
+      toast.success('Routé vers la log (erreur de saisie)');
+    } catch (e) {
+      console.error(e);
+      toast.error('Erreur');
+    } finally {
+      setUpdating(null);
+    }
+  };
+
   // Hors-commande gardé en stock sans commande (ancien fonctionnement) → résolu + trace.
   const garderEnStock = async (exc: Exc) => {
     setUpdating(exc.id);
@@ -650,7 +676,11 @@ export default function ExceptionsPage() {
                     ↩ Retour / avoir attendu
                   </Button>
                 </div>
-                <p className="text-[11px] text-gray-400 mt-1">« Gardé » = tu crées une commande dans Centralink pour le surplus → résolue. « Retour » = avoir attendu, reste suivi.</p>
+                <Button variant="outline" size="sm" className="w-full mt-2 border-blue-200 text-blue-700 hover:bg-blue-50"
+                  disabled={updating === showDetail.id} onClick={() => routerVersLog(showDetail)}>
+                  🛠 Erreur de saisie (Attendu négatif) → log
+                </Button>
+                <p className="text-[11px] text-gray-400 mt-1">« Gardé » = commande de régul dans Centralink → résolue. « Retour » = avoir attendu. « Erreur de saisie » = Livré gonflé (vrai reçu = commandé) → la log corrige.</p>
               </div>
             )}
             {['hors-commande', 'sur-livraison'].includes(showDetail.type_exception as string) && (
