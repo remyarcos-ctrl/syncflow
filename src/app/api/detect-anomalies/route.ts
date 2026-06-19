@@ -176,22 +176,44 @@ export async function POST() {
     const kk = beId + '|' + normalizeRef(s.reference_article);
     saisieByBeRef.set(kk, (saisieByBeRef.get(kk) ?? 0) + (Number(s.quantite_recue) || 0));
   }
+  // Saisie ③ TOTALE par réf (toutes BE) — sert à savoir si un manque est « saisi ailleurs ».
+  const saisieTotalByRef = new Map<string, number>();
+  for (const s of saisies) {
+    const k = normalizeRef(s.reference_article);
+    saisieTotalByRef.set(k, (saisieTotalByRef.get(k) ?? 0) + (Number(s.quantite_recue) || 0));
+  }
   for (const [beId, refs] of lbByBe) {
     for (const [k, info] of refs) {
-      const sv = saisieByBeRef.get(beId + '|' + k) ?? 0;
-      if (sv <= 0 || info.qte <= 0) continue;               // besoin des deux côtés
-      if (quantitesConcordent(info.qte, sv, info.desig)) continue; // conditionnement OK
-      if (sv <= info.qte + 0.001) continue;                  // on ne remonte que la SUR-saisie ③>②
-      if (seen.has(key('pointage', beId, k, 'sur-saisie log'))) continue;
+      if (info.qte <= 0) continue;
+      const sv = saisieByBeRef.get(beId + '|' + k) ?? 0;                 // ③ saisi sous CE BE (toutes commandes)
+      if (quantitesConcordent(info.qte, sv, info.desig)) continue;       // égal ou conditionnement → OK
       const numBe = beNumById.get(beId) ?? '';
-      const mult = Number.isInteger(sv / info.qte) ? sv / info.qte : null;
-      nouvelles.push({
-        origine: 'pointage', destinataire: 'log', type_exception: 'sur-saisie log',
-        be_id: beId, reference_article: k,
-        motif: `Sur-saisie ${k} sur ${numBe} : BL papier ② ${info.qte} / saisie Centralink ③ ${sv}${mult ? ` (×${mult})` : ''} — à vérifier/corriger dans Centralink`,
-        valeur_attendue: info.qte, valeur_obtenue: sv, ecart: sv - info.qte,
-        statut_exception: 'ouverte', niveau_priorite: mult && mult >= 2 ? 'haute' : 'moyenne',
-      });
+      if (sv > info.qte + 0.001) {
+        // SUR-saisie (③ > ②) : doublon / erreur de saisie → log.
+        if (seen.has(key('pointage', beId, k, 'sur-saisie log'))) continue;
+        const mult = Number.isInteger(sv / info.qte) ? sv / info.qte : null;
+        nouvelles.push({
+          origine: 'pointage', destinataire: 'log', type_exception: 'sur-saisie log',
+          be_id: beId, reference_article: k,
+          motif: `Sur-saisie ${k} sur ${numBe} : BL papier ② ${info.qte} / saisie Centralink ③ ${sv}${mult ? ` (×${mult})` : ''} — à vérifier/corriger dans Centralink`,
+          valeur_attendue: info.qte, valeur_obtenue: sv, ecart: sv - info.qte,
+          statut_exception: 'ouverte', niveau_priorite: mult && mult >= 2 ? 'haute' : 'moyenne',
+        });
+      } else {
+        // SOUS-saisie (③ < ②) : oubli SEULEMENT si le manque n'est pas saisi sous un autre BE.
+        const ailleurs = (saisieTotalByRef.get(k) ?? 0) - sv;            // ③ de cette réf sous d'AUTRES BE
+        const manque = info.qte - sv;
+        if (ailleurs >= manque - 0.001) continue;                       // tout est saisi (ailleurs) → pas un oubli
+        if (seen.has(key('pointage', beId, k, 'oubli log'))) continue;
+        const nonSaisi = manque - Math.max(0, ailleurs);
+        nouvelles.push({
+          origine: 'pointage', destinataire: 'log', type_exception: 'oubli log',
+          be_id: beId, reference_article: k,
+          motif: `Oubli de saisie ${k} sur ${numBe} : BL papier ② ${info.qte} / saisi ③ ${sv} — ${nonSaisi.toFixed(0)} non saisi(s) (ni sous un autre BE) — à saisir dans Centralink`,
+          valeur_attendue: info.qte, valeur_obtenue: sv, ecart: sv - info.qte,
+          statut_exception: 'ouverte', niveau_priorite: 'moyenne',
+        });
+      }
     }
   }
 
