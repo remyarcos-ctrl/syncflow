@@ -2,8 +2,14 @@
 // Répond à : « Colombi a-t-il livré ce qu'on a commandé, en quantité ? »
 // Utilisable dès l'import du BE, avant que la log saisisse.
 
-export const normalizeRef = (s: string | null | undefined): string =>
-  String(s ?? '').toUpperCase().replace(/O/g, '0').replace(/[^A-Z0-9]/g, '');
+export const normalizeRef = (s: string | null | undefined): string => {
+  // Certaines commandes Centralink préfixent le code article par un n° de
+  // commande : « 1404/16928A ». Le vrai code article (celui du BE papier) est
+  // le segment après le dernier « / ». On s'aligne dessus pour le rapprochement.
+  const raw = String(s ?? '');
+  const seg = raw.includes('/') ? raw.slice(raw.lastIndexOf('/') + 1) : raw;
+  return seg.toUpperCase().replace(/O/g, '0').replace(/[^A-Z0-9]/g, '');
+};
 
 export type VerdictReception = 'conforme' | 'sur_livraison' | 'hors_commande';
 
