@@ -3,8 +3,9 @@
 
 const ANTHROPIC_API = 'https://api.anthropic.com/v1/messages';
 const MODEL_EMAIL = 'claude-haiku-4-5-20251001';
-// PDF scannés : Haiku par défaut (3× moins cher). Sonnet en repli si l'extraction Haiku est douteuse.
-const MODEL_PDF_PRIMAIRE = 'claude-haiku-4-5-20251001';
+// PDF scannés : Sonnet (plus précis) pour fiabiliser au maximum la lecture des BE — la
+// justesse des quantités prime sur le coût (~0,05 € vs 0,03 € par import). Repli Sonnet aussi.
+const MODEL_PDF_PRIMAIRE = 'claude-sonnet-4-6';
 const MODEL_PDF_REPLI = 'claude-sonnet-4-6';
 
 // Tarifs API Claude ($/1M tokens) pour estimer le coût de chaque import.
@@ -385,7 +386,7 @@ Si un document n'est pas reconnu : {"type": "inconnu", "raison": "..."}`;
   }
 
   const coutEUR = coutTotal * 0.92;
-  const label = moteur === MODEL_PDF_PRIMAIRE ? 'haiku' : 'sonnet';
+  const label = /sonnet/i.test(moteur) ? 'sonnet' : /opus/i.test(moteur) ? 'opus' : 'haiku';
   console.log(`[parsePdfDocuments:${filename}] moteur=${label} · ${nbLignes(docs)} ligne(s) · coût≈${coutEUR.toFixed(3)} € ($${coutTotal.toFixed(3)})`);
 
   if (!docs.length) return { docs: [{ type: 'inconnu', raison: `Réponse IA (${label}) non parseable` }], coutEUR, moteur: label };
