@@ -44,6 +44,7 @@ type Exc = Exception & {
 const DEST_CONFIG: Record<string, string> = {
   Colombi: 'bg-orange-100 text-orange-700',
   log: 'bg-blue-100 text-blue-700',
+  SAV: 'bg-teal-100 text-teal-700',
   interne: 'bg-gray-100 text-gray-600',
 };
 
@@ -217,6 +218,29 @@ export default function ExceptionsPage() {
     }
   };
 
+  // Classe / déclasse une réf en pièce détachée SAV (hors Centralink).
+  const classerSav = async (exc: Exc, retirer: boolean) => {
+    if (!exc.reference_article) return;
+    setUpdating(exc.id);
+    try {
+      const r = await fetch('/api/classer-sav', {
+        method: retirer ? 'DELETE' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reference_article: exc.reference_article }),
+      });
+      const d = await r.json() as { ok?: boolean; error?: string };
+      if (d.error) { toast.error(d.error); return; }
+      qc.invalidateQueries({ queryKey: ['exceptions'] });
+      qc.invalidateQueries({ queryKey: ['exceptions-kpis'] });
+      setShowDetail(null);
+      toast.success(retirer ? `${exc.reference_article} retirée du SAV` : `${exc.reference_article} classée pièce SAV`);
+    } catch {
+      toast.error('Erreur');
+    } finally {
+      setUpdating(null);
+    }
+  };
+
   const ouvrirDetail = (exc: Exc) => {
     setShowDetail(exc);
     setComment(exc.commentaire ?? '');
@@ -342,7 +366,7 @@ export default function ExceptionsPage() {
         <select value={filterDest} onChange={e => { setFilterDest(e.target.value); setPage(1); }}
           className="h-9 rounded-lg border border-gray-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
           <option value="all">Tous destinataires</option>
-          {['Colombi', 'log', 'interne'].map(d => <option key={d} value={d}>{d}</option>)}
+          {['Colombi', 'log', 'SAV', 'interne'].map(d => <option key={d} value={d}>{d}</option>)}
         </select>
       </div>
 
@@ -548,6 +572,19 @@ export default function ExceptionsPage() {
                 {showDetail.origine && <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">source : {showDetail.origine}</span>}
                 {showDetail.destinataire && <span className={cn('px-2 py-0.5 rounded-full', DEST_CONFIG[showDetail.destinataire] ?? 'bg-gray-100 text-gray-600')}>{showDetail.destinataire}</span>}
               </div>
+            )}
+            {(showDetail.type_exception as string) === 'hors-commande' && (
+              showDetail.destinataire === 'SAV' ? (
+                <Button variant="outline" size="sm" className="w-full mb-2" disabled={updating === showDetail.id}
+                  onClick={() => classerSav(showDetail, true)}>
+                  ↩ Retirer du SAV (redevient réclamation Colombi)
+                </Button>
+              ) : (
+                <Button variant="outline" size="sm" className="w-full mb-2 border-teal-200 text-teal-700 hover:bg-teal-50"
+                  disabled={updating === showDetail.id} onClick={() => classerSav(showDetail, false)}>
+                  📦 Classer : pièce détachée SAV (hors Centralink)
+                </Button>
+              )
             )}
             <div className="grid grid-cols-2 gap-2">
               <div>

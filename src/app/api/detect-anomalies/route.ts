@@ -25,7 +25,7 @@ interface NewExc {
 export async function POST() {
   const sb = adminSb();
 
-  const [lbeR, lcR, saisR, beR, lfR, factR, cmdR, exR] = await Promise.all([
+  const [lbeR, lcR, saisR, beR, lfR, factR, cmdR, exR, savR] = await Promise.all([
     sb.from('lignes_be').select('be_id, reference_article, designation, quantite_receptionnee, hors_systeme, statut_retour'),
     sb.from('lignes_commande').select('commande_id, reference_article, quantite_commandee, pu_commande, quantite_receptionnee_reelle, quantite_restante_a_recevoir'),
     sb.from('saisies_cl').select('numero_be, reference_article, quantite_recue, commande_ref'),
@@ -35,7 +35,11 @@ export async function POST() {
     sb.from('commandes').select('id, numero_commande_interne, bls_centralink'),
     sb.from('exceptions').select('be_id, facture_id, commande_id, reference_article, type_exception, origine')
       .in('origine', ['réception', 'pointage', 'facturation']),
+    sb.from('refs_sav').select('reference_article'),
   ]);
+
+  // Réfs de pièces détachées SAV (livrées hors commande, hors Centralink).
+  const refsSav = new Set((savR.data ?? []).map((r) => normalizeRef(r.reference_article)));
 
   const lignesBe = lbeR.data ?? [];
   const lignesCmd = (lcR.data ?? []);
@@ -63,14 +67,18 @@ export async function POST() {
     recepVus.add(dk);
     if (seen.has(key('réception', c.be_id, c.ref, type))) continue;
     const ecart = c.verdict === 'sur_livraison' ? c.surLivraisonNette : c.qteBe;
+    // Pièce détachée SAV connue, livrée hors commande → destinataire SAV (info, pas Colombi).
+    const estSav = c.verdict === 'hors_commande' && refsSav.has(normalizeRef(c.ref));
     nouvelles.push({
-      origine: 'réception', destinataire: 'Colombi', type_exception: type, be_id: c.be_id, reference_article: c.ref,
+      origine: 'réception', destinataire: estSav ? 'SAV' : 'Colombi', type_exception: type, be_id: c.be_id, reference_article: c.ref,
       motif: c.verdict === 'sur_livraison'
         ? `Sur-livraison ${c.ref} : commandé ${c.totalCommande} / reçu ${c.totalRecu}${c.totalRetour ? ` / déjà retourné ${c.totalRetour}` : ''} → +${ecart} à traiter`
-        : `Hors commande ${c.ref} : reçu ${c.qteBe}, jamais commandé`,
+        : estSav
+          ? `Pièce détachée SAV ${c.ref} : reçu ${c.qteBe}, livrée hors commande (hors Centralink)`
+          : `Hors commande ${c.ref} : reçu ${c.qteBe}, jamais commandé`,
       valeur_attendue: c.verdict === 'sur_livraison' ? c.totalCommande : null,
       valeur_obtenue: c.verdict === 'sur_livraison' ? c.totalRecu : c.qteBe,
-      ecart, statut_exception: 'ouverte', niveau_priorite: 'moyenne',
+      ecart, statut_exception: 'ouverte', niveau_priorite: estSav ? 'faible' : 'moyenne',
     });
   }
 
