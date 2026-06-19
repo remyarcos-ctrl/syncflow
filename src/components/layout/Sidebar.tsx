@@ -5,7 +5,7 @@ import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard, Mail, Package, FileText,
   Link2, AlertTriangle, ClipboardList, Building2, Settings,
-  TrendingUp, X, Upload, Bell, Receipt, Bot, GitCompare, Coins, ScanLine, ShieldCheck, PackageCheck
+  TrendingUp, X, Upload, Bell, Receipt, Bot, GitCompare, Coins, ScanLine, ShieldCheck, PackageCheck, ShoppingCart
 } from 'lucide-react';
 import { cn } from '@/utils';
 
@@ -13,6 +13,7 @@ const navGroups = [
   {
     items: [
       { label: 'Dashboard',       href: '/dashboard',         icon: LayoutDashboard },
+      { label: 'Commandes',       href: '/commandes',         icon: ShoppingCart },
       { label: 'Emails',          href: '/emails',            icon: Mail },
     ],
   },
