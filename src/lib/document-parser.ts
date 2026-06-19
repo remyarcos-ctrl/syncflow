@@ -3,9 +3,9 @@
 
 const ANTHROPIC_API = 'https://api.anthropic.com/v1/messages';
 const MODEL_EMAIL = 'claude-haiku-4-5-20251001';
-// PDF scannés : Sonnet (plus précis) pour fiabiliser au maximum la lecture des BE — la
-// justesse des quantités prime sur le coût (~0,05 € vs 0,03 € par import). Repli Sonnet aussi.
-const MODEL_PDF_PRIMAIRE = 'claude-sonnet-4-6';
+// PDF scannés : Haiku par défaut (3× moins cher). Sonnet en repli si l'extraction Haiku
+// est douteuse. Les filets (auto-vérif montant + pointage ②↔③) rattrapent les erreurs résiduelles.
+const MODEL_PDF_PRIMAIRE = 'claude-haiku-4-5-20251001';
 const MODEL_PDF_REPLI = 'claude-sonnet-4-6';
 
 // Tarifs API Claude ($/1M tokens) pour estimer le coût de chaque import.
