@@ -22,6 +22,7 @@ export interface EcartPointage {
   papier: number | null;       // ② somme lignes_be (hors retour / hors_systeme)
   cl: number | null;           // ③ somme saisies_cl
   ecart: number;               // papier - cl  (>0 = ② a plus que ③, <0 = ③ a plus que ②)
+  recuTotal: number | null;    // « Livré » total Centralink pour cette réf (toutes livraisons/commandes)
   facteur: number;             // facteur de conditionnement utilisé pour réconcilier (1 si aucun)
   saisiAilleurs: boolean;      // absent de la saisie de CE BE, mais reçu ailleurs dans Centralink
   commandeEnAttente: boolean;  // existe-t-il une commande avec du reliquat à recevoir pour cette réf ?
@@ -41,6 +42,7 @@ export function comparerPointage(
   resolutions: ResolutionRow[] = [],
   refsReliquat?: Set<string>, // réfs normalisées ayant une commande avec reliquat à recevoir
   refsRecues?: Set<string>,   // réfs reçues quelque part dans Centralink (reçu > 0) → saisies ailleurs
+  recuTotalByRef?: Map<string, number>, // réf normalisée → « Livré » total Centralink (reçu toutes commandes)
 ): EcartPointage[] {
   const papier = new Map<string, number>();
   const label = new Map<string, string>();
@@ -83,6 +85,7 @@ export function comparerPointage(
         ref: label.get(k) ?? k,
         papier: p,
         cl: c,
+        recuTotal: recuTotalByRef?.has(k) ? recuTotalByRef.get(k)! : null,
         ecart: concord ? 0 : (p ?? 0) - (c ?? 0),
         facteur: concordFacteur ? n : 1,
         saisiAilleurs,

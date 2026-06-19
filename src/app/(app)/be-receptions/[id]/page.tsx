@@ -169,24 +169,25 @@ export default function BEDetailPage() {
     enabled: !!be?.numero_be, refetchInterval: 5000,
   });
 
-  // Réfs reçues quelque part dans Centralink (reçu > 0) → saisies, même sous un autre BE
-  const { data: refsRecues = new Set<string>() } = useQuery<Set<string>>({
-    queryKey: ['refs-recues'],
+  // Reçu TOTAL Centralink par réf (« Livré », toutes commandes) → sert au pointage et à l'affichage.
+  const { data: recuParRef = new Map<string, number>() } = useQuery<Map<string, number>>({
+    queryKey: ['recu-par-ref'],
     queryFn: async () => {
       const { data } = await supabase.from('lignes_commande').select('reference_article, quantite_receptionnee_reelle').limit(9999);
       const norm = (s: string | null) => String(s ?? '').toUpperCase().replace(/O/g, '0').replace(/[^A-Z0-9]/g, '');
       const m = new Map<string, number>();
       for (const l of data ?? []) { const k = norm(l.reference_article); m.set(k, (m.get(k) ?? 0) + (Number(l.quantite_receptionnee_reelle) || 0)); }
-      return new Set([...m].filter(([, v]) => v > 0).map(([k]) => k));
+      return m;
     },
     staleTime: 30000,
   });
+  const refsRecues = useMemo(() => new Set([...recuParRef].filter(([, v]) => v > 0).map(([k]) => k)), [recuParRef]);
 
   // Rapprochement ② BE papier ↔ ③ saisie CL (logique partagée @/lib/pointage)
   const rappCl = useMemo(() => {
-    const rows = comparerPointage(lignes, saisiesCl, pointageResolutions, undefined, refsRecues);
+    const rows = comparerPointage(lignes, saisiesCl, pointageResolutions, undefined, refsRecues, recuParRef);
     return { rows, nbEcarts: rows.filter(aEcart).length, hasCl: saisiesCl.length > 0 };
-  }, [lignes, saisiesCl, pointageResolutions, refsRecues]);
+  }, [lignes, saisiesCl, pointageResolutions, refsRecues, recuParRef]);
 
   const saveResolution = useMutation({
     mutationFn: async (p: { reference_article: string; statut?: string; note?: string | null }) => {
@@ -1159,7 +1160,8 @@ export default function BEDetailPage() {
                   <tr className="bg-gray-50/50 border-y border-gray-100">
                     <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500">Réf.</th>
                     <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500">② BL papier</th>
-                    <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500">③ saisie CL</th>
+                    <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500" title="Saisie de la log sous CE BE">③ saisie CL</th>
+                    <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500" title="« Livré » total dans Centralink pour cette réf — toutes commandes et livraisons confondues">Livré total CL</th>
                     <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500">Écart</th>
                     <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500">Verdict</th>
                     <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500">Suivi</th>
@@ -1178,6 +1180,7 @@ export default function BEDetailPage() {
                           )}
                         </td>
                         <td className="px-4 py-2 text-right tabular-nums">{r.cl ?? '—'}</td>
+                        <td className="px-4 py-2 text-right tabular-nums text-gray-500" title="Reçu total Centralink (toutes commandes/livraisons)">{r.recuTotal ?? '—'}</td>
                         <td className={cn('px-4 py-2 text-right font-semibold tabular-nums', ko ? 'text-amber-700' : 'text-gray-300')}>
                           {ko ? (r.ecart > 0 ? `+${r.ecart}` : r.ecart) : '0'}
                         </td>
