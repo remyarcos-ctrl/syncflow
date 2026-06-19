@@ -11,12 +11,12 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import StatusBadge from '@/components/shared/StatusBadge';
 import { formatEur, formatDate, cn } from '@/utils';
 import {
-  ArrowLeft, Plus, Package, Link2, Unlink,
-  Edit2, Save, X, MessageSquare, Search, FileText, History
+  ArrowLeft, Plus, Package,
+  Edit2, Save, X, MessageSquare, FileText, History
 } from 'lucide-react';
 import ReferenceHistoryModal from '@/components/shared/ReferenceHistoryModal';
 import { toast } from 'sonner';
-import type { Commande, LigneCommande, BEReception, Facture, LiaisonBECommande, LiaisonFactureCommande, Rapprochement } from '@/types';
+import type { Commande, LigneCommande, Facture, LiaisonFactureCommande, Rapprochement } from '@/types';
 
 function computeStatutLigne(l: { quantite_commandee: number; quantite_receptionnee_reelle: number; quantite_facturee: number }): string {
   const qteRecu = l.quantite_receptionnee_reelle ?? 0;
@@ -31,19 +31,6 @@ function computeStatutLigne(l: { quantite_commandee: number; quantite_receptionn
   return 'partiellement reçue';
 }
 
-const normalizeRef = (s: string | null | undefined) =>
-  String(s ?? '').toUpperCase().replace(/O/g, '0').replace(/[^A-Z0-9]/g, '');
-
-function refsMatch(a: string | null | undefined, b: string | null | undefined): boolean {
-  if (!a || !b) return false;
-  if (a.toLowerCase().trim() === b.toLowerCase().trim()) return true;
-  if (normalizeRef(a) === normalizeRef(b)) return true;
-  const ap = a.split('/'); const bp = b.split('/');
-  if (ap.length > 1 && normalizeRef(ap[ap.length - 1]) === normalizeRef(b)) return true;
-  if (bp.length > 1 && normalizeRef(bp[bp.length - 1]) === normalizeRef(a)) return true;
-  return false;
-}
-
 export default function CommandeDetailPage() {
   const { id } = useParams<{ id: string }>();
   const qc = useQueryClient();
@@ -53,9 +40,6 @@ export default function CommandeDetailPage() {
   const [prixSuggere, setPrixSuggere] = useState<{ pu: number; designation: string | null } | null>(null);
   const [refHistory, setRefHistory] = useState<string | null>(null);
   const [editingPU, setEditingPU] = useState<{ id: string; value: string } | null>(null);
-  const [showLinkBE, setShowLinkBE] = useState(false);
-  const [selectedBEId, setSelectedBEId] = useState('');
-  const [searchBE, setSearchBE] = useState('');
   const [editingNotes, setEditingNotes] = useState(false);
   const [notes, setNotes] = useState('');
   const [editingDate, setEditingDate] = useState(false);
@@ -85,26 +69,46 @@ export default function CommandeDetailPage() {
     enabled: !!id, refetchInterval: 5000,
   });
 
-  const { data: liaisonsBE = [] } = useQuery<LiaisonBECommande[]>({
-    queryKey: ['liaisons_be', id],
+  // BE / réceptions rattachés à cette commande — dérivés de Centralink (saisies log),
+  // PAS d'attribution manuelle. Source de vérité : saisies_cl (numero_be ↔ commande_ref).
+  const { data: saisiesCmd = [] } = useQuery<{ numero_be: string; reference_article: string | null; quantite_recue: number | null }[]>({
+    queryKey: ['saisies_cl_cmd', commande?.numero_commande_interne],
     queryFn: async () => {
-      const { data } = await supabase.from('liaison_be_commande').select('*').eq('commande_id', id);
+      const { data } = await supabase
+        .from('saisies_cl')
+        .select('numero_be, reference_article, quantite_recue')
+        .eq('commande_ref', commande!.numero_commande_interne);
       return data ?? [];
     },
-    enabled: !!id, refetchInterval: 5000,
+    enabled: !!commande, refetchInterval: 10000,
   });
 
-  const beIds = useMemo(() => liaisonsBE.map(l => l.be_id), [liaisonsBE]);
-
-  const { data: bes = [] } = useQuery<BEReception[]>({
-    queryKey: ['bes_commande', id, beIds.join()],
+  // Tous les BE importés (pour rendre cliquables ceux qu'on a déjà scannés)
+  const { data: beImportes = [] } = useQuery<{ id: string; numero_be: string }[]>({
+    queryKey: ['be_importes_all'],
     queryFn: async () => {
-      if (!beIds.length) return [];
-      const { data } = await supabase.from('be_receptions').select('*').in('id', beIds);
+      const { data } = await supabase.from('be_receptions').select('id, numero_be').limit(1000);
       return data ?? [];
     },
-    enabled: beIds.length > 0, refetchInterval: 5000,
+    staleTime: 30000,
   });
+
+  const besRecus = useMemo(() => {
+    const normBe = (s: string | null) => String(s ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const beIdByNum = new Map(beImportes.map(b => [normBe(b.numero_be), b.id]));
+    const byBe = new Map<string, { numero_be: string; qte: number; refs: Set<string> }>();
+    for (const s of saisiesCmd) {
+      if (!s.numero_be) continue;
+      const k = normBe(s.numero_be);
+      const cur = byBe.get(k) ?? { numero_be: s.numero_be, qte: 0, refs: new Set<string>() };
+      cur.qte += s.quantite_recue ?? 0;
+      if (s.reference_article) cur.refs.add(s.reference_article);
+      byBe.set(k, cur);
+    }
+    return [...byBe.entries()]
+      .map(([k, v]) => ({ numero_be: v.numero_be, qte: v.qte, nbRefs: v.refs.size, beId: beIdByNum.get(k) ?? null }))
+      .sort((a, b) => a.numero_be.localeCompare(b.numero_be));
+  }, [saisiesCmd, beImportes]);
 
   const { data: liaisonsFacture = [] } = useQuery<LiaisonFactureCommande[]>({
     queryKey: ['liaisons_facture_cmd', id],
@@ -136,58 +140,6 @@ export default function CommandeDetailPage() {
     enabled: !!id, refetchInterval: 5000,
   });
 
-
-  // BEs disponibles à lier (même fournisseur, non liés)
-  const { data: besDisponibles = [] } = useQuery<BEReception[]>({
-    queryKey: ['bes_dispo', commande?.fournisseur, beIds.join()],
-    queryFn: async () => {
-      const { data } = await supabase.from('be_receptions').select('*').order('date_bl', { ascending: false }).limit(200);
-      if (!data) return [];
-      const fournCmd = (commande?.fournisseur ?? '').toLowerCase();
-      return data.filter(b => {
-        if (beIds.includes(b.id)) return false;
-        const fournBe = (b.fournisseur ?? '').toLowerCase();
-        return fournCmd.includes(fournBe.slice(0, 5)) || fournBe.includes(fournCmd.slice(0, 5));
-      });
-    },
-    enabled: showLinkBE && !!commande,
-  });
-
-  // Lignes BE des candidats (slim) pour scorer par références
-  type SlimLigneBE = { be_id: string; reference_article: string | null };
-  const besCandidateIds = besDisponibles.map(b => b.id);
-  const { data: lignesBeCandidates = [] } = useQuery<SlimLigneBE[]>({
-    queryKey: ['lignes_be_cands', besCandidateIds.join()],
-    queryFn: async () => {
-      if (!besCandidateIds.length) return [];
-      const { data } = await supabase
-        .from('lignes_be')
-        .select('be_id, reference_article')
-        .in('be_id', besCandidateIds);
-      return (data ?? []) as SlimLigneBE[];
-    },
-    enabled: besCandidateIds.length > 0,
-  });
-
-  // Refs de cette commande
-  const cmdRefs = useMemo(() => lignes.map(l => l.reference_article), [lignes]);
-
-  // Score : nb de refs commande présentes dans les lignes du BE candidat
-  const besScorees = useMemo(() => {
-    return besDisponibles
-      .map(be => {
-        const lignesBe = lignesBeCandidates.filter(l => l.be_id === be.id);
-        const matches = cmdRefs.filter(refCmd =>
-          lignesBe.some(lb => refsMatch(refCmd, lb.reference_article))
-        ).length;
-        return { be, matches, total: lignesBe.length };
-      })
-      .sort((a, b) => {
-        if (b.matches !== a.matches) return b.matches - a.matches;
-        const prio = (s: string) => s === 'reçu' ? 0 : s === 'partiellement facturé' ? 1 : 2;
-        return prio(a.be.statut_be) - prio(b.be.statut_be);
-      });
-  }, [besDisponibles, lignesBeCandidates, cmdRefs]);
 
   useEffect(() => {
     if (commande) {
@@ -416,53 +368,6 @@ export default function CommandeDetailPage() {
     onError: (e: Error) => toast.error(e.message),
   });
 
-  const linkBEMutation = useMutation({
-    mutationFn: async (beId: string) => {
-      const r = await fetch('/api/link-be-commande', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ beId, commandeId: id }),
-      });
-      const json = await r.json();
-      if (!r.ok) throw new Error(json.error ?? 'Erreur inconnue');
-      return json as { lignes_attribuees: number };
-    },
-    onSuccess: (data) => {
-      qc.invalidateQueries({ queryKey: ['liaisons_be', id] });
-      qc.invalidateQueries({ queryKey: ['bes_commande', id] });
-      qc.invalidateQueries({ queryKey: ['lignes_commande', id] });
-      qc.invalidateQueries({ queryKey: ['commande', id] });
-      setShowLinkBE(false);
-      setSelectedBEId('');
-      toast.success(`BE lié à la commande — ${data.lignes_attribuees} ligne(s) attribuée(s)`);
-    },
-    onError: (e: Error) => toast.error(e.message),
-  });
-
-  const unlinkBEMutation = useMutation({
-    mutationFn: async (liaison: LiaisonBECommande) => {
-      const r = await fetch('/api/link-be-commande', {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ liaisonId: liaison.id, beId: liaison.be_id, commandeId: id }),
-      });
-      if (!r.ok) throw new Error((await r.json()).error ?? 'Erreur inconnue');
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['liaisons_be', id] });
-      qc.invalidateQueries({ queryKey: ['bes_commande', id] });
-      qc.invalidateQueries({ queryKey: ['lignes_commande', id] });
-      qc.invalidateQueries({ queryKey: ['commande', id] });
-      toast.success('Lien supprimé');
-    },
-    onError: (e: Error) => toast.error(e.message),
-  });
-
-  const besFiltered = useMemo(() =>
-    besScorees.filter(({ be }) => !searchBE || be.numero_be.toLowerCase().includes(searchBE.toLowerCase())),
-    [besScorees, searchBE]
-  );
-
   if (!commande) {
     return <div className="flex items-center justify-center h-64 text-gray-400 text-sm">Chargement…</div>;
   }
@@ -602,88 +507,33 @@ export default function CommandeDetailPage() {
 
       {/* BEs et Factures liés */}
       <div className="grid lg:grid-cols-2 gap-4">
-        {/* BEs liés */}
+        {/* BE / réceptions rattachés (depuis Centralink — lecture seule) */}
         <Card className="border-amber-100">
           <CardContent className="pt-4 pb-4">
-            <div className="flex items-center justify-between mb-3">
-              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1.5">
-                <Package className="w-3.5 h-3.5 text-amber-500" /> BE liés ({bes.length})
-              </p>
-              <Button size="sm" variant="outline" className="h-6 text-xs" onClick={() => setShowLinkBE(v => !v)}>
-                <Plus className="w-3 h-3 mr-1" /> Lier un BE
-              </Button>
-            </div>
-            {bes.length === 0 ? (
-              <p className="text-xs text-amber-600 italic">Aucun BE lié</p>
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1.5 mb-3">
+              <Package className="w-3.5 h-3.5 text-amber-500" /> BE / réceptions ({besRecus.length})
+              <span className="text-[10px] text-gray-300 normal-case font-normal ml-1">d'après Centralink</span>
+            </p>
+            {besRecus.length === 0 ? (
+              <p className="text-xs text-amber-600 italic">Aucune réception saisie dans Centralink pour cette commande</p>
             ) : (
               <div className="space-y-1">
-                {bes.map(be => {
-                  const liaison = liaisonsBE.find(l => l.be_id === be.id);
-                  return (
-                    <div key={be.id} className="flex items-center justify-between group px-2 py-1.5 rounded-lg hover:bg-amber-50 transition-colors">
-                      <Link href={`/be-receptions/${be.id}`} className="flex items-center gap-2 flex-1">
-                        <span className="text-sm font-medium text-amber-700 font-mono">{be.numero_be}</span>
-                        <span className="text-xs text-gray-400">{formatDate(be.date_bl)}</span>
-                        <StatusBadge status={be.statut_be} />
+                {besRecus.map(b => (
+                  <div key={b.numero_be} className="flex items-center justify-between px-2 py-1.5 rounded-lg hover:bg-amber-50 transition-colors">
+                    {b.beId ? (
+                      <Link href={`/be-receptions/${b.beId}`} className="text-sm font-medium text-amber-700 font-mono hover:underline">
+                        {b.numero_be}
                       </Link>
-                      {liaison && (
-                        <button
-                          onClick={() => unlinkBEMutation.mutate(liaison)}
-                          className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-red-50 text-gray-300 hover:text-red-500 transition-all"
-                        >
-                          <Unlink className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-
-            {/* Panel liaison BE */}
-            {showLinkBE && (
-              <div className="mt-3 border-t pt-3">
-                <div className="relative mb-2">
-                  <Search className="absolute left-2.5 top-2.5 w-3.5 h-3.5 text-gray-400" />
-                  <Input
-                    placeholder="Rechercher un BE…"
-                    value={searchBE}
-                    onChange={e => setSearchBE(e.target.value)}
-                    className="pl-8 h-8 text-xs"
-                  />
-                </div>
-                <div className="max-h-56 overflow-y-auto space-y-1">
-                  {besFiltered.map(({ be, matches }) => (
-                    <div
-                      key={be.id}
-                      onClick={() => setSelectedBEId(be.id)}
-                      className={cn(
-                        'flex items-center gap-2 px-2 py-2 rounded-lg cursor-pointer text-xs transition-colors',
-                        selectedBEId === be.id ? 'bg-amber-100 text-amber-800' : 'hover:bg-gray-50'
-                      )}
-                    >
-                      <div className="flex-1 min-w-0">
-                        <span className="font-mono font-medium">{be.numero_be}</span>
-                        <span className="text-gray-400 ml-2">{formatDate(be.date_bl)}</span>
-                      </div>
-                      <StatusBadge status={be.statut_be} />
-                      {matches > 0 ? (
-                        <span className="shrink-0 rounded-full bg-emerald-100 text-emerald-700 px-1.5 py-0.5 font-medium whitespace-nowrap">
-                          {matches}/{cmdRefs.length} réf.
-                        </span>
-                      ) : (
-                        <span className="shrink-0 text-gray-300">0 réf.</span>
-                      )}
-                    </div>
-                  ))}
-                  {besFiltered.length === 0 && <p className="text-xs text-gray-400 text-center py-4">Aucun BE trouvé</p>}
-                </div>
-                <div className="flex justify-end gap-2 mt-2">
-                  <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => { setShowLinkBE(false); setSelectedBEId(''); setSearchBE(''); }}>Annuler</Button>
-                  <Button size="sm" className="h-7 text-xs" disabled={!selectedBEId || linkBEMutation.isPending} onClick={() => linkBEMutation.mutate(selectedBEId)}>
-                    <Link2 className="w-3 h-3 mr-1" /> Lier
-                  </Button>
-                </div>
+                    ) : (
+                      <span className="text-sm font-mono text-gray-500" title="BE pas encore importé (scanné) dans syncflow">
+                        {b.numero_be} <span className="text-[10px] text-gray-400">· non importé</span>
+                      </span>
+                    )}
+                    <span className="text-xs text-gray-500 whitespace-nowrap">
+                      {b.nbRefs} réf · <span className="font-medium text-emerald-600">{b.qte} reçu</span>
+                    </span>
+                  </div>
+                ))}
               </div>
             )}
           </CardContent>
