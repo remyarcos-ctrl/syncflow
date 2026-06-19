@@ -1198,11 +1198,25 @@ export default function BEDetailPage() {
                           {ko ? (r.ecart > 0 ? `+${r.ecart}` : r.ecart) : '0'}
                         </td>
                         <td className="px-4 py-2 text-xs">
-                          {!ko ? (r.saisiAilleurs ? <span className="text-gray-500">saisi sous un autre BE ✓</span> : <span className="text-emerald-600">conforme</span>)
-                            : r.papier == null ? <span className="text-amber-700">en plus dans CL (absent du BL papier)</span>
-                            : r.cl == null ? <span className="text-amber-700">non saisi par la log</span>
-                            : r.ecart > 0 ? <span className="text-amber-700">log a sous-saisi de {r.ecart}</span>
-                            : <span className="text-amber-700">log a sur-saisi de {-r.ecart}</span>}
+                          {(() => {
+                            const p = r.papier ?? 0, c = r.cl ?? 0, rt = r.recuTotal;
+                            // Conforme (ou réconcilié par conditionnement / saisi ailleurs)
+                            if (!ko) return r.saisiAilleurs
+                              ? <span className="text-gray-500">✓ saisi sous un autre BE</span>
+                              : <span className="text-emerald-600">✓ conforme</span>;
+                            // ③ existe mais rien au BL papier
+                            if (r.papier == null) return <span className="text-blue-600">🔵 saisi mais absent du BL papier</span>;
+                            // ③ > ② : la log a saisi plus que ce BL n'a livré → doublon / sur-saisie
+                            if (c > p) {
+                              const doublon = p > 0 && c === p * 2;
+                              return <span className="text-red-600">🔴 Sur-saisie log{doublon ? ' (doublon)' : ''} — {c - p} de trop <span className="text-red-400">(BL {p}, saisi {c})</span></span>;
+                            }
+                            // ② > ③ : le reste est-il saisi ailleurs (Livré couvre le papier) ou jamais saisi ?
+                            if (rt != null && rt >= p - 0.001)
+                              return <span className="text-gray-500">✓ reste saisi ailleurs — {p - c} sous un autre BE <span className="text-gray-400">(reçu total {rt})</span></span>;
+                            const nonSaisi = rt != null ? p - rt : p - c;
+                            return <span className="text-amber-700">🟠 Oubli log — {nonSaisi} non saisi(s){rt != null ? <span className="text-amber-500"> (BL {p} / reçu total {rt})</span> : null}</span>;
+                          })()}
                         </td>
                         <td className="px-4 py-2">
                           {ko && (
