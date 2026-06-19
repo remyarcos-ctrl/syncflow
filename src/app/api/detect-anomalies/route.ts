@@ -57,6 +57,14 @@ export async function POST() {
   // ── 1) RÉCEPTION → Colombi ──────────────────────────────────────────────────
   const beForRecep = lignesBe.filter((l) => !l.hors_systeme && (l.quantite_receptionnee ?? 0) > 0) as LigneBeInput[];
   const recep = controlerReceptions(beForRecep, lignesCmd as LigneCmdInput[]);
+  // Total reçu sur les BE papier (②) par référence — sert à confirmer ou non une sur-livraison
+  // (le papier est le contrôle physique indépendant de la saisie ③ Centralink).
+  const totalBeParRef = new Map<string, number>();
+  for (const l of beForRecep) {
+    const k = normalizeRef(l.reference_article);
+    if (!k) continue;
+    totalBeParRef.set(k, (totalBeParRef.get(k) ?? 0) + (Number(l.quantite_receptionnee) || 0));
+  }
   const TYPE_R: Record<string, string> = { sur_livraison: 'sur-livraison', hors_commande: 'hors-commande' };
   const recepVus = new Set<string>(); // dédoublonnage : 1 anomalie par référence (pas par BE)
   for (const c of recep) {
@@ -69,14 +77,26 @@ export async function POST() {
     const ecart = c.verdict === 'sur_livraison' ? c.surLivraisonNette : c.qteBe;
     // Pièce détachée SAV connue, livrée hors commande → destinataire SAV (info, pas Colombi).
     const estSav = c.verdict === 'hors_commande' && refsSav.has(normalizeRef(c.ref));
-    // Sur-réception (reçu > commandé = « Attendu négatif » dans Centralink) : presque
-    // toujours une manipulation/erreur de saisie (Livré gonflé) → vers la log par défaut,
-    // pas Colombi. Reclassable en Colombi (Gardé/Retour) si c'est une vraie sur-livraison.
-    const destinataire = c.verdict === 'sur_livraison' ? 'log' : (estSav ? 'SAV' : 'Colombi');
+    // Sur-livraison : reçu (③ saisie Centralink) > commandé. Deux causes possibles,
+    // INDISCERNABLES côté Centralink (« Attendu négatif » identique). Seul le BE papier (②)
+    // tranche : si le papier confirme le surplus → Colombi a vraiment sur-livré ; si le
+    // papier ne le montre pas → l'acheteuse a sur-saisi → log. Sans papier importé pour
+    // la réf, on ne peut pas conclure → on reste prudent (Colombi) et on signale à vérifier.
+    const bePapierRef = c.verdict === 'sur_livraison' ? (totalBeParRef.get(normalizeRef(c.ref)) ?? 0) : 0;
+    const papierConfirme = bePapierRef > (c.totalCommande ?? 0) + 0.001;
+    const papierContredit = c.verdict === 'sur_livraison' && bePapierRef > 0.001 && !papierConfirme;
+    const versLog = papierContredit;
+    const destinataire = c.verdict === 'sur_livraison'
+      ? (versLog ? 'log' : 'Colombi')
+      : (estSav ? 'SAV' : 'Colombi');
     nouvelles.push({
       origine: 'réception', destinataire, type_exception: type, be_id: c.be_id, reference_article: c.ref,
       motif: c.verdict === 'sur_livraison'
-        ? `Sur-saisie probable ${c.ref} : reçu ${c.totalRecu} > commandé ${c.totalCommande} (Attendu négatif)${c.totalRetour ? `, déjà retourné ${c.totalRetour}` : ''} — Livré gonflé, à corriger dans Centralink`
+        ? versLog
+          ? `Sur-saisie probable ${c.ref} : reçu ${c.totalRecu} > commandé ${c.totalCommande} (Attendu négatif) mais le BE papier (${bePapierRef}) ne montre pas ce surplus — à corriger dans Centralink`
+          : bePapierRef > 0.001
+            ? `Sur-livraison ${c.ref} : commandé ${c.totalCommande} / reçu ${c.totalRecu} → +${ecart}, confirmée par le BE papier (${bePapierRef})`
+            : `Sur-livraison ${c.ref} : commandé ${c.totalCommande} / reçu ${c.totalRecu} → +${ecart} — à vérifier (BE papier non importé pour cette réf)`
         : estSav
           ? `Pièce détachée SAV ${c.ref} : reçu ${c.qteBe}, livrée hors commande (hors Centralink)`
           : `Hors commande ${c.ref} : reçu ${c.qteBe}, jamais commandé`,
