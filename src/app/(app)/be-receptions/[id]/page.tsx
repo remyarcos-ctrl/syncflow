@@ -181,6 +181,30 @@ export default function BEDetailPage() {
     },
     staleTime: 30000,
   });
+  // Où chaque réf de CE BE est-elle saisie AILLEURS (sous d'autres n° de BE) dans Centralink ?
+  // → révèle le mauvais dispatching : « pas perdu, c'est saisi sous BE-X » pour agir.
+  const refsDuBe = useMemo(() => [...new Set(lignes.map(l => l.reference_article).filter((x): x is string => !!x))], [lignes]);
+  const { data: saisiesAilleurs = new Map<string, { numBe: string; qte: number }[]>() } = useQuery<Map<string, { numBe: string; qte: number }[]>>({
+    queryKey: ['saisies-ailleurs', be?.numero_be, refsDuBe.join()],
+    queryFn: async () => {
+      const out = new Map<string, { numBe: string; qte: number }[]>();
+      if (!refsDuBe.length || !be?.numero_be) return out;
+      const { data } = await supabase.from('saisies_cl')
+        .select('numero_be, reference_article, quantite_recue').in('reference_article', refsDuBe);
+      const m = new Map<string, Map<string, number>>();
+      for (const s of data ?? []) {
+        if (s.numero_be === be.numero_be) continue;          // pas ce BE
+        const k = normalizeRef(s.reference_article);
+        if (!m.has(k)) m.set(k, new Map());
+        const bm = m.get(k)!;
+        bm.set(s.numero_be, (bm.get(s.numero_be) ?? 0) + (s.quantite_recue ?? 0));
+      }
+      for (const [k, bm] of m) out.set(k, [...bm.entries()].map(([numBe, qte]) => ({ numBe, qte })).sort((a, b) => b.qte - a.qte));
+      return out;
+    },
+    enabled: refsDuBe.length > 0 && !!be?.numero_be, staleTime: 30000,
+  });
+
   // Détail des saisies ③ par référence → commande(s), pour distinguer doublon vs mauvais dispatching.
   const saisieCmdByRef = useMemo(() => {
     const m = new Map<string, Map<string, number>>();
@@ -1215,6 +1239,22 @@ export default function BEDetailPage() {
                             // ② > ③ : la log a saisi moins que le BL papier → oubli sur CE BE
                             // (à saisir, ou peut-être saisi sous un mauvais n° de BE — à corriger côté log).
                             return <span className="text-amber-700">🟠 Oubli — {p - c} non saisi(s) sur ce BE <span className="text-amber-500">(BL {p} / saisi {c})</span></span>;
+                          })()}
+                          {ko && (() => {
+                            const ailleurs = saisiesAilleurs.get(normalizeRef(r.ref)) ?? [];
+                            if (!ailleurs.length) return null;
+                            return (
+                              <div className="mt-1 text-[11px] text-indigo-600">
+                                📍 aussi saisi sous{' '}
+                                {ailleurs.slice(0, 4).map((a, i) => (
+                                  <span key={a.numBe}>
+                                    {i > 0 && ', '}
+                                    <span className="font-mono">{a.numBe}</span> <span className="text-indigo-400">({a.qte})</span>
+                                  </span>
+                                ))}
+                                {ailleurs.length > 4 && <span className="text-indigo-400"> +{ailleurs.length - 4} autres</span>}
+                              </div>
+                            );
                           })()}
                         </td>
                         <td className="px-4 py-2">
