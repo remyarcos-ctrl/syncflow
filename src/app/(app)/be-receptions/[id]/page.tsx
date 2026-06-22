@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useParams } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
-import { comparerPointage, aEcart } from '@/lib/pointage';
+import { comparerPointage, aEcart, normalizeRef } from '@/lib/pointage';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -195,6 +195,19 @@ export default function BEDetailPage() {
     },
     enabled: commandeIdsServies.length > 0, staleTime: 30000,
   });
+
+  // Détail des saisies ③ par référence → commande(s), pour distinguer doublon vs mauvais dispatching.
+  const saisieCmdByRef = useMemo(() => {
+    const m = new Map<string, Map<string, number>>();
+    for (const s of saisiesCl) {
+      const k = normalizeRef(s.reference_article);
+      if (!m.has(k)) m.set(k, new Map());
+      const cm = m.get(k)!;
+      const cref = s.commande_ref ?? '?';
+      cm.set(cref, (cm.get(cref) ?? 0) + (s.quantite_recue ?? 0));
+    }
+    return m;
+  }, [saisiesCl]);
 
   // Rapprochement ② BE papier ↔ ③ saisie CL (logique partagée @/lib/pointage)
   const rappCl = useMemo(() => {
@@ -1208,8 +1221,13 @@ export default function BEDetailPage() {
                             if (r.papier == null) return <span className="text-blue-600">🔵 saisi mais absent du BL papier</span>;
                             // ③ > ② : la log a saisi plus que ce BL n'a livré → doublon / sur-saisie
                             if (c > p) {
-                              const doublon = p > 0 && c === p * 2;
-                              return <span className="text-red-600">🔴 Sur-saisie log{doublon ? ' (doublon)' : ''} — {c - p} de trop <span className="text-red-400">(BL {p}, saisi {c})</span></span>;
+                              // Distingue : doublon (1 commande, ③ = ×N de ②) vs mauvais dispatching (plusieurs commandes empilées)
+                              const cmds = saisieCmdByRef.get(normalizeRef(r.ref));
+                              const liste = cmds ? [...cmds.keys()].filter(x => x !== '?') : [];
+                              if (liste.length >= 2)
+                                return <span className="text-red-600">🔴 Mauvais dispatching — {c - p} de trop <span className="text-red-400">(livraisons de {liste.join('/')} empilées ici ; BL {p}, saisi {c})</span></span>;
+                              const doublon = p > 0 && Number.isInteger(c / p) && c / p >= 2;
+                              return <span className="text-red-600">🔴 {doublon ? `Doublon (saisi ×${c / p})` : 'Sur-saisie log'} — {c - p} de trop <span className="text-red-400">(BL {p}, saisi {c})</span></span>;
                             }
                             // ② > ③ : le reste est-il saisi ailleurs (Livré couvre le papier) ou jamais saisi ?
                             if (rt != null && rt >= p - 0.001)
