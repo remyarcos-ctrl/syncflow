@@ -111,10 +111,11 @@ export default function CommandeDetailPage() {
       .sort((a, b) => a.numero_be.localeCompare(b.numero_be));
   }, [saisiesCmd, beImportes]);
 
-  // ② BE papier scopé à CETTE commande : pour chaque réf, le papier des BE qui ont
-  // livré cette réf POUR cette commande (via la saisie log). On ne ramasse PAS le
-  // papier d'une autre commande quand un BE est partagé (ex. BE-1209 sert 8 commandes).
+  // ② BE papier scopé à CETTE commande : le papier des BE qui ont livré cette réf POUR
+  // cette commande (lien BE↔commande via saisies_cl). On ne ramasse PAS le papier d'une
+  // autre commande quand un BE est partagé (ex. BE-1209 sert 8 commandes).
   const servingBeIds = useMemo(() => besRecus.map(b => b.beId).filter((x): x is string => !!x), [besRecus]);
+  const servingBeNums = useMemo(() => besRecus.map(b => b.numero_be), [besRecus]);
   const { data: lignesBeServing = [] } = useQuery<{ be_id: string; reference_article: string | null; quantite_receptionnee: number | null; hors_systeme: boolean | null }[]>({
     queryKey: ['lignes-be-serving', servingBeIds.join()],
     queryFn: async () => {
@@ -123,24 +124,47 @@ export default function CommandeDetailPage() {
     },
     enabled: servingBeIds.length > 0, staleTime: 30000,
   });
+  // Saisies de TOUTES les commandes sur les BE servant cette commande → pour répartir le
+  // papier au prorata quand un même (BE, réf) est partagé entre plusieurs commandes (M2M).
+  const { data: saisiesServing = [] } = useQuery<{ numero_be: string; reference_article: string | null; quantite_recue: number | null; commande_ref: string | null }[]>({
+    queryKey: ['saisies-serving', servingBeNums.join()],
+    queryFn: async () => {
+      const { data } = await supabase.from('saisies_cl').select('numero_be, reference_article, quantite_recue, commande_ref').in('numero_be', servingBeNums);
+      return data ?? [];
+    },
+    enabled: servingBeNums.length > 0, staleTime: 30000,
+  });
 
-  const papierParRef = useMemo(() => {
+  const { papierParRef, refsPartagees } = useMemo(() => {
     const normRef = (s: string | null) => String(s ?? '').toUpperCase().replace(/O/g, '0').replace(/[^A-Z0-9]/g, '');
     const normBe = (s: string | null) => String(s ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
     const numByBeId = new Map(beImportes.map(b => [b.id, b.numero_be]));
-    // (BE, réf) que CETTE commande a reçus d'après les saisies log → seuls ceux-là comptent.
-    const okPairs = new Set<string>();
-    for (const s of saisiesCmd) if (s.numero_be && s.reference_article) okPairs.add(normBe(s.numero_be) + '|' + normRef(s.reference_article));
+    const myNum = commande?.numero_commande_interne;
+    // Par (BE, réf) : saisie TOTALE (toutes commandes) et part de CETTE commande.
+    const totalPair = new Map<string, number>();
+    const thisPair = new Map<string, number>();
+    for (const s of saisiesServing) {
+      if (!s.numero_be || !s.reference_article) continue;
+      const pk = normBe(s.numero_be) + '|' + normRef(s.reference_article);
+      totalPair.set(pk, (totalPair.get(pk) ?? 0) + (s.quantite_recue ?? 0));
+      if (s.commande_ref === myNum) thisPair.set(pk, (thisPair.get(pk) ?? 0) + (s.quantite_recue ?? 0));
+    }
     const m = new Map<string, number>();
+    const partagees = new Set<string>();
     for (const l of lignesBeServing) {
       if (l.hors_systeme) continue;
-      const pair = normBe(numByBeId.get(l.be_id) ?? null) + '|' + normRef(l.reference_article);
-      if (!okPairs.has(pair)) continue; // ce (BE, réf) appartient à une autre commande
+      const pk = normBe(numByBeId.get(l.be_id) ?? null) + '|' + normRef(l.reference_article);
+      const mine = thisPair.get(pk);
+      if (!mine) continue; // (BE, réf) pas reçu pour cette commande
+      const tot = totalPair.get(pk) ?? mine;
+      const part = tot > 0 ? mine / tot : 1;            // part de cette commande (prorata saisie)
       const rk = normRef(l.reference_article);
-      m.set(rk, (m.get(rk) ?? 0) + (l.quantite_receptionnee ?? 0));
+      m.set(rk, (m.get(rk) ?? 0) + (l.quantite_receptionnee ?? 0) * part);
+      if (part < 0.999) partagees.add(rk);              // (BE, réf) partagé avec une autre commande
     }
-    return m;
-  }, [lignesBeServing, beImportes, saisiesCmd]);
+    for (const [k, v] of m) m.set(k, Math.round(v));
+    return { papierParRef: m, refsPartagees: partagees };
+  }, [lignesBeServing, saisiesServing, beImportes, commande]);
 
   const { data: liaisonsFacture = [] } = useQuery<LiaisonFactureCommande[]>({
     queryKey: ['liaisons_facture_cmd', id],
@@ -812,16 +836,21 @@ export default function CommandeDetailPage() {
                     <td className="px-4 py-2.5 text-right font-mono text-xs">
                       {(() => {
                         const normRef = (s: string | null) => String(s ?? '').toUpperCase().replace(/O/g, '0').replace(/[^A-Z0-9]/g, '');
-                        const pap = papierParRef.get(normRef(l.reference_article));
+                        const rk = normRef(l.reference_article);
+                        const pap = papierParRef.get(rk);
                         if (pap === undefined) return <span className="text-gray-300">—</span>;
                         const recu = l.quantite_receptionnee_reelle ?? 0;
                         const diff = Math.abs(pap - recu) > 0.001;
+                        const partage = refsPartagees.has(rk);
                         return (
                           <span
                             className={cn(diff ? 'text-amber-600 font-semibold' : 'text-gray-400')}
-                            title={diff ? `BL papier ${pap} ≠ saisie CL ${recu} → la log n'a pas saisi conformément au papier sur cette commande` : `BL papier ${pap} = saisie CL`}
+                            title={
+                              (partage ? `≈ BE partagé entre plusieurs commandes : papier réparti au prorata de la saisie. ` : '') +
+                              (diff ? `BL papier ${pap} ≠ saisie CL ${recu} → la log n'a pas saisi conformément au papier sur cette commande` : `BL papier ${pap} = saisie CL`)
+                            }
                           >
-                            {pap}{diff ? ' ⚠' : ''}
+                            {partage ? '≈' : ''}{pap}{diff ? ' ⚠' : ''}
                           </span>
                         );
                       })()}
