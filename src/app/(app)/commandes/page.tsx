@@ -108,22 +108,27 @@ function CommandesPageInner() {
   const { selected, toggleOne, togglePage, clearSelection, isPageChecked, isPageIndeterminate } = useTableFeatures(commandes);
   const pageIds = commandes.map(c => c.id);
 
-  const { data: resteParCommande = {} } = useQuery<Record<string, number>>({
-    queryKey: ['commandes-reste', pageIds.join(',')],
+  const { data: aggParCommande = { reste: {}, montant: {} } } = useQuery<{ reste: Record<string, number>; montant: Record<string, number> }>({
+    queryKey: ['commandes-agg', pageIds.join(',')],
     queryFn: async () => {
       const { data } = await supabase
         .from('lignes_commande')
-        .select('commande_id, quantite_restante_a_recevoir')
+        .select('commande_id, quantite_restante_a_recevoir, quantite_commandee, pu_commande, montant_ht_commande')
         .in('commande_id', pageIds);
-      const map: Record<string, number> = {};
+      const reste: Record<string, number> = {};
+      const montant: Record<string, number> = {};
       for (const l of data ?? []) {
-        map[l.commande_id] = (map[l.commande_id] ?? 0) + (l.quantite_restante_a_recevoir ?? 0);
+        reste[l.commande_id] = (reste[l.commande_id] ?? 0) + (l.quantite_restante_a_recevoir ?? 0);
+        const m = l.montant_ht_commande != null ? l.montant_ht_commande : (l.quantite_commandee ?? 0) * (l.pu_commande ?? 0);
+        montant[l.commande_id] = (montant[l.commande_id] ?? 0) + m;
       }
-      return map;
+      return { reste, montant };
     },
     enabled: pageIds.length > 0,
     staleTime: 30_000,
   });
+  const resteParCommande = aggParCommande.reste;
+  const montantParCommande = aggParCommande.montant;
 
   const changeStatutMutation = useMutation({
     mutationFn: async ({ cmdId, statut }: { cmdId: string; statut: string }) => {
@@ -364,7 +369,13 @@ function CommandesPageInner() {
                   <td className="px-4 py-3 font-medium font-mono">{cmd.numero_commande_interne}</td>
                   <td className="px-4 py-3 text-gray-600">{cmd.fournisseur}</td>
                   <td className="px-4 py-3 text-gray-500">{formatDate(cmd.date_commande)}</td>
-                  <td className="px-4 py-3 text-right font-mono">{formatEur(cmd.montant_total_commande)}</td>
+                  <td className="px-4 py-3 text-right font-mono">
+                    {cmd.montant_total_commande != null
+                      ? formatEur(cmd.montant_total_commande)
+                      : montantParCommande[cmd.id]
+                        ? <span title="Total calculé depuis les lignes (non encore figé en base)">{formatEur(montantParCommande[cmd.id])}</span>
+                        : <span className="text-gray-300">—</span>}
+                  </td>
                   <td className="px-4 py-3 text-right">
                     {(() => {
                       const reste = resteParCommande[cmd.id];
