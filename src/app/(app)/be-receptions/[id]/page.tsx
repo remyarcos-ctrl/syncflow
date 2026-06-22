@@ -182,28 +182,66 @@ export default function BEDetailPage() {
     staleTime: 30000,
   });
   // Où chaque réf de CE BE est-elle saisie AILLEURS (sous d'autres n° de BE) dans Centralink ?
-  // → révèle le mauvais dispatching : « pas perdu, c'est saisi sous BE-X » pour agir.
+  // → révèle le mauvais dispatching. Meilleur signal que la quantité brute : le BE candidat
+  // est-il SUR-SAISI pour cette réf (saisi > son propre papier) ? Si oui = marchandise mal
+  // numérotée atterrie là (🎯 coupable). Si saisi = papier = livraison légitime distincte.
   const refsDuBe = useMemo(() => [...new Set(lignes.map(l => l.reference_article).filter((x): x is string => !!x))], [lignes]);
-  const { data: saisiesAilleurs = new Map<string, { numBe: string; qte: number }[]>() } = useQuery<Map<string, { numBe: string; qte: number }[]>>({
-    queryKey: ['saisies-ailleurs', be?.numero_be, refsDuBe.join()],
+  const { data: saisiesRefs = [] } = useQuery<{ numero_be: string; reference_article: string | null; quantite_recue: number | null }[]>({
+    queryKey: ['saisies-refs', refsDuBe.join()],
     queryFn: async () => {
-      const out = new Map<string, { numBe: string; qte: number }[]>();
-      if (!refsDuBe.length || !be?.numero_be) return out;
-      const { data } = await supabase.from('saisies_cl')
-        .select('numero_be, reference_article, quantite_recue').in('reference_article', refsDuBe);
-      const m = new Map<string, Map<string, number>>();
-      for (const s of data ?? []) {
-        if (s.numero_be === be.numero_be) continue;          // pas ce BE
-        const k = normalizeRef(s.reference_article);
-        if (!m.has(k)) m.set(k, new Map());
-        const bm = m.get(k)!;
-        bm.set(s.numero_be, (bm.get(s.numero_be) ?? 0) + (s.quantite_recue ?? 0));
-      }
-      for (const [k, bm] of m) out.set(k, [...bm.entries()].map(([numBe, qte]) => ({ numBe, qte })).sort((a, b) => b.qte - a.qte));
-      return out;
+      if (!refsDuBe.length) return [];
+      const { data } = await supabase.from('saisies_cl').select('numero_be, reference_article, quantite_recue').in('reference_article', refsDuBe);
+      return data ?? [];
     },
-    enabled: refsDuBe.length > 0 && !!be?.numero_be, staleTime: 30000,
+    enabled: refsDuBe.length > 0, staleTime: 30000,
   });
+  const { data: papierRefs = [] } = useQuery<{ quantite_receptionnee: number | null; reference_article: string | null; hors_systeme: boolean | null; be_receptions: { numero_be: string } | { numero_be: string }[] | null }[]>({
+    queryKey: ['papier-refs', refsDuBe.join()],
+    queryFn: async () => {
+      if (!refsDuBe.length) return [];
+      const { data } = await supabase.from('lignes_be').select('quantite_receptionnee, reference_article, hors_systeme, be_receptions(numero_be)').in('reference_article', refsDuBe);
+      return (data ?? []) as never;
+    },
+    enabled: refsDuBe.length > 0, staleTime: 30000,
+  });
+  const { data: beNumsScannes = new Set<string>() } = useQuery<Set<string>>({
+    queryKey: ['be-nums-scannes'],
+    queryFn: async () => {
+      const { data } = await supabase.from('be_receptions').select('numero_be').limit(1000);
+      return new Set((data ?? []).map(b => b.numero_be));
+    },
+    staleTime: 60000,
+  });
+
+  // Par réf : les BE (≠ celui-ci) où elle est saisie, avec sur-saisi (saisi − papier) si scanné.
+  const dispatchByRef = useMemo(() => {
+    const numBeOf = (l: typeof papierRefs[number]) => Array.isArray(l.be_receptions) ? l.be_receptions[0]?.numero_be : l.be_receptions?.numero_be;
+    const pap = new Map<string, number>(); // numBe|ref → papier
+    for (const l of papierRefs) {
+      if (l.hors_systeme) continue;
+      const nb = numBeOf(l); if (!nb) continue;
+      pap.set(nb + '|' + normalizeRef(l.reference_article ?? null), (pap.get(nb + '|' + normalizeRef(l.reference_article ?? null)) ?? 0) + (l.quantite_receptionnee ?? 0));
+    }
+    const byRefBe = new Map<string, Map<string, number>>(); // ref → numBe → saisi
+    for (const s of saisiesRefs) {
+      if (!s.numero_be || s.numero_be === be?.numero_be) continue;
+      const k = normalizeRef(s.reference_article);
+      if (!byRefBe.has(k)) byRefBe.set(k, new Map());
+      const bm = byRefBe.get(k)!;
+      bm.set(s.numero_be, (bm.get(s.numero_be) ?? 0) + (s.quantite_recue ?? 0));
+    }
+    const out = new Map<string, { numBe: string; saisie: number; scanned: boolean; papier: number | null; over: number | null }[]>();
+    for (const [k, bm] of byRefBe) {
+      const arr = [...bm.entries()].map(([numBe, saisie]) => {
+        const scanned = beNumsScannes.has(numBe);
+        const papier = scanned ? (pap.get(numBe + '|' + k) ?? 0) : null;
+        const over = papier != null ? saisie - papier : null;
+        return { numBe, saisie, scanned, papier, over };
+      }).sort((a, b) => (b.over ?? -1e9) - (a.over ?? -1e9) || b.saisie - a.saisie);
+      out.set(k, arr);
+    }
+    return out;
+  }, [saisiesRefs, papierRefs, beNumsScannes, be?.numero_be]);
 
   // Détail des saisies ③ par référence → commande(s), pour distinguer doublon vs mauvais dispatching.
   const saisieCmdByRef = useMemo(() => {
@@ -1241,18 +1279,29 @@ export default function BEDetailPage() {
                             return <span className="text-amber-700">🟠 Oubli — {p - c} non saisi(s) sur ce BE <span className="text-amber-500">(BL {p} / saisi {c})</span></span>;
                           })()}
                           {ko && (() => {
-                            const ailleurs = saisiesAilleurs.get(normalizeRef(r.ref)) ?? [];
-                            if (!ailleurs.length) return null;
+                            const cands = dispatchByRef.get(normalizeRef(r.ref)) ?? [];
+                            if (!cands.length) return null;
+                            const coupables = cands.filter(x => x.over != null && x.over > 0.001);
+                            const autres = cands.filter(x => !(x.over != null && x.over > 0.001));
                             return (
-                              <div className="mt-1 text-[11px] text-indigo-600">
-                                📍 aussi saisi sous{' '}
-                                {ailleurs.slice(0, 4).map((a, i) => (
-                                  <span key={a.numBe}>
-                                    {i > 0 && ', '}
-                                    <span className="font-mono">{a.numBe}</span> <span className="text-indigo-400">({a.qte})</span>
-                                  </span>
-                                ))}
-                                {ailleurs.length > 4 && <span className="text-indigo-400"> +{ailleurs.length - 4} autres</span>}
+                              <div className="mt-1 text-[11px] space-y-0.5">
+                                {coupables.length > 0 && (
+                                  <div className="text-red-600">
+                                    🎯 re-dispatché ici :{' '}
+                                    {coupables.slice(0, 3).map((x, i) => (
+                                      <span key={x.numBe}>{i > 0 && ', '}<span className="font-mono">{x.numBe}</span> <span className="text-red-400">(+{x.over} de trop vs son papier {x.papier})</span></span>
+                                    ))}
+                                  </div>
+                                )}
+                                {autres.length > 0 && (
+                                  <div className="text-gray-400">
+                                    aussi sous{' '}
+                                    {autres.slice(0, 3).map((x, i) => (
+                                      <span key={x.numBe}>{i > 0 && ', '}<span className="font-mono">{x.numBe}</span> ({x.saisie}{x.scanned ? ' = son papier' : ' · non scanné'})</span>
+                                    ))}
+                                    {autres.length > 3 && <span> +{autres.length - 3}</span>}
+                                  </div>
+                                )}
                               </div>
                             );
                           })()}
