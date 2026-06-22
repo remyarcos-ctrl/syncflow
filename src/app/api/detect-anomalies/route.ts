@@ -194,102 +194,54 @@ export async function POST() {
   for (const l of lignesCmd) {
     if ((Number(l.quantite_commandee) || 0) > 0) refsCommandees.add(normalizeRef(l.reference_article));
   }
-  // Carte par-référence : pour chaque réf, la liste {BE, papier ②, saisie ③} sur les BE
-  // qui ont un scan papier. Désignation par réf (pour le conditionnement).
-  const beParRef = new Map<string, Array<{ beId: string; numBe: string; papier: number; saisie: number }>>();
-  const desigByRef = new Map<string, string | null>();
+  // ── 3c) CONTRÔLE BE PAPIER ② vs SAISIE LOG ③, PAR BE ─────────────────────────
+  // Le 1er contrôle : pour chaque BE qu'on a scanné, la log a-t-elle saisi dans
+  // Centralink la même chose que notre BL papier ? CL reste la référence ; notre
+  // papier est le contrôle indépendant. Un écart = erreur de saisie de la log
+  // (oubli, doublon, mauvais n° de BE) → à corriger dans Centralink.
   for (const [beId, refs] of lbByBe) {
+    const numBe = beNumById.get(beId) ?? '';
     for (const [k, info] of refs) {
-      if (info.qte <= 0) continue;
-      const arr = beParRef.get(k) ?? [];
-      arr.push({ beId, numBe: beNumById.get(beId) ?? '', papier: info.qte, saisie: saisieByBeRef.get(beId + '|' + k) ?? 0 });
-      beParRef.set(k, arr);
-      if (info.desig && !desigByRef.get(k)) desigByRef.set(k, info.desig);
-    }
-  }
-
-  // ── 3c) BILAN NET PAR RÉFÉRENCE : papier ② vs saisie ③ sur les BE scannés ───────
-  // La comparaison par BE seule MASQUE le vrai manque : un oubli sur un BE peut être
-  // « compensé » par une sur-saisie sur un autre (mauvais dispatching de la log). On
-  // somme donc, PAR RÉFÉRENCE, le papier et la saisie SUR LES SEULS BE qui ont un scan
-  // papier : le dispatching s'annule dans la somme, et le NET = vrai manque (oubli) ou
-  // vrai surplus (sur-saisie). On nomme en plus le dispatching dans l'action.
-  // ⚠ Limite : ne couvre que les BE scannés (les réceptions sans BL importé restent hors champ).
-  for (const [k, arr] of beParRef) {
-    if (!arr.length) continue;
-    const sorted = [...arr].sort((a, b) => (a.numBe < b.numBe ? -1 : a.numBe > b.numBe ? 1 : 0));
-    const totalPapier = sorted.reduce((s, x) => s + x.papier, 0);
-    const totalSaisie = sorted.reduce((s, x) => s + x.saisie, 0);
-    const desig = desigByRef.get(k) ?? null;
-    const surplusBEs = sorted.filter((x) => x.saisie > x.papier + 0.001);   // ③ > ② : saisi sous le mauvais BE
-    const deficitBEs = sorted.filter((x) => x.papier > x.saisie + 0.001);   // ② > ③ : manque ici
-    const dispatch = Math.min(
-      surplusBEs.reduce((s, x) => s + (x.saisie - x.papier), 0),
-      deficitBEs.reduce((s, x) => s + (x.papier - x.saisie), 0),
-    ); // quantité saisie sous un mauvais BE (réutilisable par re-dispatching)
-
-    if (quantitesConcordent(totalPapier, totalSaisie, desig)) {
-      // Net OK globalement : pas de manque ni de surplus réel. Mais si un BE est en
-      // surplus ET un autre en déficit → mauvais dispatching pur (à re-dispatcher).
-      if (!surplusBEs.length || !deficitBEs.length || dispatch <= 0.001) continue;
-      const anchor = surplusBEs[0];
-      if (seen.has(key('pointage', anchor.beId, k, 'sur-saisie log'))) continue;
-      nouvelles.push({
-        origine: 'pointage', destinataire: 'log', type_exception: 'sur-saisie log',
-        be_id: anchor.beId, reference_article: k,
-        motif: `Mauvais dispatching ${k} : total papier ② ${totalPapier} = saisi ③ ${totalSaisie}, mais réparti sous les mauvais BE (${surplusBEs.map((x) => `${x.numBe} +${(x.saisie - x.papier).toFixed(0)}`).join(', ')})`,
-        valeur_attendue: totalPapier, valeur_obtenue: totalSaisie, ecart: 0,
-        statut_exception: 'ouverte', niveau_priorite: 'moyenne',
-        suggestion_action_ia: `Re-dispatcher dans Centralink : ${dispatch.toFixed(0)} ${k} saisis sous le mauvais BE → basculer de ${surplusBEs.map((x) => x.numBe).join(', ')} vers ${deficitBEs.map((x) => `${x.numBe} (manque ${(x.papier - x.saisie).toFixed(0)})`).join(', ')}.`,
-      });
-      continue;
-    }
-
-    // Réf vendue au conditionnement (X500, boîte de N…) : ② et ③ peuvent être dans des
-    // unités différentes (pièces vs boîtes) → un écart n'est PAS un manque fiable, juste à vérifier.
-    const conditionne = facteurConditionnement(desig) > 1;
-    const net = totalPapier - totalSaisie; // > 0 : manque (papier > saisie) ; < 0 : surplus
-    if (net > 0.001) {
-      // OUBLI NET : sur les BE scannés, le papier dépasse la saisie de `net` (dispatching
-      // interne neutralisé). Ces `net` sont reçus selon les BL mais non saisis SUR CES BE
-      // dans Centralink (soit pas saisis du tout, soit saisis sous un autre n° de BE).
-      if (!refsCommandees.has(k)) continue; // SAV / hors-commande → ③ = 0 normal, pas un oubli
-      const anchor = deficitBEs[0] ?? sorted[0];
-      if (seen.has(key('pointage', anchor.beId, k, 'oubli log'))) continue;
-      const concernes = deficitBEs.map((x) => `${x.numBe} (manque ${(x.papier - x.saisie).toFixed(0)})`).join(', ');
-      const action = conditionne
-        ? `⚠ Conditionnement (« ${desig} ») : vérifier les unités (pièces vs boîtes) avant de conclure — papier ② ${totalPapier} / saisi ③ ${totalSaisie} sur ${concernes || 'ces BE'}.`
-        : dispatch > 0.001
-          ? `Re-dispatcher d'abord les ${dispatch.toFixed(0)} ${k} saisis à tort sur ${surplusBEs.map((x) => x.numBe).join(', ')} vers ${deficitBEs.map((x) => x.numBe).join(', ')} ; PUIS il reste ${net.toFixed(0)} ${k} reçus au papier mais non saisis sur ces BE → à saisir (ou vérifier sous quel autre n° de BE ils ont été saisis).`
-          : `Saisir dans Centralink les ${net.toFixed(0)} ${k} reçus selon les BL papier mais non saisis sur ces BE${concernes ? ` — ${concernes}` : ''} (ou vérifier sous quel autre n° de BE ils ont été saisis).`;
-      nouvelles.push({
-        origine: 'pointage', destinataire: 'log', type_exception: 'oubli log',
-        be_id: anchor.beId, reference_article: k,
-        motif: conditionne
-          ? `À vérifier (conditionnement « ${desig} ») ${k} : papier ② ${totalPapier} / saisi ③ ${totalSaisie} sur ${sorted.length} BE scannés — écart probablement dû aux unités (pièces/boîtes)`
-          : `Manque ${k} : papier ② ${totalPapier} / saisi ③ ${totalSaisie} sur ${sorted.length} BE scannés → ${net.toFixed(0)} reçu(s) au papier non saisi(s) sur ces BE`,
-        valeur_attendue: totalPapier, valeur_obtenue: totalSaisie, ecart: -net,
-        statut_exception: 'ouverte', niveau_priorite: conditionne ? 'faible' : net >= 10 ? 'haute' : 'moyenne',
-        suggestion_action_ia: action,
-      });
-    } else {
-      // SUR-SAISIE NETTE : `-net` de trop saisis vs le papier (doublon réel, pas dispatching).
-      const surplus = -net;
-      const anchor = surplusBEs[0] ?? sorted[0];
-      if (seen.has(key('pointage', anchor.beId, k, 'sur-saisie log'))) continue;
-      const ouTrop = surplusBEs.map((x) => `${x.numBe} (+${(x.saisie - x.papier).toFixed(0)})`).join(', ');
-      nouvelles.push({
-        origine: 'pointage', destinataire: 'log', type_exception: 'sur-saisie log',
-        be_id: anchor.beId, reference_article: k,
-        motif: conditionne
-          ? `À vérifier (conditionnement « ${desig} ») ${k} : papier ② ${totalPapier} / saisi ③ ${totalSaisie} sur ${sorted.length} BE scannés — écart probablement dû aux unités (pièces/boîtes)`
-          : `Sur-saisie nette ${k} : papier ② ${totalPapier} / saisi ③ ${totalSaisie} sur ${sorted.length} BE scannés → ${surplus.toFixed(0)} de trop`,
-        valeur_attendue: totalPapier, valeur_obtenue: totalSaisie, ecart: surplus,
-        statut_exception: 'ouverte', niveau_priorite: conditionne ? 'faible' : surplus >= 10 ? 'haute' : 'moyenne',
-        suggestion_action_ia: conditionne
-          ? `⚠ Conditionnement (« ${desig} ») : vérifier les unités (pièces vs boîtes) avant de conclure — papier ② ${totalPapier} / saisi ③ ${totalSaisie}${ouTrop ? ` (${ouTrop})` : ''}.`
-          : `Corriger dans Centralink : ${surplus.toFixed(0)} ${k} saisis en trop vs les BL papier${ouTrop ? ` (${ouTrop})` : ''} → réduire la saisie.`,
-      });
+      const papier = info.qte;
+      if (papier <= 0) continue;
+      const saisie = saisieByBeRef.get(beId + '|' + k) ?? 0;             // ③ saisi sous CE BE
+      if (quantitesConcordent(papier, saisie, info.desig)) continue;     // OK : égal ou conditionnement
+      // Réf au conditionnement (X500, boîte de N…) : ② et ③ peuvent être en unités
+      // différentes (pièces vs boîtes) → écart à vérifier, pas un manque ferme.
+      const conditionne = facteurConditionnement(info.desig) > 1;
+      const condMotif = `À vérifier (conditionnement « ${info.desig} ») ${k} sur ${numBe} : BL papier ② ${papier} / saisi ③ ${saisie} — écart probablement dû aux unités (pièces/boîtes)`;
+      const condAction = `⚠ Conditionnement (« ${info.desig} ») : vérifier les unités (pièces vs boîtes) — ${numBe} : papier ${papier} / saisi ${saisie}.`;
+      if (saisie > papier + 0.001) {
+        // La log a saisi PLUS que le BL papier → sur-saisie / doublon.
+        if (seen.has(key('pointage', beId, k, 'sur-saisie log'))) continue;
+        const surplus = saisie - papier;
+        const mult = papier > 0 && Number.isInteger(saisie / papier) ? saisie / papier : null;
+        nouvelles.push({
+          origine: 'pointage', destinataire: 'log', type_exception: 'sur-saisie log',
+          be_id: beId, reference_article: k,
+          motif: conditionne ? condMotif
+            : `Sur-saisie ${k} sur ${numBe} : BL papier ② ${papier} / saisi ③ ${saisie}${mult ? ` (×${mult})` : ''} → ${surplus.toFixed(0)} de trop`,
+          valeur_attendue: papier, valeur_obtenue: saisie, ecart: surplus,
+          statut_exception: 'ouverte', niveau_priorite: conditionne ? 'faible' : mult && mult >= 2 ? 'haute' : 'moyenne',
+          suggestion_action_ia: conditionne ? condAction
+            : `Corriger dans Centralink : sur ${numBe}, la log a saisi ${saisie} ${k} alors que le BL papier en montre ${papier} → réduire de ${surplus.toFixed(0)}${mult ? ` (doublon ×${mult})` : ''}.`,
+        });
+      } else {
+        // La log a saisi MOINS que le BL papier → oubli / mal saisi (sous un autre n° de BE).
+        if (!refsCommandees.has(k)) continue; // SAV / hors-commande → ③ = 0 normal, pas un oubli
+        if (seen.has(key('pointage', beId, k, 'oubli log'))) continue;
+        const manque = papier - saisie;
+        nouvelles.push({
+          origine: 'pointage', destinataire: 'log', type_exception: 'oubli log',
+          be_id: beId, reference_article: k,
+          motif: conditionne ? condMotif
+            : `Oubli ${k} sur ${numBe} : BL papier ② ${papier} / saisi ③ ${saisie} → ${manque.toFixed(0)} non saisi(s)`,
+          valeur_attendue: papier, valeur_obtenue: saisie, ecart: -manque,
+          statut_exception: 'ouverte', niveau_priorite: conditionne ? 'faible' : manque >= 10 ? 'haute' : 'moyenne',
+          suggestion_action_ia: conditionne ? condAction
+            : `Corriger dans Centralink : sur ${numBe}, la log a saisi ${saisie} ${k} alors que le BL papier en montre ${papier} → saisir les ${manque.toFixed(0)} manquants (oubli, ou saisis sous un mauvais n° de BE).`,
+        });
+      }
     }
   }
 

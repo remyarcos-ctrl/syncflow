@@ -1217,7 +1217,7 @@ export default function BEDetailPage() {
                         </td>
                         <td className="px-4 py-2 text-xs">
                           {(() => {
-                            const p = r.papier ?? 0, c = r.cl ?? 0, rt = r.recuTotal;
+                            const p = r.papier ?? 0, c = r.cl ?? 0;
                             // Conforme (ou réconcilié par conditionnement / saisi ailleurs)
                             if (!ko) return r.saisiAilleurs
                               ? <span className="text-gray-500">✓ saisi sous un autre BE</span>
@@ -1234,11 +1234,9 @@ export default function BEDetailPage() {
                               const doublon = p > 0 && Number.isInteger(c / p) && c / p >= 2;
                               return <span className="text-red-600">🔴 {doublon ? `Doublon (saisi ×${c / p})` : 'Sur-saisie log'} — {c - p} de trop <span className="text-red-400">(BL {p}, saisi {c})</span></span>;
                             }
-                            // ② > ③ : le reste est-il saisi ailleurs (Livré couvre le papier) ou jamais saisi ?
-                            if (rt != null && rt >= p - 0.001)
-                              return <span className="text-gray-500">✓ reste saisi ailleurs — {p - c} sous un autre BE <span className="text-gray-400">(reçu total {rt})</span></span>;
-                            const nonSaisi = rt != null ? p - rt : p - c;
-                            return <span className="text-amber-700">🟠 Oubli log — {nonSaisi} non saisi(s){rt != null ? <span className="text-amber-500"> (BL {p} / reçu total {rt})</span> : null}</span>;
+                            // ② > ③ : la log a saisi moins que le BL papier → oubli sur CE BE
+                            // (à saisir, ou peut-être saisi sous un mauvais n° de BE — à corriger côté log).
+                            return <span className="text-amber-700">🟠 Oubli — {p - c} non saisi(s) sur ce BE <span className="text-amber-500">(BL {p} / saisi {c})</span></span>;
                           })()}
                         </td>
                         <td className="px-4 py-2">
