@@ -1187,7 +1187,7 @@ export default function BEDetailPage() {
                     <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500">Réf.</th>
                     <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500">② BL papier</th>
                     <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500" title="Saisie de la log sous CE BE">③ saisie CL</th>
-                    <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500" title="« Livré » dans Centralink pour cette réf, sur les commandes servies par ce BE (toutes livraisons)">Livré CL</th>
+                    <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500" title="« Livré » dans Centralink sur la/les commande(s) servie(s) par ce BE — TOUS BE confondus (≠ ce qui est reçu sur ce seul BE, voir « dont … ici »)">Livré CL <span className="font-normal text-gray-400">(cmde)</span></th>
                     <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500">Écart</th>
                     <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500">Verdict</th>
                     <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500">Suivi</th>
@@ -1206,7 +1206,12 @@ export default function BEDetailPage() {
                           )}
                         </td>
                         <td className="px-4 py-2 text-right tabular-nums">{r.cl ?? '—'}</td>
-                        <td className="px-4 py-2 text-right tabular-nums text-gray-500" title="Reçu Centralink sur les commandes servies par ce BE">{r.recuTotal ?? '—'}</td>
+                        <td className="px-4 py-2 text-right tabular-nums text-gray-500" title="« Livré » Centralink sur la/les commande(s) servie(s) par ce BE, tous BE confondus">
+                          {r.recuTotal ?? '—'}
+                          {r.recuTotal != null && r.cl != null && Math.abs(r.recuTotal - r.cl) > 0.001 && (
+                            <span className="block text-[11px] text-gray-400">dont {r.cl} ici</span>
+                          )}
+                        </td>
                         <td className={cn('px-4 py-2 text-right font-semibold tabular-nums', ko ? 'text-amber-700' : 'text-gray-300')}>
                           {ko ? (r.ecart > 0 ? `+${r.ecart}` : r.ecart) : '0'}
                         </td>
