@@ -39,6 +39,7 @@ type Exc = Exception & {
   reference_article?: string | null;
   assigne_a?: string | null;
   echeance?: string | null;
+  suggestion_action_ia?: string | null;
 };
 
 const DEST_CONFIG: Record<string, string> = {
@@ -386,10 +387,12 @@ export default function ExceptionsPage() {
   const genererListe = async (dest: 'Colombi' | 'log') => {
     const rows = await fetchActives(dest);
     if (!rows.length) { toast.info(`Aucune anomalie active pour ${dest}`); return; }
-    const lignes = rows.map(e => `- ${e.reference_article ? e.reference_article + ' : ' : ''}${e.motif}`).join('\n');
+    // Pour la log, on envoie le TEXTE D'ACTION (re-dispatcher / corriger / compléter)
+    // généré automatiquement — c'est l'instruction concrète, pas juste le constat.
+    const lignes = rows.map(e => `- ${e.reference_article ? e.reference_article + ' : ' : ''}${dest === 'log' ? (e.suggestion_action_ia || e.motif) : e.motif}`).join('\n');
     const texte = dest === 'Colombi'
       ? `Bonjour,\n\nEn rapprochant vos livraisons et factures avec nos commandes, nous constatons les écarts suivants :\n\n${lignes}\n\nMerci de bien vouloir régulariser (avoir / reprise / correction selon le cas).\n\nCordialement,`
-      : `Anomalies de saisie à régulariser dans Centralink (${rows.length}) :\n\n${lignes}\n\nMerci de vérifier et corriger.`;
+      : `Corrections à apporter dans Centralink (${rows.length}) :\n\n${lignes}\n\nMerci de vérifier et corriger.`;
     setListeModal({
       titre: dest === 'Colombi' ? `Réclamation Colombi (${rows.length})` : `Corrections log (${rows.length})`,
       texte,
@@ -509,6 +512,9 @@ export default function ExceptionsPage() {
                   <td className="px-4 py-3 text-xs text-gray-700 max-w-[220px]">
                     <div className="truncate">{exc.motif}</div>
                     {exc.reference_article && <div className="text-[11px] text-gray-400 font-mono">{exc.reference_article}</div>}
+                    {exc.suggestion_action_ia && (
+                      <div className="mt-0.5 text-[11px] text-blue-600 truncate" title={exc.suggestion_action_ia}>🛠 {exc.suggestion_action_ia}</div>
+                    )}
                     {enCours(exc.reference_article) && (
                       <span className="inline-block mt-0.5 text-[11px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-600" title="La commande attend encore de la marchandise côté Centralink — la log n'a peut-être pas fini de saisir">
                         ⏳ saisie peut-être en cours
@@ -653,6 +659,19 @@ export default function ExceptionsPage() {
               <span className={cn('text-xs px-2 py-0.5 rounded-full border ml-auto', PRIORITE_CONFIG[showDetail.niveau_priorite] ?? '')}>{showDetail.niveau_priorite}</span>
             </div>
             <p className="text-sm text-gray-700 mb-3">{showDetail.motif}</p>
+            {showDetail.suggestion_action_ia && (
+              <div className={cn('mb-3 p-3 rounded-lg border',
+                showDetail.destinataire === 'log' ? 'bg-blue-50 border-blue-100' :
+                showDetail.destinataire === 'Colombi' ? 'bg-orange-50 border-orange-100' :
+                'bg-gray-50 border-gray-100')}>
+                <p className={cn('text-xs font-semibold mb-1',
+                  showDetail.destinataire === 'log' ? 'text-blue-700' :
+                  showDetail.destinataire === 'Colombi' ? 'text-orange-700' : 'text-gray-600')}>
+                  🛠 Action à mener{showDetail.destinataire ? ` — ${showDetail.destinataire}` : ''}
+                </p>
+                <p className="text-sm text-gray-800">{showDetail.suggestion_action_ia}</p>
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-3 text-xs text-gray-500 mb-4">
               {showDetail.facture_id && factureMap[showDetail.facture_id] && <div><p className="text-gray-400">Facture</p><Link href={`/factures/${showDetail.facture_id}`} className="text-indigo-600 hover:underline">{factureMap[showDetail.facture_id].numero_facture}</Link></div>}
               {showDetail.be_id && beMap[showDetail.be_id] && <div><p className="text-gray-400">BE</p><Link href={`/be-receptions/${showDetail.be_id}`} className="text-indigo-600 hover:underline">{beMap[showDetail.be_id].numero_be}</Link></div>}

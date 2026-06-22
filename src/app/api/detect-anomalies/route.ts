@@ -21,6 +21,7 @@ interface NewExc {
   be_id?: string | null; facture_id?: string | null; commande_id?: string | null; reference_article: string;
   motif: string; valeur_attendue: number | null; valeur_obtenue: number | null; ecart: number | null;
   statut_exception: string; niveau_priorite: string;
+  suggestion_action_ia?: string | null;
 }
 
 // POST : détecte les anomalies des 3 contrôles et les déverse dans `exceptions`
@@ -106,6 +107,13 @@ export async function POST() {
       valeur_attendue: c.verdict === 'sur_livraison' ? c.totalCommande : null,
       valeur_obtenue: c.verdict === 'sur_livraison' ? c.totalRecu : c.qteBe,
       ecart, statut_exception: 'ouverte', niveau_priorite: estSav ? 'faible' : 'moyenne',
+      suggestion_action_ia: c.verdict === 'sur_livraison'
+        ? versLog
+          ? `Corriger dans Centralink : la saisie ${c.ref} (${c.totalRecu}) dépasse le commandé (${c.totalCommande}) sans que le BE papier (${bePapierRef}) le confirme → ramener le reçu au réel (${bePapierRef || c.totalCommande}).`
+          : `Réclamation Colombi : sur-livraison ${c.ref} de +${ecart} (commandé ${c.totalCommande} / reçu ${c.totalRecu})${bePapierRef > 0.001 ? `, confirmée par le BE papier (${bePapierRef})` : ' — vérifier le BL papier'} → réclamer avoir ou passer commande de régularisation.`
+        : estSav
+          ? `Info SAV : pièce détachée ${c.ref} (${c.qteBe}) livrée hors commande — aucune action Centralink, rattacher au dossier SAV.`
+          : `Réclamation Colombi : ${c.ref} (${c.qteBe}) jamais commandé → vérifier le BL et réclamer (livraison non commandée).`,
     });
   }
 
@@ -130,6 +138,9 @@ export async function POST() {
       valeur_obtenue: c.verdict === 'ecart_prix' ? c.lf.pu_facture : c.lf.quantite_facturee,
       ecart: c.verdict === 'ecart_prix' ? c.ecartPrixPct : c.ecartQteRecu,
       statut_exception: 'ouverte', niveau_priorite: c.verdict === 'sur_facturation' ? 'haute' : 'moyenne',
+      suggestion_action_ia: c.verdict === 'ecart_prix'
+        ? `Réclamation Colombi : ${ref} facturé ${c.lf.pu_facture} € au lieu de ${c.puCommande} € commandé (écart ${c.ecartPrixPct}%) → demander avoir / facture rectificative au prix commande.`
+        : `Réclamation Colombi : ${ref} facturé ${c.lf.quantite_facturee} pour ${c.qteRecue} reçu (écart ${c.ecartQteRecu}) → demander avoir sur le surplus facturé.`,
     });
   }
 
@@ -151,6 +162,7 @@ export async function POST() {
       motif: `Double saisie probable ${ref} sur ${cmdNum.get(l.commande_id) ?? ''} : reçu ${r} = ${r / q}× commandé ${q} — à corriger dans Centralink`,
       valeur_attendue: q, valeur_obtenue: r, ecart: r - q,
       statut_exception: 'ouverte', niveau_priorite: 'moyenne',
+      suggestion_action_ia: `Corriger dans Centralink : sur ${cmdNum.get(l.commande_id) ?? ''}, la saisie ${ref} (${r}) = ${r / q}× le commandé ${q} → ramener le reçu à ${q} (supprimer la/les saisie(s) en double).`,
     });
   }
 
@@ -188,6 +200,18 @@ export async function POST() {
   for (const l of lignesCmd) {
     if ((Number(l.quantite_commandee) || 0) > 0) refsCommandees.add(normalizeRef(l.reference_article));
   }
+  // Carte par-référence : pour chaque réf, la liste {BE, papier ②, saisie ③}.
+  // Sert à APPARIER une sur-saisie sur un BE avec l'oubli de son « jumeau » (mauvais
+  // dispatching : la log a empilé sous un BE ce qui appartenait à un autre).
+  const beParRef = new Map<string, Array<{ beId: string; numBe: string; papier: number; saisie: number }>>();
+  for (const [beId, refs] of lbByBe) {
+    for (const [k, info] of refs) {
+      if (info.qte <= 0) continue;
+      const arr = beParRef.get(k) ?? [];
+      arr.push({ beId, numBe: beNumById.get(beId) ?? '', papier: info.qte, saisie: saisieByBeRef.get(beId + '|' + k) ?? 0 });
+      beParRef.set(k, arr);
+    }
+  }
   for (const [beId, refs] of lbByBe) {
     for (const [k, info] of refs) {
       if (info.qte <= 0) continue;
@@ -198,12 +222,19 @@ export async function POST() {
         // SUR-saisie (③ > ②) : doublon / erreur de saisie → log.
         if (seen.has(key('pointage', beId, k, 'sur-saisie log'))) continue;
         const mult = Number.isInteger(sv / info.qte) ? sv / info.qte : null;
+        const surplus = sv - info.qte;
+        // Le surplus appartient-il à un autre BE de la même réf qui manque (oubli) ?
+        const manquants = (beParRef.get(k) ?? []).filter((x) => x.beId !== beId && x.papier > x.saisie + 0.001);
+        const action = manquants.length
+          ? `Re-dispatcher dans Centralink : sur ${numBe}, ramener ${k} de ${sv} à ${info.qte} (−${surplus.toFixed(0)}) ; reporter ${surplus.toFixed(0)} sur ${manquants.map((x) => `${x.numBe} (manque ${(x.papier - x.saisie).toFixed(0)})`).join(', ')}.`
+          : `Corriger dans Centralink : réduire la saisie de ${k} sur ${numBe} de ${sv} à ${info.qte} (sur-saisie de ${surplus.toFixed(0)}${mult ? `, soit ×${mult}` : ''}).`;
         nouvelles.push({
           origine: 'pointage', destinataire: 'log', type_exception: 'sur-saisie log',
           be_id: beId, reference_article: k,
           motif: `Sur-saisie ${k} sur ${numBe} : BL papier ② ${info.qte} / saisie Centralink ③ ${sv}${mult ? ` (×${mult})` : ''} — à vérifier/corriger dans Centralink`,
           valeur_attendue: info.qte, valeur_obtenue: sv, ecart: sv - info.qte,
           statut_exception: 'ouverte', niveau_priorite: mult && mult >= 2 ? 'haute' : 'moyenne',
+          suggestion_action_ia: action,
         });
       } else {
         // SOUS-saisie (③ < ②) : oubli SEULEMENT si la réf est commandée (sinon SAV/hors-Centralink)
@@ -214,12 +245,18 @@ export async function POST() {
         if (ailleurs >= manque - 0.001) continue;                       // tout est saisi (ailleurs) → pas un oubli
         if (seen.has(key('pointage', beId, k, 'oubli log'))) continue;
         const nonSaisi = manque - Math.max(0, ailleurs);
+        // Le manque est-il saisi en trop (sur-saisie) sur un autre BE de la même réf ?
+        const surSaisis = (beParRef.get(k) ?? []).filter((x) => x.beId !== beId && x.saisie > x.papier + 0.001);
+        const action = surSaisis.length
+          ? `Re-dispatcher dans Centralink : ${k} manque ${nonSaisi.toFixed(0)} sur ${numBe} ; saisi(s) en trop sur ${surSaisis.map((x) => `${x.numBe} (+${(x.saisie - x.papier).toFixed(0)})`).join(', ')} → basculer.`
+          : `Compléter dans Centralink : saisir ${nonSaisi.toFixed(0)} ${k} sur ${numBe}.`;
         nouvelles.push({
           origine: 'pointage', destinataire: 'log', type_exception: 'oubli log',
           be_id: beId, reference_article: k,
           motif: `Oubli de saisie ${k} sur ${numBe} : BL papier ② ${info.qte} / saisi ③ ${sv} — ${nonSaisi.toFixed(0)} non saisi(s) (ni sous un autre BE) — à saisir dans Centralink`,
           valeur_attendue: info.qte, valeur_obtenue: sv, ecart: sv - info.qte,
           statut_exception: 'ouverte', niveau_priorite: 'moyenne',
+          suggestion_action_ia: action,
         });
       }
     }
@@ -246,6 +283,7 @@ export async function POST() {
         motif: `N° de BE impossible « ${badN} » (mois ${m[2]}) — probable faute de frappe à corriger dans Centralink`,
         valeur_attendue: null, valeur_obtenue: null, ecart: null,
         statut_exception: 'ouverte', niveau_priorite: 'faible',
+        suggestion_action_ia: `Corriger dans Centralink : le n° de BE « ${badN} » a un mois impossible (${m[2]}) → corriger la saisie du numéro de BE (faute de frappe).`,
       });
     }
   }
