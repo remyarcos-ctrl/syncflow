@@ -245,6 +245,43 @@ export async function POST() {
     }
   }
 
+  // ── 3d) SAISI HORS PAPIER (erreur de n° de BE) → log ─────────────────────────
+  // ③ saisi sous un BE scanné mais réf ABSENTE de son BL papier → la log a collé la
+  // saisie au mauvais numéro de BE. Souvent la marchandise est bien reçue (juste mal
+  // numérotée), donc pas un risque financier — mais une saisie SALE à nettoyer pour
+  // garder CL propre. Piste (#12) : les BE où cette réf est sur papier avec un déficit.
+  const deficitParRef = new Map<string, { numBe: string; manque: number }[]>();
+  for (const [beId, refs] of lbByBe) {
+    for (const [k, info] of refs) {
+      const sv = saisieByBeRef.get(beId + '|' + k) ?? 0;
+      if (info.qte > sv + 0.001) {
+        const arr = deficitParRef.get(k) ?? [];
+        arr.push({ numBe: beNumById.get(beId) ?? '', manque: info.qte - sv });
+        deficitParRef.set(k, arr);
+      }
+    }
+  }
+  for (const [kk, sv] of saisieByBeRef) {
+    if (sv <= 0.001) continue;
+    const sep = kk.indexOf('|');
+    const beId = kk.slice(0, sep);
+    const k = kk.slice(sep + 1);
+    if (lbByBe.get(beId)?.has(k)) continue;             // réf sur le papier → c'est §3c, pas ici
+    const numBe = beNumById.get(beId);
+    if (!numBe) continue;
+    if (seen.has(key('pointage', beId, k, 'sur-saisie log'))) continue;
+    const pistes = (deficitParRef.get(k) ?? []).filter((p) => p.numBe !== numBe);
+    const pistesStr = pistes.length ? pistes.slice(0, 3).map((p) => `${p.numBe} (manque ${p.manque.toFixed(0)})`).join(', ') : null;
+    nouvelles.push({
+      origine: 'pointage', destinataire: 'log', type_exception: 'sur-saisie log',
+      be_id: beId, reference_article: k,
+      motif: `Saisi hors papier : ${sv.toFixed(0)} ${k} saisis sous ${numBe}, mais la réf est ABSENTE de son BL papier → probable erreur de n° de BE`,
+      valeur_attendue: 0, valeur_obtenue: sv, ecart: sv,
+      statut_exception: 'ouverte', niveau_priorite: 'moyenne',
+      suggestion_action_ia: `Corriger dans Centralink : ${sv.toFixed(0)} ${k} saisis sous ${numBe} alors qu'absents de son BL papier (mauvais n° de BE).${pistesStr ? ` Cette réf manque sur : ${pistesStr} → re-saisir sous le bon n° de BE.` : ` Vérifier sous quel BL elle a réellement été livrée.`}`,
+    });
+  }
+
   // ── 4) NUMÉROS DE BE IMPOSSIBLES (faute de frappe log : mois > 12) → log ─────
   const beVus = new Set<string>();
   for (const c of (cmdR.data ?? [])) {
