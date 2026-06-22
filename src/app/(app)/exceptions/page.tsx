@@ -189,6 +189,42 @@ export default function ExceptionsPage() {
   const beMap = useMemo(() => Object.fromEntries(bes.map(b => [b.id, b])) as Record<string, Pick<BEReception, 'id' | 'numero_be'>>, [bes]);
   const cmdMap = useMemo(() => Object.fromEntries(commandes.map(c => [c.id, c])) as Record<string, Pick<Commande, 'id' | 'numero_commande_interne'>>, [commandes]);
 
+  // Diagnostic « où la réf est saisie ailleurs » pour l'anomalie ouverte (mauvais dispatching).
+  // Sur-saisi (saisi > papier de ce BE) = marchandise mal numérotée atterrie là (🎯 coupable).
+  const normRefEx = (s: string | null | undefined) => String(s ?? '').toUpperCase().replace(/O/g, '0').replace(/[^A-Z0-9]/g, '');
+  const detailBeNum = showDetail?.be_id ? beMap[showDetail.be_id]?.numero_be : undefined;
+  const { data: dispatchDetail = [] } = useQuery<{ numBe: string; saisie: number; scanned: boolean; papier: number | null; over: number | null }[]>({
+    queryKey: ['dispatch-detail', showDetail?.id],
+    queryFn: async () => {
+      const ref = showDetail?.reference_article;
+      if (!ref || !showDetail?.be_id || !detailBeNum) return [];
+      const { data: myL } = await supabase.from('lignes_be').select('reference_article').eq('be_id', showDetail.be_id);
+      const rawRef = (myL ?? []).map(l => l.reference_article).find(r => normRefEx(r) === normRefEx(ref)) ?? ref;
+      const [sais, paps, scannedRows] = await Promise.all([
+        supabase.from('saisies_cl').select('numero_be, quantite_recue').eq('reference_article', rawRef),
+        supabase.from('lignes_be').select('quantite_receptionnee, hors_systeme, be_receptions(numero_be)').eq('reference_article', rawRef),
+        supabase.from('be_receptions').select('numero_be').limit(1000),
+      ]);
+      const scanned = new Set((scannedRows.data ?? []).map(b => b.numero_be));
+      const pap = new Map<string, number>();
+      for (const l of (paps.data ?? []) as { quantite_receptionnee: number | null; hors_systeme: boolean | null; be_receptions: { numero_be: string } | { numero_be: string }[] | null }[]) {
+        if (l.hors_systeme) continue;
+        const nb = Array.isArray(l.be_receptions) ? l.be_receptions[0]?.numero_be : l.be_receptions?.numero_be;
+        if (!nb) continue;
+        pap.set(nb, (pap.get(nb) ?? 0) + (l.quantite_receptionnee ?? 0));
+      }
+      const bm = new Map<string, number>();
+      for (const s of sais.data ?? []) { if (!s.numero_be || s.numero_be === detailBeNum) continue; bm.set(s.numero_be, (bm.get(s.numero_be) ?? 0) + (s.quantite_recue ?? 0)); }
+      return [...bm.entries()].map(([numBe, saisie]) => {
+        const sc = scanned.has(numBe);
+        const papier = sc ? (pap.get(numBe) ?? 0) : null;
+        return { numBe, saisie, scanned: sc, papier, over: papier != null ? saisie - papier : null };
+      }).sort((a, b) => (b.over ?? -1e9) - (a.over ?? -1e9) || b.saisie - a.saisie);
+    },
+    enabled: !!showDetail?.reference_article && !!detailBeNum,
+    staleTime: 30000,
+  });
+
   const updateStatut = async (exc: Exc, statut: Exc['statut_exception']) => {
     setUpdating(exc.id);
     try {
@@ -672,6 +708,27 @@ export default function ExceptionsPage() {
                 <p className="text-sm text-gray-800">{showDetail.suggestion_action_ia}</p>
               </div>
             )}
+            {detailBeNum && dispatchDetail.length > 0 && (() => {
+              const coupables = dispatchDetail.filter(x => x.over != null && x.over > 0.001);
+              const autres = dispatchDetail.filter(x => !(x.over != null && x.over > 0.001));
+              return (
+                <div className="mb-3 p-3 rounded-lg border border-gray-100 bg-gray-50 text-xs">
+                  <p className="font-semibold text-gray-600 mb-1">📍 Où « {showDetail.reference_article} » est saisi ailleurs</p>
+                  {coupables.length > 0 ? (
+                    <p className="text-red-600">🎯 re-dispatché ici : {coupables.slice(0, 3).map((x, i) => (
+                      <span key={x.numBe}>{i > 0 && ', '}<span className="font-mono">{x.numBe}</span> <span className="text-red-400">(+{x.over} vs son papier {x.papier})</span></span>
+                    ))}</p>
+                  ) : (
+                    <p className="text-gray-500">Aucun BE sur-saisi → probable vrai oubli (ou saisi sous un BE non scanné).</p>
+                  )}
+                  {autres.length > 0 && (
+                    <p className="text-gray-400 mt-0.5">aussi sous {autres.slice(0, 4).map((x, i) => (
+                      <span key={x.numBe}>{i > 0 && ', '}<span className="font-mono">{x.numBe}</span> ({x.saisie}{x.scanned ? ' = papier' : ' · non scanné'})</span>
+                    ))}{autres.length > 4 && <span> +{autres.length - 4}</span>}</p>
+                  )}
+                </div>
+              );
+            })()}
             <div className="grid grid-cols-2 gap-3 text-xs text-gray-500 mb-4">
               {showDetail.facture_id && factureMap[showDetail.facture_id] && <div><p className="text-gray-400">Facture</p><Link href={`/factures/${showDetail.facture_id}`} className="text-indigo-600 hover:underline">{factureMap[showDetail.facture_id].numero_facture}</Link></div>}
               {showDetail.be_id && beMap[showDetail.be_id] && <div><p className="text-gray-400">BE</p><Link href={`/be-receptions/${showDetail.be_id}`} className="text-indigo-600 hover:underline">{beMap[showDetail.be_id].numero_be}</Link></div>}
