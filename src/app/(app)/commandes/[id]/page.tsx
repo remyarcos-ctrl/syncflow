@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
 import Link from 'next/link';
@@ -33,6 +33,7 @@ function computeStatutLigne(l: { quantite_commandee: number; quantite_receptionn
 
 export default function CommandeDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const router = useRouter();
   const qc = useQueryClient();
 
   const [showAddLine, setShowAddLine] = useState(false);
@@ -109,6 +110,37 @@ export default function CommandeDetailPage() {
       .map(([k, v]) => ({ numero_be: v.numero_be, qte: v.qte, nbRefs: v.refs.size, beId: beIdByNum.get(k) ?? null }))
       .sort((a, b) => a.numero_be.localeCompare(b.numero_be));
   }, [saisiesCmd, beImportes]);
+
+  // ② BE papier scopé à CETTE commande : pour chaque réf, le papier des BE qui ont
+  // livré cette réf POUR cette commande (via la saisie log). On ne ramasse PAS le
+  // papier d'une autre commande quand un BE est partagé (ex. BE-1209 sert 8 commandes).
+  const servingBeIds = useMemo(() => besRecus.map(b => b.beId).filter((x): x is string => !!x), [besRecus]);
+  const { data: lignesBeServing = [] } = useQuery<{ be_id: string; reference_article: string | null; quantite_receptionnee: number | null; hors_systeme: boolean | null }[]>({
+    queryKey: ['lignes-be-serving', servingBeIds.join()],
+    queryFn: async () => {
+      const { data } = await supabase.from('lignes_be').select('be_id, reference_article, quantite_receptionnee, hors_systeme').in('be_id', servingBeIds);
+      return data ?? [];
+    },
+    enabled: servingBeIds.length > 0, staleTime: 30000,
+  });
+
+  const papierParRef = useMemo(() => {
+    const normRef = (s: string | null) => String(s ?? '').toUpperCase().replace(/O/g, '0').replace(/[^A-Z0-9]/g, '');
+    const normBe = (s: string | null) => String(s ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const numByBeId = new Map(beImportes.map(b => [b.id, b.numero_be]));
+    // (BE, réf) que CETTE commande a reçus d'après les saisies log → seuls ceux-là comptent.
+    const okPairs = new Set<string>();
+    for (const s of saisiesCmd) if (s.numero_be && s.reference_article) okPairs.add(normBe(s.numero_be) + '|' + normRef(s.reference_article));
+    const m = new Map<string, number>();
+    for (const l of lignesBeServing) {
+      if (l.hors_systeme) continue;
+      const pair = normBe(numByBeId.get(l.be_id) ?? null) + '|' + normRef(l.reference_article);
+      if (!okPairs.has(pair)) continue; // ce (BE, réf) appartient à une autre commande
+      const rk = normRef(l.reference_article);
+      m.set(rk, (m.get(rk) ?? 0) + (l.quantite_receptionnee ?? 0));
+    }
+    return m;
+  }, [lignesBeServing, beImportes, saisiesCmd]);
 
   const { data: liaisonsFacture = [] } = useQuery<LiaisonFactureCommande[]>({
     queryKey: ['liaisons_facture_cmd', id],
@@ -377,9 +409,10 @@ export default function CommandeDetailPage() {
 
       {/* Header */}
       <div className="flex items-center gap-3">
-        <Link href="/commandes">
-          <Button variant="ghost" size="icon" className="h-8 w-8"><ArrowLeft className="w-4 h-4" /></Button>
-        </Link>
+        <Button variant="ghost" size="icon" className="h-8 w-8" title="Retour à la liste"
+          onClick={() => { if (window.history.length > 1) router.back(); else router.push('/commandes'); }}>
+          <ArrowLeft className="w-4 h-4" />
+        </Button>
         <div>
           <h1 className="text-xl font-bold text-gray-900 font-mono">{commande.numero_commande_interne}</h1>
           <p className="text-sm text-gray-500">{commande.fournisseur}</p>
@@ -681,6 +714,7 @@ export default function CommandeDetailPage() {
                   <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500">Désignation</th>
                   <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500" title="Cliquer sur une valeur pour la modifier">Qté cmd ✎</th>
                   <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500" title="Quantité reçue d'après la saisie de la log dans Centralink (③)">{modeRecu === 'unites' ? 'Reçu (saisie CL)' : 'Reçu HT €'}</th>
+                  <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500" title="Quantité reçue d'après TON BL papier scanné (②), sur les BE qui ont livré cette réf POUR cette commande. Écart avec la saisie CL = la log n'a pas saisi conformément au papier.">② BE papier</th>
                   <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500">Qté facturée</th>
                   <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500">PU €</th>
                   <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500">Total HT</th>
@@ -774,6 +808,23 @@ export default function CommandeDetailPage() {
                               return pu != null ? formatEur(l.quantite_receptionnee_reelle * pu) : '—';
                             })()}
                       </span>
+                    </td>
+                    <td className="px-4 py-2.5 text-right font-mono text-xs">
+                      {(() => {
+                        const normRef = (s: string | null) => String(s ?? '').toUpperCase().replace(/O/g, '0').replace(/[^A-Z0-9]/g, '');
+                        const pap = papierParRef.get(normRef(l.reference_article));
+                        if (pap === undefined) return <span className="text-gray-300">—</span>;
+                        const recu = l.quantite_receptionnee_reelle ?? 0;
+                        const diff = Math.abs(pap - recu) > 0.001;
+                        return (
+                          <span
+                            className={cn(diff ? 'text-amber-600 font-semibold' : 'text-gray-400')}
+                            title={diff ? `BL papier ${pap} ≠ saisie CL ${recu} → la log n'a pas saisi conformément au papier sur cette commande` : `BL papier ${pap} = saisie CL`}
+                          >
+                            {pap}{diff ? ' ⚠' : ''}
+                          </span>
+                        );
+                      })()}
                     </td>
                     <td className="px-4 py-2.5 text-right font-mono text-xs">
                       <span className={cn(l.quantite_facturee > l.quantite_commandee ? 'text-red-600' : l.quantite_facturee < l.quantite_commandee ? 'text-amber-600' : 'text-emerald-600')}>
