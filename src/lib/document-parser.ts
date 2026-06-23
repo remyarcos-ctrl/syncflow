@@ -139,9 +139,17 @@ async function callClaude(messages: object[], systemPrompt: string, model = MODE
     }
 
     lastError = await resp.text();
+    // Crédit épuisé / facturation → inutile de retenter, message clair pour l'utilisateur.
+    if (resp.status === 402 || /credit|billing|insufficient|quota|payment|balance|low_balance/i.test(lastError)) {
+      throw new Error('CRÉDIT_API : crédit Anthropic épuisé — recharge le compte (console.anthropic.com → Plans & Billing), puis réessaie l\'import.');
+    }
     throw new Error(`Claude API error ${resp.status}: ${lastError}`);
   }
 
+  // Si le « rate limit » persistant est en fait un manque de crédit, le dire clairement.
+  if (/credit|billing|insufficient|quota|balance/i.test(lastError)) {
+    throw new Error('CRÉDIT_API : crédit Anthropic épuisé — recharge le compte (console.anthropic.com → Plans & Billing), puis réessaie l\'import.');
+  }
   throw new Error(`Claude API rate limit persistant après ${MAX_RETRIES} tentatives`);
 }
 
