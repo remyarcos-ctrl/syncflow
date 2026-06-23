@@ -7,7 +7,7 @@ import { supabase } from '@/lib/supabase';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import PeriodeChips from '@/components/shared/PeriodeChips';
 import { cn } from '@/utils';
-import { ScanLine, CheckCircle2, Layers, AlertTriangle } from 'lucide-react';
+import { ScanLine, CheckCircle2, Layers, AlertTriangle, Printer } from 'lucide-react';
 
 // Statuts de commande « actives » : on ne demande de scanner QUE les BE qui servent
 // au moins une commande encore en cours (ouverte / partielle / en anomalie). Les BE
@@ -90,17 +90,53 @@ export default function BeAScannerPage() {
   const isLoading = l1 || l2 || l3;
   const pct = nTotalActifs > 0 ? Math.round((nScannesActifs / nTotalActifs) * 100) : 0;
 
+  const imprimer = () => {
+    const periode = annee ? (mois ? `${mois}/${annee}` : annee) : 'toutes périodes';
+    const rows = aImporter.map((b, i) => `<tr>
+      <td class="chk">☐</td><td class="num">${i + 1}</td>
+      <td class="be">${b.raw}${b.invalide ? ' ⚠ (n° invalide)' : ''}</td>
+      <td class="n">${b.cmds.length}</td>
+      <td class="cmd">${b.cmds.join(', ')}</td></tr>`).join('');
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>BE à scanner</title><style>
+      body{font-family:system-ui,Arial,sans-serif;margin:22px;color:#111}
+      h1{font-size:17px;margin:0 0 3px}
+      .sub{color:#666;font-size:11px;margin:0 0 14px}
+      table{width:100%;border-collapse:collapse;font-size:12px}
+      th,td{text-align:left;padding:5px 7px;border-bottom:1px solid #ddd;vertical-align:top}
+      th{font-size:9px;text-transform:uppercase;color:#777;letter-spacing:.03em}
+      .chk{font-size:15px;width:22px}.num{width:26px;color:#999}
+      .be{font-family:ui-monospace,monospace;font-weight:600;white-space:nowrap}
+      .n{text-align:center;width:54px;font-weight:600}
+      .cmd{color:#444;font-family:ui-monospace,monospace;font-size:10.5px}
+      tr{break-inside:avoid}@media print{body{margin:0}}
+    </style></head><body>
+      <h1>BE à scanner — ${aImporter.length} à importer</h1>
+      <p class="sub">Triés par impact (nb de commandes débloquées) · période : ${periode} · imprimé le ${new Date().toLocaleDateString('fr-FR')}</p>
+      <table><thead><tr><th></th><th>#</th><th>BE</th><th>Débloque</th><th>Commandes actives servies</th></tr></thead><tbody>${rows}</tbody></table>
+    </body></html>`;
+    const w = window.open('', '_blank');
+    if (!w) return;
+    w.document.write(html); w.document.close(); w.focus();
+    setTimeout(() => w.print(), 250);
+  };
+
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-xl font-semibold text-gray-900 flex items-center gap-2">
-          <ScanLine className="w-5 h-5 text-indigo-500" /> BE à scanner
-        </h1>
-        <p className="text-sm text-gray-500 mt-0.5 max-w-3xl">
-          Les <strong>BE référencés par Centralink</strong> (pour des commandes encore <strong>actives</strong>) mais
-          dont le <strong>papier (②) n&apos;est pas encore importé</strong>. Triés par <strong>impact</strong> : en haut,
-          ceux qui débloquent le plus de commandes d&apos;un coup. La liste se vide à mesure que tu scannes.
-        </p>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold text-gray-900 flex items-center gap-2">
+            <ScanLine className="w-5 h-5 text-indigo-500" /> BE à scanner
+          </h1>
+          <p className="text-sm text-gray-500 mt-0.5 max-w-3xl">
+            Les <strong>BE référencés par Centralink</strong> (pour des commandes encore <strong>actives</strong>) mais
+            dont le <strong>papier (②) n&apos;est pas encore importé</strong>. Triés par <strong>impact</strong> : en haut,
+            ceux qui débloquent le plus de commandes d&apos;un coup. La liste se vide à mesure que tu scannes.
+          </p>
+        </div>
+        <button onClick={imprimer} disabled={aImporter.length === 0}
+          className="shrink-0 inline-flex items-center gap-1.5 h-9 px-3 rounded-lg border border-gray-200 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed">
+          <Printer className="w-4 h-4" /> Imprimer
+        </button>
       </div>
 
       {/* Filtre période (puces année / mois) */}
