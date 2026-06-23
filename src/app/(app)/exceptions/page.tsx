@@ -382,12 +382,27 @@ export default function ExceptionsPage() {
   };
 
   // Récupère les anomalies actives (optionnellement par destinataire)
+  // Récupère les anomalies actives, en respectant les filtres en cours (type / priorité /
+  // origine) → la liste générée correspond à ce qu'on voit à l'écran (ciblable).
   const fetchActives = async (dest?: string): Promise<Exc[]> => {
     let q = supabase.from('exceptions').select('*')
       .in('statut_exception', ['ouverte', 'en cours']).order('type_exception');
     if (dest) q = q.eq('destinataire', dest);
+    if (filterType !== 'all') q = q.eq('type_exception', filterType);
+    if (filterPriorite !== 'all') q = q.eq('niveau_priorite', filterPriorite);
+    if (filterOrigine !== 'all') q = q.eq('origine', filterOrigine);
     const { data } = await q;
     return (data ?? []) as Exc[];
+  };
+
+  // Ouvre une page imprimable d'un texte (liste de corrections / réclamation).
+  const imprimerListe = (titre: string, texte: string) => {
+    const w = window.open('', '_blank');
+    if (!w) return;
+    const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(titre)}</title><style>body{font-family:system-ui,Arial,sans-serif;margin:24px;font-size:13px;line-height:1.55}h1{font-size:16px;margin:0 0 12px}pre{white-space:pre-wrap;font-family:inherit;margin:0}@media print{body{margin:0}}</style></head><body><h1>${esc(titre)}</h1><pre>${esc(texte)}</pre></body></html>`);
+    w.document.close(); w.focus();
+    setTimeout(() => w.print(), 250);
   };
 
   const exportCsv = async () => {
@@ -432,7 +447,7 @@ export default function ExceptionsPage() {
     setListeModal({
       titre: dest === 'Colombi' ? `Réclamation Colombi (${rows.length})` : `Corrections log (${rows.length})`,
       texte,
-      mailto: dest === 'Colombi' ? `mailto:?subject=${encodeURIComponent('Écarts livraisons / factures')}&body=${encodeURIComponent(texte)}` : undefined,
+      mailto: `mailto:?subject=${encodeURIComponent(dest === 'Colombi' ? 'Écarts livraisons / factures' : 'Corrections à apporter dans Centralink')}&body=${encodeURIComponent(texte)}`,
     });
   };
 
@@ -855,6 +870,7 @@ export default function ExceptionsPage() {
             <div className="flex flex-wrap gap-2 mt-3">
               <Button size="sm" onClick={() => { navigator.clipboard.writeText(listeModal.texte); toast.success('Copié'); }}>Copier</Button>
               <Button variant="outline" size="sm" onClick={() => telecharger(listeModal.texte, `${listeModal.titre}.txt`)}>Télécharger</Button>
+              <Button variant="outline" size="sm" onClick={() => imprimerListe(listeModal.titre, listeModal.texte)}>Imprimer</Button>
               {listeModal.mailto && (
                 <a href={listeModal.mailto}><Button variant="outline" size="sm">Ouvrir dans le mail</Button></a>
               )}
