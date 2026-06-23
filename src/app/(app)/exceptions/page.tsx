@@ -714,11 +714,16 @@ export default function ExceptionsPage() {
               return (
                 <div className="mb-3 p-3 rounded-lg border border-gray-100 bg-gray-50 text-xs">
                   <p className="font-semibold text-gray-600 mb-1">📍 Où « {showDetail.reference_article} » est saisi ailleurs</p>
-                  {coupables.length > 0 ? (
-                    <p className="text-red-600">🎯 re-dispatché ici : {coupables.slice(0, 3).map((x, i) => (
-                      <span key={x.numBe}>{i > 0 && ', '}<span className="font-mono">{x.numBe}</span> <span className="text-red-400">(+{x.over} vs son papier {x.papier})</span></span>
-                    ))}</p>
-                  ) : (
+                  {coupables.length > 0 ? (() => {
+                    const moisDe = (s: string | null | undefined) => { const m = String(s ?? '').toUpperCase().match(/BE-?(\d{2})-?(\d{2})/); return m ? m[1] + m[2] : ''; };
+                    const ceMois = moisDe(detailBeNum);
+                    return (
+                      <p className="text-amber-700">⚠ Piste à vérifier — aussi sur-saisi (sans papier) sous {coupables.slice(0, 3).map((x, i) => {
+                        const meme = !!ceMois && moisDe(x.numBe) === ceMois;
+                        return <span key={x.numBe}>{i > 0 && ', '}<span className="font-mono">{x.numBe}</span> <span className="text-amber-400">(+{x.over}{meme ? ', même période ⇒ lien probable' : ''})</span></span>;
+                      })} <span className="text-gray-400">— à confirmer (erreur de n° de BE possible)</span></p>
+                    );
+                  })() : (
                     <p className="text-gray-500">Aucun BE sur-saisi → probable vrai oubli (ou saisi sous un BE non scanné).</p>
                   )}
                   {autres.length > 0 && (

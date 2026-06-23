@@ -1285,14 +1285,20 @@ export default function BEDetailPage() {
                             const autres = cands.filter(x => !(x.over != null && x.over > 0.001));
                             return (
                               <div className="mt-1 text-[11px] space-y-0.5">
-                                {coupables.length > 0 && (
-                                  <div className="text-red-600">
-                                    🎯 re-dispatché ici :{' '}
-                                    {coupables.slice(0, 3).map((x, i) => (
-                                      <span key={x.numBe}>{i > 0 && ', '}<span className="font-mono">{x.numBe}</span> <span className="text-red-400">(+{x.over} de trop vs son papier {x.papier})</span></span>
-                                    ))}
-                                  </div>
-                                )}
+                                {coupables.length > 0 && (() => {
+                                  const moisDe = (s: string | null | undefined) => { const m = String(s ?? '').toUpperCase().match(/BE-?(\d{2})-?(\d{2})/); return m ? m[1] + m[2] : ''; };
+                                  const ceMois = moisDe(be?.numero_be);
+                                  return (
+                                    <div className="text-amber-700">
+                                      ⚠ Piste à vérifier — aussi sur-saisi (sans papier) sous{' '}
+                                      {coupables.slice(0, 3).map((x, i) => {
+                                        const meme = !!ceMois && moisDe(x.numBe) === ceMois;
+                                        return <span key={x.numBe}>{i > 0 && ', '}<span className="font-mono">{x.numBe}</span> <span className="text-amber-400">(+{x.over}{meme ? ', même période ⇒ lien probable' : ''})</span></span>;
+                                      })}
+                                      <span className="text-gray-400"> — à confirmer (la log peut s&apos;être trompée de n° de BE)</span>
+                                    </div>
+                                  );
+                                })()}
                                 {autres.length > 0 && (
                                   <div className="text-gray-400">
                                     aussi sous{' '}
