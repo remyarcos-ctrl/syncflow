@@ -5,101 +5,78 @@ import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { formatDate, cn } from '@/utils';
-import { ScanLine, ChevronRight, CheckCircle2, PackageX } from 'lucide-react';
+import { cn } from '@/utils';
+import { ScanLine, CheckCircle2, Layers, AlertTriangle } from 'lucide-react';
 
-interface Commande {
-  id: string;
-  numero_commande_interne: string;
-  fournisseur: string | null;
-  date_commande: string | null;
-  statut_commande: string | null;
-  bls_centralink: string | null;
-}
-interface BL { type: 'be' | 'note'; ref: string }
-
-const parseBls = (s: string | null): BL[] => {
-  if (!s) return [];
-  try {
-    const arr = JSON.parse(s);
-    return Array.isArray(arr) ? arr.filter((x) => x && x.ref) : [];
-  } catch { return []; }
-};
-interface LigneRecu {
-  commande_id: string;
-  quantite_receptionnee_reelle: number | null;
-}
-
-const normNum = (s: string | null | undefined): string =>
-  String(s ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+// Statuts de commande « actives » : on ne demande de scanner QUE les BE qui servent
+// au moins une commande encore en cours (ouverte / partielle / en anomalie). Les BE
+// ne servant que des commandes soldées/réceptionnées sont inutiles → ignorés.
+const ACTIFS = new Set(['ouverte', 'partiellement réceptionnée', 'en anomalie']);
+const normBe = (s: string | null | undefined) => String(s ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+const moisInvalide = (raw: string) => { const m = raw.toUpperCase().match(/BE-?\d{2}-?(\d{2})/); return m ? +m[1] < 1 || +m[1] > 12 : false; };
 
 const statutBadge = (s: string | null): string => {
   switch (s) {
     case 'en anomalie': return 'bg-red-50 text-red-700';
-    case 'réceptionnée': return 'bg-emerald-50 text-emerald-700';
     case 'partiellement réceptionnée': return 'bg-amber-50 text-amber-700';
+    case 'ouverte': return 'bg-blue-50 text-blue-700';
     default: return 'bg-gray-100 text-gray-600';
   }
 };
 
 export default function BeAScannerPage() {
-  const { data: commandes = [], isLoading: l1 } = useQuery<Commande[]>({
+  const { data: commandes = [], isLoading: l1 } = useQuery<{ numero_commande_interne: string; statut_commande: string | null }[]>({
     queryKey: ['bas_commandes'],
-    queryFn: async () => {
-      const { data } = await supabase
-        .from('commandes')
-        .select('id, numero_commande_interne, fournisseur, date_commande, statut_commande, bls_centralink');
-      return data ?? [];
-    },
+    queryFn: async () => (await supabase.from('commandes').select('numero_commande_interne, statut_commande')).data ?? [],
     refetchInterval: 15000,
   });
-
-  const { data: lignes = [], isLoading: l2 } = useQuery<LigneRecu[]>({
-    queryKey: ['bas_lignes'],
-    queryFn: async () => {
-      const { data } = await supabase
-        .from('lignes_commande')
-        .select('commande_id, quantite_receptionnee_reelle');
-      return (data as LigneRecu[]) ?? [];
-    },
+  const { data: scannedBes = [], isLoading: l2 } = useQuery<{ numero_be: string }[]>({
+    queryKey: ['bas_scanned_be'],
+    queryFn: async () => (await supabase.from('be_receptions').select('numero_be')).data ?? [],
     refetchInterval: 15000,
   });
-
-  const { data: saisies = [], isLoading: l3 } = useQuery<{ commande_ref: string | null }[]>({
+  const { data: saisies = [], isLoading: l3 } = useQuery<{ numero_be: string | null; commande_ref: string | null }[]>({
     queryKey: ['bas_saisies'],
     queryFn: async () => {
-      const { data } = await supabase.from('saisies_cl').select('commande_ref');
-      return data ?? [];
+      let out: { numero_be: string | null; commande_ref: string | null }[] = [], from = 0;
+      for (;;) {
+        const { data } = await supabase.from('saisies_cl').select('numero_be, commande_ref').range(from, from + 999);
+        out = out.concat(data ?? []);
+        if (!data || data.length < 1000) break;
+        from += 1000;
+      }
+      return out;
     },
     refetchInterval: 15000,
   });
 
-  const { aScanner, nbCouvert } = useMemo(() => {
-    // Reçu total ③ par commande
-    const recuByCmd = new Map<string, number>();
-    for (const l of lignes) {
-      recuByCmd.set(l.commande_id, (recuByCmd.get(l.commande_id) ?? 0) + (Number(l.quantite_receptionnee_reelle) || 0));
+  const { aImporter, nScannesActifs, nTotalActifs } = useMemo(() => {
+    const statutDe = new Map(commandes.map((c) => [c.numero_commande_interne, c.statut_commande]));
+    const scanned = new Set(scannedBes.map((b) => normBe(b.numero_be)));
+    // Par BE : les commandes ACTIVES qu'il sert (lien BE↔commande = saisies_cl, comme CL).
+    const beToCmd = new Map<string, { raw: string; cmds: Set<string> }>();
+    for (const s of saisies) {
+      if (!s.numero_be || !s.commande_ref) continue;
+      if (!ACTIFS.has(statutDe.get(s.commande_ref) ?? '')) continue; // ne compte que les commandes actives
+      const k = normBe(s.numero_be);
+      if (!beToCmd.has(k)) beToCmd.set(k, { raw: s.numero_be, cmds: new Set() });
+      beToCmd.get(k)!.cmds.add(s.commande_ref);
     }
-    // Commandes ayant au moins un BE scanné (lien via commande_ref des saisies ②)
-    const cmdAvecBE = new Set<string>();
-    for (const s of saisies) if (s.commande_ref) cmdAvecBE.add(normNum(s.commande_ref));
-
-    const enrichies = commandes.map((c) => ({
-      ...c,
-      recu: recuByCmd.get(c.id) ?? 0,
-      aBE: cmdAvecBE.has(normNum(c.numero_commande_interne)),
-      bls: parseBls(c.bls_centralink),
-    }));
-
-    const aScanner = enrichies
-      .filter((c) => c.recu > 0 && !c.aBE)
-      .sort((a, b) => (b.date_commande ?? '').localeCompare(a.date_commande ?? ''));
-    const nbCouvert = enrichies.filter((c) => c.recu > 0 && c.aBE).length;
-
-    return { aScanner, nbCouvert };
-  }, [commandes, lignes, saisies]);
+    const tousActifs = [...beToCmd.values()];
+    const aImporter = tousActifs
+      .filter((b) => !scanned.has(normBe(b.raw)))
+      .map((b) => ({ raw: b.raw, cmds: [...b.cmds].sort(), invalide: moisInvalide(b.raw) }))
+      // priorité : un BE qui débloque le PLUS de commandes actives en premier
+      .sort((a, b) => b.cmds.length - a.cmds.length || (a.raw < b.raw ? 1 : -1));
+    return {
+      aImporter,
+      nScannesActifs: tousActifs.filter((b) => scanned.has(normBe(b.raw))).length,
+      nTotalActifs: tousActifs.length,
+    };
+  }, [commandes, scannedBes, saisies]);
 
   const isLoading = l1 || l2 || l3;
+  const pct = nTotalActifs > 0 ? Math.round((nScannesActifs / nTotalActifs) * 100) : 0;
 
   return (
     <div className="space-y-6">
@@ -108,87 +85,75 @@ export default function BeAScannerPage() {
           <ScanLine className="w-5 h-5 text-indigo-500" /> BE à scanner
         </h1>
         <p className="text-sm text-gray-500 mt-0.5 max-w-3xl">
-          Commandes qui ont reçu de la marchandise (③ saisie Centralink) mais dont le <strong>BE papier (②) n&apos;a pas encore été importé</strong>.
-          Scanne ces BE-là pour activer le pointage ②↔③. La liste se vide au fur et à mesure.
+          Les <strong>BE référencés par Centralink</strong> (pour des commandes encore <strong>actives</strong>) mais
+          dont le <strong>papier (②) n&apos;est pas encore importé</strong>. Triés par <strong>impact</strong> : en haut,
+          ceux qui débloquent le plus de commandes d&apos;un coup. La liste se vide à mesure que tu scannes.
         </p>
       </div>
 
-      {/* KPIs */}
-      <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
-        <Card>
-          <CardHeader className="pb-1"><CardTitle className="text-xs font-medium text-gray-500">BE à scanner</CardTitle></CardHeader>
-          <CardContent><p className="text-2xl font-semibold text-gray-900">{aScanner.length}</p></CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-1"><CardTitle className="text-xs font-medium text-gray-500">Commandes déjà couvertes</CardTitle></CardHeader>
-          <CardContent><p className="text-2xl font-semibold text-emerald-600">{nbCouvert}</p></CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-1"><CardTitle className="text-xs font-medium text-gray-500">Commandes (total)</CardTitle></CardHeader>
-          <CardContent><p className="text-2xl font-semibold text-gray-900">{commandes.length}</p></CardContent>
-        </Card>
-      </div>
+      {/* Compteur d'avancement */}
+      <Card>
+        <CardContent className="py-4">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm font-medium text-gray-700">Couverture des commandes actives</span>
+            <span className="text-sm font-semibold text-gray-900">{nScannesActifs} / {nTotalActifs} BE importés</span>
+          </div>
+          <div className="h-2.5 w-full rounded-full bg-gray-100 overflow-hidden">
+            <div className="h-full rounded-full bg-indigo-500 transition-all" style={{ width: `${pct}%` }} />
+          </div>
+          <p className="text-xs text-gray-400 mt-1.5">
+            <strong className="text-amber-600">{aImporter.length}</strong> BE restants à importer · {pct}% couvert
+          </p>
+        </CardContent>
+      </Card>
 
-      {/* Liste */}
+      {/* Liste priorisée */}
       <Card>
         <CardContent className="p-0">
           {isLoading ? (
             <p className="text-sm text-gray-400 p-6 text-center">Chargement…</p>
-          ) : aScanner.length === 0 ? (
+          ) : aImporter.length === 0 ? (
             <div className="p-8 text-center">
               <CheckCircle2 className="w-8 h-8 text-emerald-400 mx-auto mb-2" />
               <p className="text-sm font-medium text-gray-700">Tout est couvert 🎉</p>
-              <p className="text-xs text-gray-400 mt-1">Chaque commande ayant reçu de la marchandise a son BE scanné.</p>
+              <p className="text-xs text-gray-400 mt-1">Chaque commande active a ses BE scannés.</p>
             </div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-gray-100 text-left text-xs text-gray-500">
-                    <th className="px-4 py-2.5 font-medium">Commande</th>
-                    <th className="px-4 py-2.5 font-medium">Fournisseur</th>
-                    <th className="px-4 py-2.5 font-medium">Date</th>
-                    <th className="px-4 py-2.5 font-medium">Statut</th>
-                    <th className="px-4 py-2.5 font-medium">Bon de livraison</th>
-                    <th className="px-4 py-2.5 font-medium text-right">Reçu (unités)</th>
-                    <th className="px-4 py-2.5"></th>
+                    <th className="px-4 py-2.5 font-medium">BE à scanner</th>
+                    <th className="px-4 py-2.5 font-medium text-center">Débloque</th>
+                    <th className="px-4 py-2.5 font-medium">Commandes actives servies</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {aScanner.map((c) => (
-                    <tr key={c.id} className="border-b border-gray-50 hover:bg-gray-50/50">
-                      <td className="px-4 py-2.5 font-medium text-gray-900 flex items-center gap-1.5">
-                        <PackageX className="w-3.5 h-3.5 text-amber-400 shrink-0" />{c.numero_commande_interne}
-                      </td>
-                      <td className="px-4 py-2.5 text-gray-600 max-w-[200px] truncate">{c.fournisseur ?? '—'}</td>
-                      <td className="px-4 py-2.5 text-gray-500 whitespace-nowrap">{c.date_commande ? formatDate(c.date_commande) : '—'}</td>
+                  {aImporter.map((b) => (
+                    <tr key={b.raw} className="border-b border-gray-50 hover:bg-gray-50/50 align-top">
                       <td className="px-4 py-2.5">
-                        <span className={cn('inline-block px-1.5 py-0.5 rounded text-xs font-medium', statutBadge(c.statut_commande))}>
-                          {c.statut_commande ?? '—'}
+                        <span className="font-mono font-medium text-indigo-700">{b.raw}</span>
+                        {b.invalide && (
+                          <span className="ml-2 inline-flex items-center gap-1 text-[11px] text-red-600" title="Mois impossible → faute de frappe de la log, à corriger dans Centralink avant de pouvoir scanner">
+                            <AlertTriangle className="w-3 h-3" /> n° invalide
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-2.5 text-center">
+                        <span className={cn('inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold',
+                          b.cmds.length >= 3 ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-600')}>
+                          <Layers className="w-3 h-3" />{b.cmds.length}
                         </span>
                       </td>
                       <td className="px-4 py-2.5">
-                        {c.bls.length === 0 ? (
-                          <span className="text-xs text-gray-300">—</span>
-                        ) : (
-                          <div className="flex flex-col gap-1">
-                            {c.bls.map((bl, k) => bl.type === 'be' ? (
-                              <span key={k} className="inline-flex items-center w-fit gap-1 px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 text-xs font-mono font-medium">
-                                {bl.ref}
-                              </span>
-                            ) : (
-                              <span key={k} className="inline-flex items-center w-fit gap-1 px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 text-xs" title="Réception sans bon de livraison saisi par la log">
-                                ⚠ {bl.ref}
-                              </span>
-                            ))}
-                          </div>
-                        )}
-                      </td>
-                      <td className="px-4 py-2.5 text-right font-medium text-gray-900">{c.recu}</td>
-                      <td className="px-4 py-2.5 text-right">
-                        <Link href={`/commandes/${c.id}`} className="inline-flex items-center gap-0.5 text-xs text-indigo-600 hover:text-indigo-800">
-                          Voir <ChevronRight className="w-3.5 h-3.5" />
-                        </Link>
+                        <div className="flex flex-wrap gap-1">
+                          {b.cmds.map((cr) => (
+                            <Link key={cr} href={`/commandes?q=${encodeURIComponent(cr.replace('#', ''))}`}
+                              className={cn('px-1.5 py-0.5 rounded text-xs font-mono hover:underline', statutBadge(commandes.find((c) => c.numero_commande_interne === cr)?.statut_commande ?? null))}>
+                              {cr}
+                            </Link>
+                          ))}
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -200,9 +165,9 @@ export default function BeAScannerPage() {
       </Card>
 
       <p className="text-xs text-gray-400 max-w-3xl">
-        « Bon de livraison » : badge <span className="font-mono text-indigo-600">bleu</span> = n° de BE à scanner ;
-        badge <span className="text-amber-600">⚠ orange</span> = la log a réceptionné <strong>sans saisir de bon de livraison</strong> (note libre)
-        — il n&apos;y a peut-être pas de papier à scanner, à vérifier. « — » = synchro Centralink pas encore relancée.
+        Périmètre : uniquement les BE servant une commande <strong>active</strong> (ouverte / partielle / en anomalie) —
+        un BE qui ne sert que des commandes soldées n&apos;est pas demandé. Le lien BE↔commande vient de Centralink
+        (section <em>Bon de Livraison</em>), donc on reflète exactement CL.
       </p>
     </div>
   );
