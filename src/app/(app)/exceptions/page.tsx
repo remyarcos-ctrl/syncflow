@@ -72,6 +72,7 @@ export default function ExceptionsPage() {
   const [filterPriorite, setFilterPriorite] = useState('all');
   const [filterOrigine, setFilterOrigine] = useState('all');
   const [filterDest, setFilterDest] = useState('all');
+  const [filterBe, setFilterBe] = useState('all');
   const [showDetail, setShowDetail] = useState<Exc | null>(null);
   const [comment, setComment] = useState('');
   const [assigne, setAssigne] = useState('');
@@ -79,7 +80,7 @@ export default function ExceptionsPage() {
   const [updating, setUpdating] = useState<string | null>(null);
 
   const { data: exceptionsResult = { exceptions: [], total: 0 }, isError } = useQuery<{ exceptions: Exc[]; total: number }>({
-    queryKey: ['exceptions', page, filterStatut, filterType, filterPriorite, filterOrigine, filterDest],
+    queryKey: ['exceptions', page, filterStatut, filterType, filterPriorite, filterOrigine, filterDest, filterBe],
     queryFn: async () => {
       let query = supabase
         .from('exceptions')
@@ -94,6 +95,7 @@ export default function ExceptionsPage() {
       if (filterPriorite !== 'all') query = query.eq('niveau_priorite', filterPriorite);
       if (filterOrigine !== 'all') query = query.eq('origine', filterOrigine);
       if (filterDest !== 'all') query = query.eq('destinataire', filterDest);
+      if (filterBe !== 'all') query = query.eq('be_id', filterBe);
 
       query = query.range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1);
 
@@ -153,6 +155,17 @@ export default function ExceptionsPage() {
     staleTime: 30000,
   });
 
+  // BE qui ont des anomalies actives → options du filtre par BE (pour préparer un message par BL).
+  const { data: beIdsAvecAnomalies = [] } = useQuery<string[]>({
+    queryKey: ['bes-avec-anomalies', filterStatut],
+    queryFn: async () => {
+      const statuts = filterStatut === 'résolues' ? ['résolue', 'ignorée'] : ['ouverte', 'en cours'];
+      const { data } = await supabase.from('exceptions').select('be_id').in('statut_exception', statuts).not('be_id', 'is', null);
+      return [...new Set((data ?? []).map((e) => e.be_id))].filter(Boolean) as string[];
+    },
+    staleTime: 30000,
+  });
+
   const { data: commandes = [] } = useQuery<Pick<Commande, 'id' | 'numero_commande_interne'>[]>({
     queryKey: ['commandes-slim'],
     queryFn: async () => { const { data } = await supabase.from('commandes').select('id,numero_commande_interne').limit(500); return (data ?? []) as Pick<Commande, 'id' | 'numero_commande_interne'>[]; },
@@ -187,6 +200,10 @@ export default function ExceptionsPage() {
 
   const factureMap = useMemo(() => Object.fromEntries(factures.map(f => [f.id, f])) as Record<string, Pick<Facture, 'id' | 'numero_facture'>>, [factures]);
   const beMap = useMemo(() => Object.fromEntries(bes.map(b => [b.id, b])) as Record<string, Pick<BEReception, 'id' | 'numero_be'>>, [bes]);
+  const beOptions = useMemo(() => beIdsAvecAnomalies
+    .map(id => ({ id, numero: beMap[id]?.numero_be ?? '' }))
+    .filter(o => o.numero)
+    .sort((a, b) => (a.numero < b.numero ? 1 : -1)), [beIdsAvecAnomalies, beMap]);
   const cmdMap = useMemo(() => Object.fromEntries(commandes.map(c => [c.id, c])) as Record<string, Pick<Commande, 'id' | 'numero_commande_interne'>>, [commandes]);
 
   // Diagnostic « où la réf est saisie ailleurs » pour l'anomalie ouverte (mauvais dispatching).
@@ -391,6 +408,7 @@ export default function ExceptionsPage() {
     if (filterType !== 'all') q = q.eq('type_exception', filterType);
     if (filterPriorite !== 'all') q = q.eq('niveau_priorite', filterPriorite);
     if (filterOrigine !== 'all') q = q.eq('origine', filterOrigine);
+    if (filterBe !== 'all') q = q.eq('be_id', filterBe);
     const { data } = await q;
     return (data ?? []) as Exc[];
   };
@@ -523,6 +541,12 @@ export default function ExceptionsPage() {
           className="h-9 rounded-lg border border-gray-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
           <option value="all">Tous destinataires</option>
           {['Colombi', 'log', 'SAV', 'interne'].map(d => <option key={d} value={d}>{d}</option>)}
+        </select>
+        <select value={filterBe} onChange={e => { setFilterBe(e.target.value); setPage(1); }}
+          className="h-9 rounded-lg border border-gray-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
+          title="Filtrer sur un BE → prépare un message de correction par BL">
+          <option value="all">Tous les BE</option>
+          {beOptions.map(o => <option key={o.id} value={o.id}>{o.numero}</option>)}
         </select>
       </div>
 
