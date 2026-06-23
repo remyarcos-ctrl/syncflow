@@ -267,6 +267,18 @@ export async function POST() {
     }
   }
 
+  // Lignes marquées SAV au papier (hors_systeme) + la commande sous laquelle CL les a saisies.
+  const horsSysByBeRef = new Set<string>();
+  for (const l of lignesBe) {
+    if (l.hors_systeme) horsSysByBeRef.add(l.be_id + '|' + normalizeRef(l.reference_article));
+  }
+  const cmdRefByBeRef = new Map<string, string>();
+  for (const s of saisies) {
+    const beId = beIdByNum.get(nbe(s.numero_be));
+    if (!beId || !s.commande_ref) continue;
+    cmdRefByBeRef.set(beId + '|' + normalizeRef(s.reference_article), s.commande_ref);
+  }
+
   // ── 3d) SAISI HORS PAPIER (erreur de n° de BE) → log ─────────────────────────
   // ③ saisi sous un BE scanné mais réf ABSENTE de son BL papier → la log a collé la
   // saisie au mauvais numéro de BE. Souvent la marchandise est bien reçue (juste mal
@@ -289,6 +301,7 @@ export async function POST() {
     const beId = kk.slice(0, sep);
     const k = kk.slice(sep + 1);
     if (lbByBe.get(beId)?.has(k)) continue;             // réf sur le papier → c'est §3c, pas ici
+    if (horsSysByBeRef.has(kk)) continue;               // ligne SAV (hors_systeme) → c'est §3f, pas une erreur de n° de BE
     const numBe = beNumById.get(beId);
     if (!numBe) continue;
     if (seen.has(key('pointage', beId, k, 'sur-saisie log'))) continue;
@@ -301,6 +314,29 @@ export async function POST() {
       valeur_attendue: 0, valeur_obtenue: sv, ecart: sv,
       statut_exception: 'ouverte', niveau_priorite: 'moyenne',
       suggestion_action_ia: `Corriger dans Centralink : ${sv.toFixed(0)} ${k} saisis sous ${numBe} alors qu'absents de son BL papier (mauvais n° de BE).${pistesStr ? ` Cette réf manque sur : ${pistesStr} → re-saisir sous le bon n° de BE.` : ` Vérifier sous quel BL elle a réellement été livrée.`}`,
+    });
+  }
+
+  // ── 3f) GARDE-FOU SAV : ligne marquée SAV au papier MAIS saisie sous une commande ──
+  // Le BL dit SAV (hors_systeme) mais la log l'a quand même saisi sous une commande dans
+  // CL → le SAV gonfle le reçu de la commande → risque de payer du SAV. À retirer côté CL.
+  for (const [kk, sv] of saisieByBeRef) {
+    if (sv <= 0.001) continue;
+    if (!horsSysByBeRef.has(kk)) continue;              // pas une ligne SAV → rien
+    const sep = kk.indexOf('|');
+    const beId = kk.slice(0, sep);
+    const k = kk.slice(sep + 1);
+    const numBe = beNumById.get(beId);
+    if (!numBe) continue;
+    if (seen.has(key('pointage', beId, k, 'sur-saisie log'))) continue;
+    const cr = cmdRefByBeRef.get(kk) ?? '';
+    nouvelles.push({
+      origine: 'pointage', destinataire: 'log', type_exception: 'sur-saisie log',
+      be_id: beId, reference_article: k,
+      motif: `SAV saisi sous commande : ${k} (${sv.toFixed(0)}) sur ${numBe} est marqué SAV au BL papier, mais saisi dans CL sous ${cr || 'une commande'} → gonfle le reçu`,
+      valeur_attendue: 0, valeur_obtenue: sv, ecart: sv,
+      statut_exception: 'ouverte', niveau_priorite: 'haute',
+      suggestion_action_ia: `Corriger dans Centralink : ${k} (${sv.toFixed(0)}) sur ${numBe} est du SAV (BL papier) mais saisi sous ${cr || 'une commande'} → le retirer de la commande (le SAV ne doit pas compter dans le reçu, sinon risque de payer du SAV à Colombi).`,
     });
   }
 
