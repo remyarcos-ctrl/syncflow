@@ -9,6 +9,7 @@ import PageHeader from '@/components/shared/PageHeader';
 import StatusBadge from '@/components/shared/StatusBadge';
 import EmptyState from '@/components/shared/EmptyState';
 import Pagination from '@/components/shared/Pagination';
+import PeriodeChips from '@/components/shared/PeriodeChips';
 import PdfImportModal from '@/components/shared/PdfImportModal';
 import SortableHeader from '@/components/shared/SortableHeader';
 import TableSkeleton from '@/components/shared/TableSkeleton';
@@ -66,6 +67,8 @@ function BEReceptionsPageInner() {
   const filtreEcart = searchParams.get('ecart') === '1';
   const dateDebut = searchParams.get('debut') ?? '';
   const dateFin = searchParams.get('fin') ?? '';
+  const annee = searchParams.get('annee') ?? '';
+  const mois = searchParams.get('mois') ?? '';
   const page = parseInt(searchParams.get('page') ?? '1', 10);
 
   const [confirmDelete, setConfirmDelete] = useState<BEReception | null>(null);
@@ -87,8 +90,16 @@ function BEReceptionsPageInner() {
     router.replace(`${pathname}?${params.toString()}`);
   }, [searchParams, pathname, router]);
 
+  const setPeriode = useCallback((key: 'annee' | 'mois', value: string) => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete('page');
+    if (key === 'annee') { params.delete('mois'); if (value) params.set('annee', value); else params.delete('annee'); }
+    else { if (value) params.set('mois', value); else params.delete('mois'); }
+    router.replace(`${pathname}?${params.toString()}`);
+  }, [searchParams, pathname, router]);
+
   const { data: besResult = { bes: [], total: 0 }, isError, isLoading } = useQuery<{ bes: BEReception[]; total: number }>({
-    queryKey: ['bes', page, filtreStatut, filtreFournisseur, search, dateDebut, dateFin],
+    queryKey: ['bes', page, filtreStatut, filtreFournisseur, search, dateDebut, dateFin, annee, mois],
     queryFn: async () => {
       let query = supabase
         .from('be_receptions')
@@ -100,6 +111,12 @@ function BEReceptionsPageInner() {
       if (search) query = query.ilike('numero_be', `%${search}%`);
       if (dateDebut) query = query.gte('date_bl', dateDebut);
       if (dateFin) query = query.lte('date_bl', dateFin);
+      if (annee) {
+        const m = mois ? parseInt(mois, 10) : 0;
+        const debut = mois ? `${annee}-${mois}-01` : `${annee}-01-01`;
+        const fin = mois ? (m === 12 ? `${+annee + 1}-01-01` : `${annee}-${String(m + 1).padStart(2, '0')}-01`) : `${+annee + 1}-01-01`;
+        query = query.gte('date_bl', debut).lt('date_bl', fin);
+      }
 
       query = query.range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1);
 
@@ -251,9 +268,14 @@ function BEReceptionsPageInner() {
         )}
         <input type="date" value={dateDebut} onChange={e => setFilter('debut', e.target.value)} className="h-9 rounded-lg border border-gray-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" title="Date BL depuis" />
         <input type="date" value={dateFin} onChange={e => setFilter('fin', e.target.value)} className="h-9 rounded-lg border border-gray-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" title="Date BL jusqu'à" />
-        {(search || filtreStatut !== 'all' || filtreFournisseur || filtreEcart || dateDebut || dateFin) && (
+        {(search || filtreStatut !== 'all' || filtreFournisseur || filtreEcart || dateDebut || dateFin || annee) && (
           <button onClick={() => router.replace(pathname)} className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1"><X className="w-3.5 h-3.5" /> Reset</button>
         )}
+      </div>
+
+      <div className="mb-4">
+        <PeriodeChips annees={['2026', '2025']} annee={annee} mois={mois}
+          onAnnee={(a) => setPeriode('annee', a)} onMois={(m) => setPeriode('mois', m)} />
       </div>
 
       {selected.size > 0 && (

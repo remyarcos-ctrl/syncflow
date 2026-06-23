@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import PeriodeChips from '@/components/shared/PeriodeChips';
 import { cn } from '@/utils';
 import { ScanLine, CheckCircle2, Layers, AlertTriangle } from 'lucide-react';
 
@@ -14,14 +15,8 @@ import { ScanLine, CheckCircle2, Layers, AlertTriangle } from 'lucide-react';
 const ACTIFS = new Set(['ouverte', 'partiellement réceptionnée', 'en anomalie']);
 const normBe = (s: string | null | undefined) => String(s ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 const moisInvalide = (raw: string) => { const m = raw.toUpperCase().match(/BE-?\d{2}-?(\d{2})/); return m ? +m[1] < 1 || +m[1] > 12 : false; };
-// Période d'un BE depuis son numéro (BE-YY-MM-…) → « 20YY-MM » pour comparer à un seuil.
-const beMois = (raw: string) => { const m = raw.toUpperCase().match(/BE-?(\d{2})-?(\d{2})/); return m ? `20${m[1]}-${m[2]}` : '9999-99'; };
-const FENETRES: { label: string; val: string }[] = [
-  { label: 'Depuis déc. 2025', val: '2025-12' },
-  { label: 'Depuis sept. 2025', val: '2025-09' },
-  { label: 'Depuis janv. 2025', val: '2025-01' },
-  { label: 'Tout', val: '0000-00' },
-];
+// Période d'un BE depuis son numéro (BE-YY-MM-…) → { an:'2026', mo:'03' }.
+const bePeriode = (raw: string) => { const m = raw.toUpperCase().match(/BE-?(\d{2})-?(\d{2})/); return m ? { an: `20${m[1]}`, mo: m[2] } : { an: '', mo: '' }; };
 
 const statutBadge = (s: string | null): string => {
   switch (s) {
@@ -58,7 +53,8 @@ export default function BeAScannerPage() {
     refetchInterval: 15000,
   });
 
-  const [depuis, setDepuis] = useState('2025-12');
+  const [annee, setAnnee] = useState('');
+  const [mois, setMois] = useState('');
 
   const { aImporter, nScannesActifs, nTotalActifs } = useMemo(() => {
     const statutDe = new Map(commandes.map((c) => [c.numero_commande_interne, c.statut_commande]));
@@ -72,8 +68,13 @@ export default function BeAScannerPage() {
       if (!beToCmd.has(k)) beToCmd.set(k, { raw: s.numero_be, cmds: new Set() });
       beToCmd.get(k)!.cmds.add(s.commande_ref);
     }
-    // Fenêtre de période : on ne s'occupe que des BE dont la date ≥ seuil choisi.
-    const tousActifs = [...beToCmd.values()].filter((b) => beMois(b.raw) >= depuis);
+    // Filtre période (puces) : année + mois optionnel, sur la date du n° de BE.
+    const tousActifs = [...beToCmd.values()].filter((b) => {
+      const p = bePeriode(b.raw);
+      if (annee && p.an !== annee) return false;
+      if (mois && p.mo !== mois) return false;
+      return true;
+    });
     const aImporter = tousActifs
       .filter((b) => !scanned.has(normBe(b.raw)))
       .map((b) => ({ raw: b.raw, cmds: [...b.cmds].sort(), invalide: moisInvalide(b.raw) }))
@@ -84,7 +85,7 @@ export default function BeAScannerPage() {
       nScannesActifs: tousActifs.filter((b) => scanned.has(normBe(b.raw))).length,
       nTotalActifs: tousActifs.length,
     };
-  }, [commandes, scannedBes, saisies, depuis]);
+  }, [commandes, scannedBes, saisies, annee, mois]);
 
   const isLoading = l1 || l2 || l3;
   const pct = nTotalActifs > 0 ? Math.round((nScannesActifs / nTotalActifs) * 100) : 0;
@@ -102,16 +103,9 @@ export default function BeAScannerPage() {
         </p>
       </div>
 
-      {/* Filtre de période (puces) */}
-      <div className="flex flex-wrap gap-1.5">
-        {FENETRES.map((f) => (
-          <button key={f.val} onClick={() => setDepuis(f.val)}
-            className={cn('px-3 py-1 rounded-full text-xs font-medium transition-colors',
-              depuis === f.val ? 'bg-indigo-600 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50')}>
-            {f.label}
-          </button>
-        ))}
-      </div>
+      {/* Filtre période (puces année / mois) */}
+      <PeriodeChips annees={['2026', '2025']} annee={annee} mois={mois}
+        onAnnee={(a) => { setAnnee(a); setMois(''); }} onMois={setMois} />
 
       {/* Compteur d'avancement */}
       <Card>

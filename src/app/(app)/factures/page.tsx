@@ -9,6 +9,7 @@ import PageHeader from '@/components/shared/PageHeader';
 import StatusBadge from '@/components/shared/StatusBadge';
 import EmptyState from '@/components/shared/EmptyState';
 import Pagination from '@/components/shared/Pagination';
+import PeriodeChips from '@/components/shared/PeriodeChips';
 import PdfImportModal from '@/components/shared/PdfImportModal';
 import { useTableFeatures } from '@/hooks/useTableFeatures';
 import { Button } from '@/components/ui/button';
@@ -37,6 +38,8 @@ function FacturesPageInner() {
   const filtreFournisseur = searchParams.get('fournisseur') ?? '';
   const dateDebut = searchParams.get('debut') ?? '';
   const dateFin = searchParams.get('fin') ?? '';
+  const annee = searchParams.get('annee') ?? '';
+  const mois = searchParams.get('mois') ?? '';
   const page = parseInt(searchParams.get('page') ?? '1', 10);
   const sortKey = searchParams.get('sortKey') ?? 'created_at';
   const sortDir = searchParams.get('sortDir') ?? 'desc';
@@ -65,6 +68,14 @@ function FacturesPageInner() {
     router.replace(`${pathname}?${params.toString()}`);
   }, [searchParams, pathname, router]);
 
+  const setPeriode = useCallback((key: 'annee' | 'mois', value: string) => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete('page');
+    if (key === 'annee') { params.delete('mois'); if (value) params.set('annee', value); else params.delete('annee'); }
+    else { if (value) params.set('mois', value); else params.delete('mois'); }
+    router.replace(`${pathname}?${params.toString()}`);
+  }, [searchParams, pathname, router]);
+
   const handleSortColumn = useCallback((field: string) => {
     const params = new URLSearchParams(searchParams.toString());
     params.delete('page');
@@ -79,7 +90,7 @@ function FacturesPageInner() {
   }, [searchParams, pathname, router, sortKey, sortDir]);
 
   const { data: queryResult, isError } = useQuery({
-    queryKey: ['factures', page, filtreStatut, filtreFournisseur, search, dateDebut, dateFin, sortKey, sortDir],
+    queryKey: ['factures', page, filtreStatut, filtreFournisseur, search, dateDebut, dateFin, sortKey, sortDir, annee, mois],
     queryFn: async () => {
       let q = supabase.from('factures').select('*', { count: 'exact' });
       if (filtreStatut !== 'all') q = q.eq('statut_facture', filtreStatut);
@@ -87,6 +98,12 @@ function FacturesPageInner() {
       if (search) q = q.ilike('numero_facture', `%${search}%`);
       if (dateDebut) q = q.gte('date_facture', dateDebut);
       if (dateFin) q = q.lte('date_facture', dateFin);
+      if (annee) {
+        const m = mois ? parseInt(mois, 10) : 0;
+        const debut = mois ? `${annee}-${mois}-01` : `${annee}-01-01`;
+        const fin = mois ? (m === 12 ? `${+annee + 1}-01-01` : `${annee}-${String(m + 1).padStart(2, '0')}-01`) : `${+annee + 1}-01-01`;
+        q = q.gte('date_facture', debut).lt('date_facture', fin);
+      }
       const sortField = sortKey || 'created_at';
       const sortAsc = sortDir === 'asc';
       q = q.order(sortField, { ascending: sortAsc });
@@ -352,9 +369,14 @@ function FacturesPageInner() {
         <Input placeholder="Fournisseur..." value={filtreFournisseur} onChange={e => setFilter('fournisseur', e.target.value)} className="w-48" />
         <input type="date" value={dateDebut} onChange={e => setFilter('debut', e.target.value)} className="h-9 rounded-lg border border-gray-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" title="Date facture depuis" />
         <input type="date" value={dateFin} onChange={e => setFilter('fin', e.target.value)} className="h-9 rounded-lg border border-gray-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" title="Date facture jusqu'à" />
-        {(search || filtreStatut !== 'all' || filtreFournisseur || dateDebut || dateFin) && (
+        {(search || filtreStatut !== 'all' || filtreFournisseur || dateDebut || dateFin || annee) && (
           <button onClick={() => router.replace(pathname)} className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1"><X className="w-3.5 h-3.5" /> Reset</button>
         )}
+      </div>
+
+      <div className="mb-4">
+        <PeriodeChips annees={['2026', '2025']} annee={annee} mois={mois}
+          onAnnee={(a) => setPeriode('annee', a)} onMois={(m) => setPeriode('mois', m)} />
       </div>
 
       {selected.size > 0 && (
