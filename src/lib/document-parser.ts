@@ -1,5 +1,6 @@
 // Parsing de documents (email corps + PDF) via Claude API
 // Applique toutes les règles métier de CONTEXT.md
+import { PDFDocument } from 'pdf-lib';
 
 const ANTHROPIC_API = 'https://api.anthropic.com/v1/messages';
 const MODEL_EMAIL = 'claude-haiku-4-5-20251001';
@@ -371,6 +372,24 @@ Règles Facture :
 
 Si un document n'est pas reconnu : {"type": "inconnu", "raison": "..."}`;
 
+  // 0) GROS PDF multi-pages → découper en paquets, parser EN PARALLÈLE, fusionner par n° de BE.
+  // Évite le timeout serverless ET la troncature JSON (8192 tokens) sur les PDF de 20-30 pages.
+  // Le chemin « petit PDF » (≤ 5 pages) ci-dessous reste INCHANGÉ.
+  let nbPages = 0;
+  try { nbPages = (await PDFDocument.load(Buffer.from(padded, 'base64'), { ignoreEncryption: true })).getPageCount(); } catch { /* illisible → chemin normal */ }
+  if (nbPages > 6) {
+    const paquets = await splitPdfBase64(padded, 6);
+    const res = await mapLimit(paquets, 5, async (chunk) => {
+      const a = await callPdfClaude(chunk, system, prompt, MODEL_PDF_PRIMAIRE);
+      return { docs: rawToDocs(a.text, filename, MODEL_PDF_PRIMAIRE), cost: coutUSD(MODEL_PDF_PRIMAIRE, a.usage) };
+    });
+    const docsG = fusionnerDocs(res.map((r) => r.docs));
+    const coutEURg = res.reduce((s, r) => s + r.cost, 0) * 0.92;
+    console.log(`[parsePdfDocuments:${filename}] GROS PDF ${nbPages}p → ${paquets.length} paquets // · ${nbLignes(docsG)} ligne(s) · coût≈${coutEURg.toFixed(3)} €`);
+    if (!docsG.length) return { docs: [{ type: 'inconnu', raison: `Gros PDF (${nbPages}p) non parseable` }], coutEUR: coutEURg, moteur: 'sonnet' };
+    return { docs: docsG, coutEUR: coutEURg, moteur: 'sonnet' };
+  }
+
   // 1) Tentative Haiku (le moins cher)
   const a1 = await callPdfClaude(padded, system, prompt, MODEL_PDF_PRIMAIRE);
   let docs = rawToDocs(a1.text, filename, MODEL_PDF_PRIMAIRE);
@@ -392,6 +411,75 @@ Si un document n'est pas reconnu : {"type": "inconnu", "raison": "..."}`;
 
   if (!docs.length) return { docs: [{ type: 'inconnu', raison: `Réponse IA (${label}) non parseable` }], coutEUR, moteur: label };
   return { docs, coutEUR, moteur: label };
+}
+
+// Découpe un PDF base64 en paquets de N pages (base64 chacun).
+async function splitPdfBase64(base64: string, pagesParPaquet: number): Promise<string[]> {
+  const src = await PDFDocument.load(Buffer.from(base64, 'base64'), { ignoreEncryption: true });
+  const n = src.getPageCount();
+  const paquets: string[] = [];
+  for (let start = 0; start < n; start += pagesParPaquet) {
+    const sub = await PDFDocument.create();
+    const idxs: number[] = [];
+    for (let i = start; i < Math.min(start + pagesParPaquet, n); i++) idxs.push(i);
+    const pages = await sub.copyPages(src, idxs);
+    pages.forEach((p) => sub.addPage(p));
+    const bytes = await sub.save();
+    paquets.push(Buffer.from(bytes).toString('base64'));
+  }
+  return paquets;
+}
+
+// Exécute fn sur chaque item avec une concurrence max (évite les rate limits Anthropic).
+async function mapLimit<T, R>(items: T[], limit: number, fn: (x: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  const worker = async () => { while (next < items.length) { const i = next++; out[i] = await fn(items[i]); } };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
+
+// Fusionne les docs de plusieurs paquets : un même BE/facture à cheval sur 2 paquets est recollé
+// par son numéro, et les lignes BE ré-agrégées par (référence, hors_systeme).
+function fusionnerDocs(listes: ParsedDocument[][]): ParsedDocument[] {
+  const bes = new Map<string, ParsedBE>();
+  const facts = new Map<string, ParsedFacture>();
+  for (const docs of listes) {
+    for (const d of docs) {
+      if (d.type === 'be') {
+        const num = normalizeRef(d.data.numero_be) || String(d.data.numero_be ?? '');
+        if (!num) continue;
+        const cur = bes.get(num);
+        if (!cur) bes.set(num, { ...d.data, lignes: [...d.data.lignes] });
+        else {
+          cur.lignes.push(...d.data.lignes);
+          if (!cur.fournisseur && d.data.fournisseur) cur.fournisseur = d.data.fournisseur;
+          if (!cur.date_bl && d.data.date_bl) cur.date_bl = d.data.date_bl;
+        }
+      } else if (d.type === 'facture') {
+        const num = String(d.data.numero_facture ?? '');
+        const cur = facts.get(num);
+        if (!cur) facts.set(num, { ...d.data, lignes: [...d.data.lignes] });
+        else cur.lignes.push(...d.data.lignes);
+      }
+    }
+  }
+  const out: ParsedDocument[] = [];
+  for (const [, data] of bes) {
+    const agg = new Map<string, ParsedLigneBE>();
+    for (const l of data.lignes) {
+      const sav = !!(l as ParsedLigneBE & { hors_systeme?: boolean }).hors_systeme;
+      const key = normalizeRef(l.reference_article) + '|' + (sav ? '1' : '0');
+      const e = agg.get(key);
+      if (e) {
+        e.quantite_receptionnee += Number(l.quantite_receptionnee) || 0;
+        if (l.montant_ht != null) e.montant_ht = (Number(e.montant_ht) || 0) + Number(l.montant_ht);
+      } else agg.set(key, { ...l });
+    }
+    out.push({ type: 'be', data: { ...data, numero_be: String(data.numero_be ?? '').split('/')[0], lignes: [...agg.values()] } });
+  }
+  for (const [, data] of facts) out.push({ type: 'facture', data });
+  return out;
 }
 
 // Compte les lignes extraites (BE + factures), pour juger la qualité d'une extraction.
