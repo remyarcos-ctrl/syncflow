@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
@@ -14,6 +14,14 @@ import { ScanLine, CheckCircle2, Layers, AlertTriangle } from 'lucide-react';
 const ACTIFS = new Set(['ouverte', 'partiellement réceptionnée', 'en anomalie']);
 const normBe = (s: string | null | undefined) => String(s ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 const moisInvalide = (raw: string) => { const m = raw.toUpperCase().match(/BE-?\d{2}-?(\d{2})/); return m ? +m[1] < 1 || +m[1] > 12 : false; };
+// Période d'un BE depuis son numéro (BE-YY-MM-…) → « 20YY-MM » pour comparer à un seuil.
+const beMois = (raw: string) => { const m = raw.toUpperCase().match(/BE-?(\d{2})-?(\d{2})/); return m ? `20${m[1]}-${m[2]}` : '9999-99'; };
+const FENETRES: { label: string; val: string }[] = [
+  { label: 'Depuis déc. 2025', val: '2025-12' },
+  { label: 'Depuis sept. 2025', val: '2025-09' },
+  { label: 'Depuis janv. 2025', val: '2025-01' },
+  { label: 'Tout', val: '0000-00' },
+];
 
 const statutBadge = (s: string | null): string => {
   switch (s) {
@@ -50,6 +58,8 @@ export default function BeAScannerPage() {
     refetchInterval: 15000,
   });
 
+  const [depuis, setDepuis] = useState('2025-12');
+
   const { aImporter, nScannesActifs, nTotalActifs } = useMemo(() => {
     const statutDe = new Map(commandes.map((c) => [c.numero_commande_interne, c.statut_commande]));
     const scanned = new Set(scannedBes.map((b) => normBe(b.numero_be)));
@@ -62,7 +72,8 @@ export default function BeAScannerPage() {
       if (!beToCmd.has(k)) beToCmd.set(k, { raw: s.numero_be, cmds: new Set() });
       beToCmd.get(k)!.cmds.add(s.commande_ref);
     }
-    const tousActifs = [...beToCmd.values()];
+    // Fenêtre de période : on ne s'occupe que des BE dont la date ≥ seuil choisi.
+    const tousActifs = [...beToCmd.values()].filter((b) => beMois(b.raw) >= depuis);
     const aImporter = tousActifs
       .filter((b) => !scanned.has(normBe(b.raw)))
       .map((b) => ({ raw: b.raw, cmds: [...b.cmds].sort(), invalide: moisInvalide(b.raw) }))
@@ -73,7 +84,7 @@ export default function BeAScannerPage() {
       nScannesActifs: tousActifs.filter((b) => scanned.has(normBe(b.raw))).length,
       nTotalActifs: tousActifs.length,
     };
-  }, [commandes, scannedBes, saisies]);
+  }, [commandes, scannedBes, saisies, depuis]);
 
   const isLoading = l1 || l2 || l3;
   const pct = nTotalActifs > 0 ? Math.round((nScannesActifs / nTotalActifs) * 100) : 0;
@@ -89,6 +100,17 @@ export default function BeAScannerPage() {
           dont le <strong>papier (②) n&apos;est pas encore importé</strong>. Triés par <strong>impact</strong> : en haut,
           ceux qui débloquent le plus de commandes d&apos;un coup. La liste se vide à mesure que tu scannes.
         </p>
+      </div>
+
+      {/* Filtre de période (puces) */}
+      <div className="flex flex-wrap gap-1.5">
+        {FENETRES.map((f) => (
+          <button key={f.val} onClick={() => setDepuis(f.val)}
+            className={cn('px-3 py-1 rounded-full text-xs font-medium transition-colors',
+              depuis === f.val ? 'bg-indigo-600 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50')}>
+            {f.label}
+          </button>
+        ))}
       </div>
 
       {/* Compteur d'avancement */}
