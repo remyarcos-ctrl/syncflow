@@ -9,6 +9,7 @@ import PageHeader from '@/components/shared/PageHeader';
 import StatusBadge from '@/components/shared/StatusBadge';
 import EmptyState from '@/components/shared/EmptyState';
 import Pagination from '@/components/shared/Pagination';
+import PeriodeChips from '@/components/shared/PeriodeChips';
 import SortableHeader from '@/components/shared/SortableHeader';
 import TableSkeleton from '@/components/shared/TableSkeleton';
 import { useTableFeatures } from '@/hooks/useTableFeatures';
@@ -38,6 +39,8 @@ function CommandesPageInner() {
   const page = parseInt(searchParams.get('page') ?? '1', 10);
   const sortKey = searchParams.get('sortKey') ?? 'numero_commande_interne';
   const sortDir = (searchParams.get('sortDir') ?? 'desc') as 'asc' | 'desc';
+  const annee = searchParams.get('annee') ?? '';
+  const mois = searchParams.get('mois') ?? '';
 
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState({ numero_commande_interne: '', fournisseur: '', date_commande: '' });
@@ -52,6 +55,15 @@ function CommandesPageInner() {
     params.delete('page');
     if (value && value !== 'all') params.set(key, value);
     else params.delete(key);
+    router.replace(`${pathname}?${params.toString()}`);
+  }, [searchParams, pathname, router]);
+
+  // Filtre période : choisir une année réinitialise le mois ; choisir un mois le pose.
+  const setPeriode = useCallback((key: 'annee' | 'mois', value: string) => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete('page');
+    if (key === 'annee') { params.delete('mois'); if (value) params.set('annee', value); else { params.delete('annee'); } }
+    else { if (value) params.set('mois', value); else params.delete('mois'); }
     router.replace(`${pathname}?${params.toString()}`);
   }, [searchParams, pathname, router]);
 
@@ -75,13 +87,21 @@ function CommandesPageInner() {
   }, [searchParams, pathname, router, sortKey, sortDir]);
 
   const { data: queryResult, isError, isLoading } = useQuery({
-    queryKey: ['commandes', page, filtreStatut, filtreFournisseur, search, sortKey, sortDir, filtreReliquats],
+    queryKey: ['commandes', page, filtreStatut, filtreFournisseur, search, sortKey, sortDir, filtreReliquats, annee, mois],
     queryFn: async () => {
       let q = supabase.from('commandes').select('*', { count: 'exact' });
       if (filtreReliquats) {
         q = q.in('statut_commande', ['ouverte', 'partiellement réceptionnée']);
       } else if (filtreStatut !== 'all') {
         q = q.eq('statut_commande', filtreStatut);
+      }
+      if (annee) {
+        const m = mois ? parseInt(mois, 10) : 0;
+        const debut = mois ? `${annee}-${mois}-01` : `${annee}-01-01`;
+        const fin = mois
+          ? (m === 12 ? `${+annee + 1}-01-01` : `${annee}-${String(m + 1).padStart(2, '0')}-01`)
+          : `${+annee + 1}-01-01`;
+        q = q.gte('date_commande', debut).lt('date_commande', fin);
       }
       if (filtreFournisseur) q = q.ilike('fournisseur', `%${filtreFournisseur}%`);
       if (search) q = q.ilike('numero_commande_interne', `%${search}%`);
@@ -308,11 +328,17 @@ function CommandesPageInner() {
         >
           <Package className="w-3.5 h-3.5" /> Reliquats
         </button>
-        {(search || filtreStatut !== 'all' || filtreFournisseur || filtreReliquats) && (
+        {(search || filtreStatut !== 'all' || filtreFournisseur || filtreReliquats || annee) && (
           <button onClick={() => router.replace(pathname)} className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1">
             <X className="w-3.5 h-3.5" /> Reset
           </button>
         )}
+      </div>
+
+      {/* Filtre période (puces année / mois) */}
+      <div className="mb-4">
+        <PeriodeChips annees={['2026', '2025']} annee={annee} mois={mois}
+          onAnnee={(a) => setPeriode('annee', a)} onMois={(m) => setPeriode('mois', m)} />
       </div>
 
       {selected.size > 0 && (
