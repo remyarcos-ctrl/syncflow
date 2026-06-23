@@ -7,6 +7,9 @@ import {
 } from '@/lib/facturation';
 import { quantitesConcordent, facteurConditionnement } from '@/lib/conditionnement';
 
+export const maxDuration = 60; // détection lourde (beaucoup de données) → éviter le timeout serverless
+export const dynamic = 'force-dynamic';
+
 const nbe = (s: string | null | undefined) => String(s ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 
 function adminSb() {

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getValidToken, sendEmail } from '@/lib/gmail-api';
 import { createClient } from '@supabase/supabase-js';
 
+export const maxDuration = 60;
 function adminSb() {
   return createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,

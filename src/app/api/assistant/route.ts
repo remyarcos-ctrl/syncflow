@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { getValidToken, sendEmail } from '@/lib/gmail-api';
 
+export const maxDuration = 60;
 const supabase = createClient(
   (process.env.NEXT_PUBLIC_SUPABASE_URL ?? '').trim(),
   (process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? '').trim(),
