@@ -19,6 +19,28 @@ function adminSb() {
   );
 }
 
+// PostgREST plafonne chaque requête à 1000 lignes. Plusieurs tables (saisies_cl,
+// lignes_commande…) dépassent ce seuil → sans pagination, la détection ne voit
+// qu'une partie des données et croit à des oublis/écarts qui n'existent pas.
+// selectAll boucle sur .range() jusqu'à tout récupérer. Retourne { data } pour
+// rester compatible avec le code aval qui lit `.data`.
+async function selectAll<T = Record<string, unknown>>(
+  build: () => { range: (a: number, b: number) => PromiseLike<{ data: T[] | null; error: unknown }> },
+): Promise<{ data: T[]; error?: unknown }> {
+  const pageSize = 1000;
+  let from = 0;
+  const data: T[] = [];
+  for (;;) {
+    const { data: rows, error } = await build().range(from, from + pageSize - 1);
+    if (error) return { data, error };
+    const r = rows ?? [];
+    data.push(...r);
+    if (r.length < pageSize) break;
+    from += pageSize;
+  }
+  return { data };
+}
+
 interface NewExc {
   origine: string; destinataire: string; type_exception: string;
   be_id?: string | null; facture_id?: string | null; commande_id?: string | null; reference_article: string;
@@ -33,16 +55,16 @@ export async function POST() {
   const sb = adminSb();
 
   const [lbeR, lcR, saisR, beR, lfR, factR, cmdR, exR, savR] = await Promise.all([
-    sb.from('lignes_be').select('be_id, reference_article, designation, quantite_receptionnee, hors_systeme, statut_retour'),
-    sb.from('lignes_commande').select('commande_id, reference_article, quantite_commandee, pu_commande, quantite_receptionnee_reelle, quantite_restante_a_recevoir'),
-    sb.from('saisies_cl').select('numero_be, reference_article, quantite_recue, commande_ref'),
-    sb.from('be_receptions').select('id, numero_be'),
-    sb.from('lignes_facture').select('id, facture_id, ligne_no, reference_article, designation, quantite_facturee, pu_facture, montant_ht, numero_be_detecte'),
-    sb.from('factures').select('id'),
-    sb.from('commandes').select('id, numero_commande_interne, bls_centralink'),
-    sb.from('exceptions').select('be_id, facture_id, commande_id, reference_article, type_exception, origine')
-      .in('origine', ['réception', 'pointage', 'facturation']),
-    sb.from('refs_sav').select('reference_article'),
+    selectAll(() => sb.from('lignes_be').select('be_id, reference_article, designation, quantite_receptionnee, hors_systeme, statut_retour')),
+    selectAll(() => sb.from('lignes_commande').select('commande_id, reference_article, quantite_commandee, pu_commande, quantite_receptionnee_reelle, quantite_restante_a_recevoir')),
+    selectAll(() => sb.from('saisies_cl').select('numero_be, reference_article, quantite_recue, commande_ref')),
+    selectAll(() => sb.from('be_receptions').select('id, numero_be')),
+    selectAll(() => sb.from('lignes_facture').select('id, facture_id, ligne_no, reference_article, designation, quantite_facturee, pu_facture, montant_ht, numero_be_detecte')),
+    selectAll(() => sb.from('factures').select('id')),
+    selectAll(() => sb.from('commandes').select('id, numero_commande_interne, bls_centralink')),
+    selectAll(() => sb.from('exceptions').select('be_id, facture_id, commande_id, reference_article, type_exception, origine')
+      .in('origine', ['réception', 'pointage', 'facturation'])),
+    selectAll(() => sb.from('refs_sav').select('reference_article')),
   ]);
 
   // Réfs de pièces détachées SAV (livrées hors commande, hors Centralink).
@@ -271,9 +293,20 @@ export async function POST() {
   }
 
   // Lignes marquées SAV au papier (hors_systeme) + la commande sous laquelle CL les a saisies.
+  // Une réf n'est « SAV pure » sur un BE que si TOUTES ses lignes y sont SAV. Si la même réf
+  // a aussi une ligne normale sur ce BE (ex. SN0004 = 1000 livrés + 3 en échange SAV), la part
+  // SAV est noyée dans la livraison normale → on ne marque PAS la réf SAV, sinon le garde-fou
+  // §3f croit que toute la saisie est du SAV.
+  const normalBeRef = new Set<string>();
+  for (const l of lignesBe) {
+    if (!l.hors_systeme) normalBeRef.add(l.be_id + '|' + normalizeRef(l.reference_article));
+  }
   const horsSysByBeRef = new Set<string>();
   for (const l of lignesBe) {
-    if (l.hors_systeme) horsSysByBeRef.add(l.be_id + '|' + normalizeRef(l.reference_article));
+    if (!l.hors_systeme) continue;
+    const kk = l.be_id + '|' + normalizeRef(l.reference_article);
+    if (normalBeRef.has(kk)) continue; // réf aussi livrée normalement sur ce BE → pas une ligne SAV pure
+    horsSysByBeRef.add(kk);
   }
   const cmdRefByBeRef = new Map<string, string>();
   for (const s of saisies) {
