@@ -580,7 +580,8 @@ export default function ExceptionsPage() {
               // selon le motif (le type en base reste « sur-saisie log », contrainte fermée).
               if ((exc.type_exception as string) === 'sur-saisie log') {
                 const m = exc.motif ?? '';
-                if (/n° de BE|hors papier|INVALIDE/i.test(m)) tc = { color: 'text-orange-700 bg-orange-50', label: 'Mauvais n° de BE' };
+                if (/SAV/i.test(m)) tc = { color: 'text-teal-700 bg-teal-50', label: 'SAV saisi sous commande' };
+                else if (/n° de BE|hors papier|INVALIDE/i.test(m)) tc = { color: 'text-orange-700 bg-orange-50', label: 'Mauvais n° de BE' };
                 else if (/conditionnement/i.test(m)) tc = { color: 'text-gray-600 bg-gray-50', label: 'À vérifier (unité)' };
                 else tc = { color: 'text-purple-700 bg-purple-50', label: 'Sur-saisie (doublon)' };
               }
