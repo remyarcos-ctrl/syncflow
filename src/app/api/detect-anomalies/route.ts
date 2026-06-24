@@ -294,10 +294,10 @@ export async function POST() {
         // le cas où il n'y a PAS de surplus (à la revue), donc on reste prudent : destinataire Colombi.
         if (!refsCommandees.has(k)) continue; // SAV / hors-commande → ③ = 0 normal, traité ailleurs
         if (surLivreeParColombi(k)) continue; // sur-livraison globale (② > commandé) → §3e
-        if (seen.has(key('pointage', beId, k, 'surplus Colombi'))) continue;
+        if (seen.has(key('pointage', beId, k, 'sur-livraison'))) continue;
         const manque = papier - saisie;
         nouvelles.push({
-          origine: 'pointage', destinataire: 'Colombi', type_exception: 'surplus Colombi',
+          origine: 'pointage', destinataire: 'Colombi', type_exception: 'sur-livraison',
           be_id: beId, reference_article: k,
           motif: conditionne ? condMotif
             : `Surplus Colombi ${k} sur ${numBe} : BL papier ② ${papier} / saisi ③ ${saisie} → ${manque.toFixed(0)} non saisi(s) (probable sur-livraison à arbitrer)`,
