@@ -584,11 +584,13 @@ export default function ExceptionsPage() {
                   <td className="px-4 py-3">
                     <span className="text-xs text-gray-600">{exc.origine ?? '—'}</span>
                   </td>
-                  <td className="px-4 py-3 text-xs text-gray-700 max-w-[220px]">
-                    <div className="truncate">{exc.motif}</div>
+                  <td className="px-4 py-3 text-xs text-gray-700 max-w-[360px]">
+                    <div className="whitespace-normal">{exc.motif}</div>
                     {exc.reference_article && <div className="text-[11px] text-gray-400 font-mono">{exc.reference_article}</div>}
                     {exc.suggestion_action_ia && (
-                      <div className="mt-0.5 text-[11px] text-blue-600 truncate" title={exc.suggestion_action_ia}>🛠 {exc.suggestion_action_ia}</div>
+                      <div className="mt-1 text-xs text-blue-900 bg-blue-50 border-l-4 border-blue-500 rounded-r px-2 py-1.5 whitespace-normal leading-snug">
+                        <span className="font-semibold">🛠 Action :</span> {exc.suggestion_action_ia}
+                      </div>
                     )}
                     {enCours(exc.reference_article) && (
                       <span className="inline-block mt-0.5 text-[11px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-600" title="La commande attend encore de la marchandise côté Centralink — la log n'a peut-être pas fini de saisir">
@@ -601,19 +603,7 @@ export default function ExceptionsPage() {
                       </span>
                     )}
                     {exc.explication_ia && (
-                      <p className="text-xs text-gray-500 mt-0.5 max-w-xs truncate">{exc.explication_ia}</p>
-                    )}
-                    {!exc.explication_ia && !exc.suggestion_ia && (
-                      <button
-                        onClick={async (e) => {
-                          e.stopPropagation();
-                          await fetch('/api/exception-ia', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ exceptionId: exc.id }) });
-                          qc.invalidateQueries({ queryKey: ['exceptions'] });
-                        }}
-                        className="text-xs text-indigo-500 hover:text-indigo-700 underline"
-                      >
-                        Analyser avec IA
-                      </button>
+                      <p className="text-xs text-gray-500 mt-0.5 whitespace-normal">{exc.explication_ia}</p>
                     )}
                   </td>
                   <td className="px-4 py-3">
