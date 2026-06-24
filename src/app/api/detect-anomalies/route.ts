@@ -285,20 +285,26 @@ export async function POST() {
             : `Corriger dans Centralink : sur ${numBe}, la log a saisi ${saisie} ${k} alors que le BL papier en montre ${papier} → réduire de ${surplus.toFixed(0)}${mult ? ` (doublon ×${mult})` : ''}.`,
         });
       } else {
-        // La log a saisi MOINS que le BL papier → oubli / mal saisi (sous un autre n° de BE).
-        if (!refsCommandees.has(k)) continue; // SAV / hors-commande → ③ = 0 normal, pas un oubli
-        if (surLivreeParColombi(k)) continue; // sur-livraison Colombi (② > commandé) → §3e, pas un oubli log
-        if (seen.has(key('pointage', beId, k, 'oubli log'))) continue;
+        // Le BL papier ② montre PLUS que la saisie ③ sous ce BE = SURPLUS COLOMBI.
+        // Colombi sur-livre en routine ; la log ne saisit que ce qui a une commande ouverte,
+        // l'excédent reste non saisi sous ce BE → il remonte ici. Ce n'est PAS un oubli log :
+        // c'est à arbitrer côté achat (garder → commande de régule AVEC le n° de BE dans la
+        // colonne Bon de Livraison → la saisie se rangera sous ce BE et le manque se fermera
+        // tout seul au prochain sync ; retour → avoir ; ou ajout au stock). Le rare vrai oubli =
+        // le cas où il n'y a PAS de surplus (à la revue), donc on reste prudent : destinataire Colombi.
+        if (!refsCommandees.has(k)) continue; // SAV / hors-commande → ③ = 0 normal, traité ailleurs
+        if (surLivreeParColombi(k)) continue; // sur-livraison globale (② > commandé) → §3e
+        if (seen.has(key('pointage', beId, k, 'surplus Colombi'))) continue;
         const manque = papier - saisie;
         nouvelles.push({
-          origine: 'pointage', destinataire: 'log', type_exception: 'oubli log',
+          origine: 'pointage', destinataire: 'Colombi', type_exception: 'surplus Colombi',
           be_id: beId, reference_article: k,
           motif: conditionne ? condMotif
-            : `Oubli ${k} sur ${numBe} : BL papier ② ${papier} / saisi ③ ${saisie} → ${manque.toFixed(0)} non saisi(s)`,
+            : `Surplus Colombi ${k} sur ${numBe} : BL papier ② ${papier} / saisi ③ ${saisie} → ${manque.toFixed(0)} non saisi(s) (probable sur-livraison à arbitrer)`,
           valeur_attendue: papier, valeur_obtenue: saisie, ecart: -manque,
-          statut_exception: 'ouverte', niveau_priorite: conditionne ? 'faible' : manque >= 10 ? 'haute' : 'moyenne',
+          statut_exception: 'ouverte', niveau_priorite: conditionne ? 'faible' : 'moyenne',
           suggestion_action_ia: conditionne ? condAction
-            : `Corriger dans Centralink : sur ${numBe}, la log a saisi ${saisie} ${k} alors que le BL papier en montre ${papier} → saisir les ${manque.toFixed(0)} manquants (oubli, ou saisis sous un mauvais n° de BE).`,
+            : `Arbitrer le surplus ${k} sur ${numBe} (papier ② ${papier} / saisi ③ ${saisie}, +${manque.toFixed(0)}) : garder → commande de régule avec le n° de BE dans la colonne « Bon de Livraison » (le manque se fermera au sync) ; retour → avoir ; ou mise au stock. Si AUCUN surplus réel → c'est alors un vrai oubli log à saisir.`,
         });
       }
     }
