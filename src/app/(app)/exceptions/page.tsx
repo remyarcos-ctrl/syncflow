@@ -565,7 +565,7 @@ export default function ExceptionsPage() {
             <tr className="bg-gray-50/50 border-b border-gray-100">
               <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Type</th>
               <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Source</th>
-              <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Motif</th>
+              <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Référence / Motif</th>
               <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Destinataire</th>
               <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Facture</th>
               <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">BE</th>
@@ -575,7 +575,15 @@ export default function ExceptionsPage() {
           </thead>
           <tbody className="divide-y divide-gray-50">
             {exceptions.map(exc => {
-              const tc = TYPE_CONFIG[exc.type_exception] ?? { color: 'text-gray-600 bg-gray-50', label: exc.type_exception };
+              let tc = TYPE_CONFIG[exc.type_exception] ?? { color: 'text-gray-600 bg-gray-50', label: exc.type_exception };
+              // « sur-saisie log » recouvre 3 réalités très différentes → on précise le badge
+              // selon le motif (le type en base reste « sur-saisie log », contrainte fermée).
+              if ((exc.type_exception as string) === 'sur-saisie log') {
+                const m = exc.motif ?? '';
+                if (/n° de BE|hors papier|INVALIDE/i.test(m)) tc = { color: 'text-orange-700 bg-orange-50', label: 'Mauvais n° de BE' };
+                else if (/conditionnement/i.test(m)) tc = { color: 'text-gray-600 bg-gray-50', label: 'À vérifier (unité)' };
+                else tc = { color: 'text-purple-700 bg-purple-50', label: 'Sur-saisie (doublon)' };
+              }
               return (
                 <tr key={exc.id} className={cn('hover:bg-gray-50/50', ['haute', 'critique'].includes(exc.niveau_priorite) ? 'border-l-2 border-l-red-400' : exc.niveau_priorite === 'moyenne' ? 'border-l-2 border-l-orange-300' : '')}>
                   <td className="px-4 py-3">
@@ -585,8 +593,8 @@ export default function ExceptionsPage() {
                     <span className="text-xs text-gray-600">{exc.origine ?? '—'}</span>
                   </td>
                   <td className="px-4 py-3 text-xs text-gray-700 max-w-[360px]">
-                    <div className="whitespace-normal">{exc.motif}</div>
-                    {exc.reference_article && <div className="text-[11px] text-gray-400 font-mono">{exc.reference_article}</div>}
+                    {exc.reference_article && <div className="font-mono font-bold text-sm text-gray-900 mb-0.5">{exc.reference_article}</div>}
+                    <div className="whitespace-normal text-gray-600">{exc.motif}</div>
                     {exc.suggestion_action_ia && (
                       <div className="mt-1 text-xs text-blue-900 bg-blue-50 border-l-4 border-blue-500 rounded-r px-2 py-1.5 whitespace-normal leading-snug">
                         <span className="font-semibold">🛠 Action :</span> {exc.suggestion_action_ia}
