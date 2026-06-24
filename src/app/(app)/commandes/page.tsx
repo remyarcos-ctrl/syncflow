@@ -94,6 +94,11 @@ function CommandesPageInner() {
         q = q.in('statut_commande', ['ouverte', 'partiellement réceptionnée']);
       } else if (filtreStatut !== 'all') {
         q = q.eq('statut_commande', filtreStatut);
+      } else {
+        // Par défaut on ne montre que les commandes OUVERTES (en cours + partielles) :
+        // les commandes entièrement réceptionnées ne nous intéressent plus pour le contrôle.
+        // (Choisir « réceptionnée » dans le filtre statut permet de les revoir au besoin.)
+        q = q.in('statut_commande', ['ouverte', 'partiellement réceptionnée']);
       }
       if (annee) {
         const m = mois ? parseInt(mois, 10) : 0;

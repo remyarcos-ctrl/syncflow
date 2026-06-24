@@ -225,6 +225,24 @@ export async function POST() {
     const kk = beId + '|' + aliasRef(s.reference_article);
     saisieByBeRef.set(kk, (saisieByBeRef.get(kk) ?? 0) + (Number(s.quantite_recue) || 0));
   }
+  // Saisies sous un n° de BE INVALIDE (mois > 12, ex. BE-25-13-… au lieu de -12-) :
+  // erreur de saisie du n° de BE par la log. La marchandise est bien saisie, juste mal
+  // numérotée → ça crée un manque "fantôme" sur le vrai BE. Quand une réf en manque est
+  // saisie ainsi, ce n'est PAS un surplus mais une erreur log à recoller (cas 1/2).
+  const beInvalide = (n: string | null | undefined): boolean => {
+    const m = String(n ?? '').toUpperCase().match(/BE-?\d{2}-?(\d{2})-?\d+/);
+    if (!m) return false;
+    const mois = Number(m[1]);
+    return mois > 12 || mois === 0;
+  };
+  const saisieSousBeInvalide = new Map<string, { numBe: string; qte: number }[]>();
+  for (const s of saisies) {
+    if (!beInvalide(s.numero_be)) continue;
+    const k = aliasRef(s.reference_article);
+    const arr = saisieSousBeInvalide.get(k) ?? [];
+    arr.push({ numBe: s.numero_be, qte: Number(s.quantite_recue) || 0 });
+    saisieSousBeInvalide.set(k, arr);
+  }
   // Réfs réellement commandées (un oubli de saisie n'a de sens que là-dessus : les pièces SAV
   // et le hors-commande sont hors-Centralink, donc ③ = 0 est NORMAL, pas un oubli).
   const refsCommandees = new Set<string>();
@@ -292,10 +310,27 @@ export async function POST() {
         // colonne Bon de Livraison → la saisie se rangera sous ce BE et le manque se fermera
         // tout seul au prochain sync ; retour → avoir ; ou ajout au stock). Le rare vrai oubli =
         // le cas où il n'y a PAS de surplus (à la revue), donc on reste prudent : destinataire Colombi.
+        const manque = papier - saisie;
+        // CAS LOG (cas 1/2) : réf en manque MAIS saisie sous un n° de BE INVALIDE (mois > 12)
+        // → erreur de n° de BE de la log (la marchandise est saisie, juste mal numérotée),
+        // PAS un surplus → à recoller sur le bon BE.
+        const sousInvalide = saisieSousBeInvalide.get(k);
+        if (sousInvalide && sousInvalide.length) {
+          if (seen.has(key('pointage', beId, k, 'sur-saisie log'))) continue;
+          const besInv = [...new Set(sousInvalide.map((x) => x.numBe))].slice(0, 3).join(', ');
+          nouvelles.push({
+            origine: 'pointage', destinataire: 'log', type_exception: 'sur-saisie log',
+            be_id: beId, reference_article: k,
+            motif: `${k} manque sur ${numBe} (② ${papier} / ③ ${saisie}) mais saisi sous un n° de BE INVALIDE (${besInv}, mois > 12) → erreur de n° de BE`,
+            valeur_attendue: papier, valeur_obtenue: saisie, ecart: -manque,
+            statut_exception: 'ouverte', niveau_priorite: 'haute',
+            suggestion_action_ia: `Corriger dans Centralink : ${k} a été saisi sous un n° de BE invalide (${besInv}) → recoller sur le bon n° de BE ${numBe}. Le manque se fermera ensuite.`,
+          });
+          continue;
+        }
         if (!refsCommandees.has(k)) continue; // SAV / hors-commande → ③ = 0 normal, traité ailleurs
         if (surLivreeParColombi(k)) continue; // sur-livraison globale (② > commandé) → §3e
         if (seen.has(key('pointage', beId, k, 'sur-livraison'))) continue;
-        const manque = papier - saisie;
         nouvelles.push({
           origine: 'pointage', destinataire: 'Colombi', type_exception: 'sur-livraison',
           be_id: beId, reference_article: k,

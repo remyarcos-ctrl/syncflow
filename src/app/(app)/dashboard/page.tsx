@@ -145,7 +145,9 @@ export default function DashboardPage() {
   const { data: commandes = [] } = useQuery<Commande[]>({
     queryKey: ['commandes'],
     queryFn: async () => {
-      const { data } = await supabase.from('commandes').select('id, statut_commande, montant_total_commande, created_at').order('created_at', { ascending: false }).limit(500);
+      // On ne suit que les commandes OUVERTES (en cours + partielles) : les commandes
+      // entièrement réceptionnées sont soldées, plus d'intérêt pour le pilotage.
+      const { data } = await supabase.from('commandes').select('id, statut_commande, montant_total_commande, created_at').in('statut_commande', ['ouverte', 'partiellement réceptionnée']).order('created_at', { ascending: false }).limit(500);
       return (data ?? []) as unknown as Commande[];
     },
     ...STALE,
