@@ -6,6 +6,7 @@ import {
   type LigneFactureInput, type LigneCommandeInput, type CommandeInput, type SaisieInput,
 } from '@/lib/facturation';
 import { quantitesConcordent, facteurConditionnement } from '@/lib/conditionnement';
+import { REF_ALIAS_CL_TO_COLOMBI } from '@/lib/ref-alias';
 
 export const maxDuration = 60; // détection lourde (beaucoup de données) → éviter le timeout serverless
 export const dynamic = 'force-dynamic';
@@ -206,18 +207,29 @@ export async function POST() {
   }
   const beNumById = new Map((beR.data ?? []).map((b) => [b.id, b.numero_be]));
   const beIdByNum = new Map((beR.data ?? []).map((b) => [nbe(b.numero_be), b.id]));
+  // Alias de réf CL → réf Colombi (codes vrac : billes/plombs saisis sous un code
+  // générique dans Centralink). On traduit la saisie ③ vers le code du BL papier ②
+  // avant de comparer ; l'écart d'unité (boîte/pièce) est ensuite géré par le
+  // conditionnement (quantitesConcordent). Voir src/lib/ref-alias.ts.
+  const aliasNorm = new Map(
+    Object.entries(REF_ALIAS_CL_TO_COLOMBI).map(([cl, col]) => [normalizeRef(cl), normalizeRef(col)]),
+  );
+  const aliasRef = (raw: string | null | undefined) => {
+    const k = normalizeRef(raw);
+    return aliasNorm.get(k) ?? k;
+  };
   const saisieByBeRef = new Map<string, number>();
   for (const s of saisies) {
     const beId = beIdByNum.get(nbe(s.numero_be));
     if (!beId) continue;
-    const kk = beId + '|' + normalizeRef(s.reference_article);
+    const kk = beId + '|' + aliasRef(s.reference_article);
     saisieByBeRef.set(kk, (saisieByBeRef.get(kk) ?? 0) + (Number(s.quantite_recue) || 0));
   }
   // Réfs réellement commandées (un oubli de saisie n'a de sens que là-dessus : les pièces SAV
   // et le hors-commande sont hors-Centralink, donc ③ = 0 est NORMAL, pas un oubli).
   const refsCommandees = new Set<string>();
   for (const l of lignesCmd) {
-    if ((Number(l.quantite_commandee) || 0) > 0) refsCommandees.add(normalizeRef(l.reference_article));
+    if ((Number(l.quantite_commandee) || 0) > 0) refsCommandees.add(aliasRef(l.reference_article));
   }
   // Cartes NIVEAU COMMANDE (par réf) : papier ② total, commandé ① total, reçu ③ total.
   // Sert à distinguer une SUR-LIVRAISON Colombi (② > commandé) d'un oubli log.
@@ -232,7 +244,7 @@ export async function POST() {
   const cmdParRef = new Map<string, number>();
   const recuTotParRef = new Map<string, number>();
   for (const l of lignesCmd) {
-    const k = normalizeRef(l.reference_article);
+    const k = aliasRef(l.reference_article);
     cmdParRef.set(k, (cmdParRef.get(k) ?? 0) + Math.max(0, Number(l.quantite_commandee) || 0));
     recuTotParRef.set(k, (recuTotParRef.get(k) ?? 0) + (Number(l.quantite_receptionnee_reelle) || 0));
   }
@@ -312,7 +324,7 @@ export async function POST() {
   for (const s of saisies) {
     const beId = beIdByNum.get(nbe(s.numero_be));
     if (!beId || !s.commande_ref) continue;
-    cmdRefByBeRef.set(beId + '|' + normalizeRef(s.reference_article), s.commande_ref);
+    cmdRefByBeRef.set(beId + '|' + aliasRef(s.reference_article), s.commande_ref);
   }
 
   // ── 3d) SAISI HORS PAPIER (erreur de n° de BE) → log ─────────────────────────
