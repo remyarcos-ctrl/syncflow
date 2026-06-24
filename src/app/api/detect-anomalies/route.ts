@@ -243,6 +243,22 @@ export async function POST() {
     arr.push({ numBe: s.numero_be, qte: Number(s.quantite_recue) || 0 });
     saisieSousBeInvalide.set(k, arr);
   }
+  // Quantité saisie HORS PAPIER par réf (orpheline : saisie sous un BE connu où la réf
+  // n'est même pas au papier = mauvais n° de BE). Si cette quantité couvre le manque d'un
+  // BE, c'est une PURE mauvaise répartition (la marchandise est saisie ailleurs), pas un
+  // surplus. C'est local (la qté orpheline explique le manque), pas faussé par le total global.
+  const qteSaisieHorsPapierParRef = new Map<string, number>();
+  for (const [kk, sv] of saisieByBeRef) {
+    if (sv <= 0.001) continue;
+    const beId = kk.slice(0, kk.indexOf('|'));
+    const k = kk.slice(kk.indexOf('|') + 1);
+    // Orpheline = saisie sous un BE dont on A LE PAPIER (lignes_be) mais où la réf n'y figure
+    // pas. Si on n'a pas scanné le papier de ce BE, on ne peut RIEN conclure → on n'en tient pas
+    // compte (sinon toutes les saisies des vieux BE non scannés passeraient pour des erreurs).
+    if (lbByBe.has(beId) && !lbByBe.get(beId)!.has(k)) {
+      qteSaisieHorsPapierParRef.set(k, (qteSaisieHorsPapierParRef.get(k) ?? 0) + sv);
+    }
+  }
   // Réfs réellement commandées (un oubli de saisie n'a de sens que là-dessus : les pièces SAV
   // et le hors-commande sont hors-Centralink, donc ③ = 0 est NORMAL, pas un oubli).
   const refsCommandees = new Set<string>();
@@ -328,6 +344,13 @@ export async function POST() {
           });
           continue;
         }
+        // CAS LOG (mauvais n° de BE / lumping, BE valide) : si la réf est saisie HORS PAPIER sur
+        // un autre BE (orpheline) pour une quantité qui COUVRE ce manque → PURE mauvaise
+        // répartition (la marchandise est saisie ailleurs, juste mal numérotée), pas un surplus.
+        // Déjà signalé côté « saisi hors papier » (§3d, avec la piste) → on ne le re-marque pas.
+        // Si l'orpheline NE couvre PAS tout le manque (cas mixte type KI0001), le reste tombe en
+        // surplus ci-dessous → on a bien les deux : recoller (log) + surplus net (Colombi).
+        if ((qteSaisieHorsPapierParRef.get(k) ?? 0) >= manque - 0.001) continue;
         if (!refsCommandees.has(k)) continue; // SAV / hors-commande → ③ = 0 normal, traité ailleurs
         if (surLivreeParColombi(k)) continue; // sur-livraison globale (② > commandé) → §3e
         if (seen.has(key('pointage', beId, k, 'sur-livraison'))) continue;
