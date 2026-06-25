@@ -333,26 +333,62 @@ export async function POST() {
         // surplus ci-dessous → on a bien les deux : recoller (log) + surplus net (Colombi).
         if ((qteSaisieHorsPapierParRef.get(k) ?? 0) >= manque - 0.001) continue;
         if (!refsCommandees.has(k)) continue; // SAV / hors-commande → ③ = 0 normal, traité ailleurs
-        if (seen.has(key('pointage', beId, k, 'sur-livraison'))) continue;
-        // ÉCART DÉCLARATION ② vs COMPTAGE ③ — coupable INCONNU, on ne présume pas.
-        // ② = ce que Colombi DÉCLARE sur son BL (pas la vérité physique) ; ③ = ce que la
-        // log a COMPTÉ. Si ② > ③ et que ce n'est pas une simple mauvaise numérotation
-        // (déjà filtrée au-dessus), deux causes possibles : Colombi a sur-déclaré (elle a
-        // écrit ② mais livré moins) → risque de SURFACTURATION (la facture ④ suivra ②) ;
-        // OU la log a sous-compté / saisi sous un autre BL. → « à vérifier », pas Colombi
-        // ni log d'office. Le vrai surplus (③ > ①) est capté indépendamment en §1.
-        nouvelles.push({
-          origine: 'pointage', destinataire: 'à vérifier', type_exception: 'sur-livraison',
-          be_id: beId, reference_article: k,
-          motif: conditionne ? condMotif
-            : `Écart déclaration ② / comptage ③ ${k} sur ${numBe} : Colombi déclare ② ${papier} au BL, la log a saisi ③ ${saisie} → ${manque.toFixed(0)} d'écart à vérifier (Colombi a sur-déclaré OU saisie incomplète / sous un autre BL)`,
-          valeur_attendue: papier, valeur_obtenue: saisie, ecart: -manque,
-          statut_exception: 'ouverte', niveau_priorite: conditionne ? 'faible' : 'moyenne',
-          suggestion_action_ia: conditionne ? condAction
-            : `À vérifier ${k} sur ${numBe} : le BL papier (déclaration Colombi ②) montre ${papier}, la log a saisi ③ ${saisie}. Deux pistes, sans présumer le coupable : (1) la marchandise a pu être saisie sous un AUTRE n° de BL → re-rapprocher ; (2) sinon, soit Colombi a sur-déclaré → risque de surfacturation, vérifier la facture ④ avant de payer ; soit la saisie est incomplète à compléter.`,
-        });
+        // Réf conditionnée (boîte/lot) : l'écart ②/③ vient probablement des unités
+        // (pièces vs boîtes) → on le signale PAR BE, à vérifier (pas un vrai manque).
+        if (conditionne) {
+          if (seen.has(key('pointage', beId, k, 'sur-livraison'))) continue;
+          nouvelles.push({
+            origine: 'pointage', destinataire: 'à vérifier', type_exception: 'sur-livraison',
+            be_id: beId, reference_article: k,
+            motif: condMotif, valeur_attendue: papier, valeur_obtenue: saisie, ecart: -manque,
+            statut_exception: 'ouverte', niveau_priorite: 'faible', suggestion_action_ia: condAction,
+          });
+          continue;
+        }
+        // Sinon : l'écart papier ② > saisie ③ PAR BE est trop bruité — la marchandise peut
+        // être saisie sous un AUTRE n° de BL (mauvais n° de BE). On ne tranche donc PAS par
+        // BE : le vrai écart déclaration/comptage est jugé PAR RÉFÉRENCE (total ② vs total ③)
+        // en §3c-bis, où la saisie sous d'autres BL est prise en compte.
       }
     }
+  }
+
+  // ── 3c-bis) ÉCART DÉCLARATION ② vs COMPTAGE ③, AGRÉGÉ PAR RÉFÉRENCE ───────────
+  // ② = ce que Colombi DÉCLARE sur l'ensemble de ses BL ; ③ = ce que la log a COMPTÉ
+  // au total (toutes saisies, quel que soit le n° de BL). Si total ③ ≥ total ②, tout
+  // est compté (au pire mal numéroté → mauvais n° de BE, déjà signalé en §3d) → rien.
+  // Si total ② > total ③ → écart réel à vérifier : Colombi a sur-déclaré (risque de
+  // surfacturation, la facture ④ tranchera) OU une saisie manque. Coupable non présumé.
+  const papierTotParRef = new Map<string, { qte: number; desig: string | null; beId: string }>();
+  for (const [beId, refs] of lbByBe) {
+    for (const [k, info] of refs) {
+      const cur = papierTotParRef.get(k) ?? { qte: 0, desig: info.desig, beId };
+      cur.qte += info.qte;
+      if (!cur.desig && info.desig) cur.desig = info.desig;
+      papierTotParRef.set(k, cur);
+    }
+  }
+  const saisieTotParRef = new Map<string, number>();
+  for (const s of saisies) {
+    const k = aliasRef(s.reference_article);
+    saisieTotParRef.set(k, (saisieTotParRef.get(k) ?? 0) + (Number(s.quantite_recue) || 0));
+  }
+  for (const [k, info] of papierTotParRef) {
+    if (!refsCommandees.has(k)) continue;                  // hors-commande/SAV → traité ailleurs
+    if (facteurConditionnement(info.desig) > 1) continue;  // conditionnement → géré par BE (unités)
+    const pap = info.qte;
+    const sai = saisieTotParRef.get(k) ?? 0;
+    const manque = pap - sai;
+    if (manque < 0.5) continue;                            // ③ couvre ② → tout compté (mal numéroté au pire)
+    if (seen.has(key('pointage', info.beId, k, 'sur-livraison'))) continue;
+    nouvelles.push({
+      origine: 'pointage', destinataire: 'à vérifier', type_exception: 'sur-livraison',
+      be_id: info.beId, reference_article: k,
+      motif: `Écart déclaration ② / comptage ③ ${k} : Colombi déclare ② ${pap} sur ses BL, la log a compté ③ ${sai} en tout → ${manque.toFixed(0)} d'écart à vérifier (Colombi a sur-déclaré OU saisie incomplète)`,
+      valeur_attendue: pap, valeur_obtenue: sai, ecart: -manque,
+      statut_exception: 'ouverte', niveau_priorite: 'moyenne',
+      suggestion_action_ia: `À vérifier ${k} : total BL papier (déclaration Colombi ②) ${pap}, total saisi par la log ③ ${sai}, écart ${manque.toFixed(0)}. Sans présumer le coupable : soit Colombi a sur-déclaré → risque de surfacturation, vérifier la facture ④ avant de payer ; soit une saisie manque ou est sous un mauvais n° de BL → re-rapprocher.`,
+    });
   }
 
   // Lignes marquées SAV au papier (hors_systeme) + la commande sous laquelle CL les a saisies.
