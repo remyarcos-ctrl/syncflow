@@ -47,6 +47,7 @@ const DEST_CONFIG: Record<string, string> = {
   log: 'bg-blue-100 text-blue-700',
   SAV: 'bg-teal-100 text-teal-700',
   interne: 'bg-gray-100 text-gray-600',
+  'à vérifier': 'bg-amber-100 text-amber-700',
 };
 
 // Lien direct vers la page de réception Centralink d'un BE (pour vérifier la saisie log)
@@ -663,6 +664,11 @@ export default function ExceptionsPage() {
                 else if (/n° de BE|hors papier|INVALIDE/i.test(m)) tc = { color: 'text-orange-700 bg-orange-50', label: 'Mauvais n° de BE' };
                 else if (/conditionnement/i.test(m)) tc = { color: 'text-gray-600 bg-gray-50', label: 'À vérifier (unité)' };
                 else tc = { color: 'text-purple-700 bg-purple-50', label: 'Sur-saisie (doublon)' };
+              }
+              // « sur-livraison » + destinataire « à vérifier » = écart déclaration ② vs comptage ③
+              // (coupable inconnu) → badge distinct du vrai surplus Colombi.
+              if ((exc.type_exception as string) === 'sur-livraison' && exc.destinataire === 'à vérifier') {
+                tc = { color: 'text-amber-700 bg-amber-50', label: 'Écart ②/③ à vérifier' };
               }
               return (
                 <tr key={exc.id} className={cn('even:bg-gray-50/60 hover:bg-indigo-50/40 transition-colors', ['haute', 'critique'].includes(exc.niveau_priorite) ? 'border-l-4 border-l-red-400' : exc.niveau_priorite === 'moyenne' ? 'border-l-4 border-l-orange-300' : 'border-l-4 border-l-transparent')}>

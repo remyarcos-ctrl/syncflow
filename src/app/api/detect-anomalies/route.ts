@@ -265,27 +265,8 @@ export async function POST() {
   for (const l of lignesCmd) {
     if ((Number(l.quantite_commandee) || 0) > 0) refsCommandees.add(aliasRef(l.reference_article));
   }
-  // Cartes NIVEAU COMMANDE (par réf) : papier ② total, commandé ① total, reçu ③ total.
-  // Sert à distinguer une SUR-LIVRAISON Colombi (② > commandé) d'un oubli log.
-  const papierTotalParRef = new Map<string, number>();
-  const desigParRef = new Map<string, string | null>();
-  for (const [, refs] of lbByBe) {
-    for (const [k, info] of refs) {
-      papierTotalParRef.set(k, (papierTotalParRef.get(k) ?? 0) + info.qte);
-      if (info.desig && !desigParRef.get(k)) desigParRef.set(k, info.desig);
-    }
-  }
-  const cmdParRef = new Map<string, number>();
-  const recuTotParRef = new Map<string, number>();
-  for (const l of lignesCmd) {
-    const k = aliasRef(l.reference_article);
-    cmdParRef.set(k, (cmdParRef.get(k) ?? 0) + Math.max(0, Number(l.quantite_commandee) || 0));
-    recuTotParRef.set(k, (recuTotParRef.get(k) ?? 0) + (Number(l.quantite_receptionnee_reelle) || 0));
-  }
-  // Réf sur-livrée par Colombi (le papier total dépasse le commandé) → le « manque » côté
-  // saisie n'est PAS un oubli log mais un surplus Colombi (traité en §3e, destinataire Colombi).
-  const surLivreeParColombi = (k: string) =>
-    facteurConditionnement(desigParRef.get(k) ?? null) <= 1 && (papierTotalParRef.get(k) ?? 0) > (cmdParRef.get(k) ?? 0) + 0.001;
+  // (Les cartes papier/commandé/reçu par réf de l'ancien §3e ont été retirées avec lui :
+  //  le surplus se mesure désormais ③ vs ① en §1, pas ② vs commandé.)
   // ── 3c) CONTRÔLE BE PAPIER ② vs SAISIE LOG ③, PAR BE ─────────────────────────
   // Le 1er contrôle : pour chaque BE qu'on a scanné, la log a-t-elle saisi dans
   // Centralink la même chose que notre BL papier ? CL reste la référence ; notre
@@ -352,17 +333,23 @@ export async function POST() {
         // surplus ci-dessous → on a bien les deux : recoller (log) + surplus net (Colombi).
         if ((qteSaisieHorsPapierParRef.get(k) ?? 0) >= manque - 0.001) continue;
         if (!refsCommandees.has(k)) continue; // SAV / hors-commande → ③ = 0 normal, traité ailleurs
-        if (surLivreeParColombi(k)) continue; // sur-livraison globale (② > commandé) → §3e
         if (seen.has(key('pointage', beId, k, 'sur-livraison'))) continue;
+        // ÉCART DÉCLARATION ② vs COMPTAGE ③ — coupable INCONNU, on ne présume pas.
+        // ② = ce que Colombi DÉCLARE sur son BL (pas la vérité physique) ; ③ = ce que la
+        // log a COMPTÉ. Si ② > ③ et que ce n'est pas une simple mauvaise numérotation
+        // (déjà filtrée au-dessus), deux causes possibles : Colombi a sur-déclaré (elle a
+        // écrit ② mais livré moins) → risque de SURFACTURATION (la facture ④ suivra ②) ;
+        // OU la log a sous-compté / saisi sous un autre BL. → « à vérifier », pas Colombi
+        // ni log d'office. Le vrai surplus (③ > ①) est capté indépendamment en §1.
         nouvelles.push({
-          origine: 'pointage', destinataire: 'Colombi', type_exception: 'sur-livraison',
+          origine: 'pointage', destinataire: 'à vérifier', type_exception: 'sur-livraison',
           be_id: beId, reference_article: k,
           motif: conditionne ? condMotif
-            : `Surplus Colombi ${k} sur ${numBe} : BL papier ② ${papier} / saisi ③ ${saisie} → ${manque.toFixed(0)} non saisi(s) (probable sur-livraison à arbitrer)`,
+            : `Écart déclaration ② / comptage ③ ${k} sur ${numBe} : Colombi déclare ② ${papier} au BL, la log a saisi ③ ${saisie} → ${manque.toFixed(0)} d'écart à vérifier (Colombi a sur-déclaré OU saisie incomplète / sous un autre BL)`,
           valeur_attendue: papier, valeur_obtenue: saisie, ecart: -manque,
           statut_exception: 'ouverte', niveau_priorite: conditionne ? 'faible' : 'moyenne',
           suggestion_action_ia: conditionne ? condAction
-            : `Arbitrer le surplus ${k} sur ${numBe} (papier ② ${papier} / saisi ③ ${saisie}, +${manque.toFixed(0)}) : garder → commande de régule avec le n° de BE dans la colonne « Bon de Livraison » (le manque se fermera au sync) ; retour → avoir ; ou mise au stock. Si AUCUN surplus réel → c'est alors un vrai oubli log à saisir.`,
+            : `À vérifier ${k} sur ${numBe} : le BL papier (déclaration Colombi ②) montre ${papier}, la log a saisi ③ ${saisie}. Deux pistes, sans présumer le coupable : (1) la marchandise a pu être saisie sous un AUTRE n° de BL → re-rapprocher ; (2) sinon, soit Colombi a sur-déclaré → risque de surfacturation, vérifier la facture ④ avant de payer ; soit la saisie est incomplète à compléter.`,
         });
       }
     }
@@ -452,33 +439,14 @@ export async function POST() {
     });
   }
 
-  // ── 3e) SUR-LIVRAISON COLOMBI VISIBLE AU PAPIER (② total > commandé) → Colombi ──
-  // Colombi a livré plus que commandé, mais la log n'a saisi que le commandé (reçu ③ ≤
-  // commandé) → le surplus n'apparaît QUE sur notre BL papier → réclamation Colombi (pas
-  // un oubli log). Le cas reçu ③ > commandé est déjà capté en §1.
-  const beForRef = new Map<string, string>();
-  for (const [beId, refs] of lbByBe) for (const k of refs.keys()) if (!beForRef.has(k)) beForRef.set(k, beId);
-  for (const [k, P] of papierTotalParRef) {
-    const C = cmdParRef.get(k) ?? 0;
-    const R = recuTotParRef.get(k) ?? 0;
-    if (C <= 0) continue;                          // jamais commandé → hors-commande (§1)
-    if (!surLivreeParColombi(k)) continue;         // ② ≤ commandé ou conditionné → pas ici
-    if (R > C + 0.001) continue;                   // déjà capté par §1 (reçu > commandé)
-    const beId = beForRef.get(k);
-    if (!beId) continue;
-    if (seen.has(key('réception', beId, k, 'sur-livraison'))) continue;
-    const surplus = P - C;
-    const manqueSaisie = C - R; // commande non encore saisie par la log (alors que livrée au papier)
-    nouvelles.push({
-      origine: 'réception', destinataire: 'Colombi', type_exception: 'sur-livraison',
-      be_id: beId, reference_article: k,
-      motif: `Sur-livraison Colombi ${k} : BL papier ② ${P} > commandé ${C} (reçu CL ③ ${R}) → Colombi a livré ${surplus.toFixed(0)} de plus que commandé`,
-      valeur_attendue: C, valeur_obtenue: P, ecart: surplus,
-      statut_exception: 'ouverte', niveau_priorite: 'moyenne',
-      suggestion_action_ia: `Réclamation Colombi : ${surplus.toFixed(0)} ${k} livrés en plus du commandé (papier ② ${P} / commandé ${C}) → avoir, reprise, ou régularisation par commande acheteuse.`
-        + (manqueSaisie > 0.001 ? ` NB côté log : reçu CL ③ ${R} < commandé ${C} → la log doit aussi compléter la saisie du commandé (${manqueSaisie.toFixed(0)} non saisi).` : ''),
-    });
-  }
+  // ── 3e) RETIRÉ ────────────────────────────────────────────────────────────────
+  // L'ancien §3e comparait le PAPIER ② au COMMANDÉ ① et déclarait « Sur-livraison
+  // Colombi ». C'était FAUX par construction : ② est la DÉCLARATION de Colombi, pas
+  // le reçu ; et le commandé traîne régules/avoirs sur un périmètre différent → faux
+  // surplus (cf. 19803 : ② 29 vs commandé 28 = faux +1, alors que reçu ③ net 20 =
+  // commandé net 20). Le VRAI surplus se mesure RÉCEPTION ③ > COMMANDÉ ①, déjà fait
+  // par §1 (controlerReceptions, surLivraisonNette nette des avoirs). L'écart ② vs ③
+  // (déclaration vs comptage) est traité en §3c, sans présumer le coupable.
 
   // ── 4) NUMÉROS DE BE IMPOSSIBLES (faute de frappe log : mois > 12) → log ─────
   const beVus = new Set<string>();
