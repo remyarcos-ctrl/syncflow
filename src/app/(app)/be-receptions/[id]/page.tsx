@@ -213,6 +213,44 @@ export default function BEDetailPage() {
     staleTime: 60000,
   });
 
+  // Régularisations & avoirs par réf (GLOBAL Centralink). Une sur-livraison gardée est
+  // régularisée par une commande « Surplus … » (régule) ; un retour donne un avoir (reçu
+  // négatif). Le pointage par-BE ne les voit pas (autre commande) → on les rapatrie pour
+  // qualifier un écart « ② > ③ » comme DÉJÀ régularisé plutôt que « oubli à investiguer ».
+  type RegulLigne = {
+    reference_article: string | null; quantite_receptionnee_reelle: number | null;
+    commandes: { numero_commande_interne: string | null; bls_centralink: string | null }
+      | { numero_commande_interne: string | null; bls_centralink: string | null }[] | null;
+  };
+  const { data: regulRows = [] } = useQuery<RegulLigne[]>({
+    queryKey: ['regul-refs', refsDuBe.join()],
+    queryFn: async () => {
+      if (!refsDuBe.length) return [];
+      const { data } = await supabase.from('lignes_commande')
+        .select('reference_article, quantite_receptionnee_reelle, commandes(numero_commande_interne, bls_centralink)')
+        .in('reference_article', refsDuBe);
+      return (data ?? []) as never;
+    },
+    enabled: refsDuBe.length > 0, staleTime: 30000,
+  });
+  const regulByRef = useMemo(() => {
+    const m = new Map<string, { regule: number; avoir: number; numeros: string[] }>();
+    for (const l of regulRows) {
+      const k = normalizeRef(l.reference_article);
+      if (!k) continue;
+      const cmd = Array.isArray(l.commandes) ? l.commandes[0] : l.commandes;
+      const r = Number(l.quantite_receptionnee_reelle) || 0;
+      const cur = m.get(k) ?? { regule: 0, avoir: 0, numeros: [] };
+      if (r < 0) cur.avoir += -r;                                   // retour → avoir
+      else if (cmd && /surplus/i.test(cmd.bls_centralink ?? '')) {  // commande « Surplus … » → régule
+        cur.regule += r;
+        if (cmd.numero_commande_interne && !cur.numeros.includes(cmd.numero_commande_interne)) cur.numeros.push(cmd.numero_commande_interne);
+      }
+      m.set(k, cur);
+    }
+    return m;
+  }, [regulRows]);
+
   // Par réf : les BE (≠ celui-ci) où elle est saisie, avec sur-saisi (saisi − papier) si scanné.
   const dispatchByRef = useMemo(() => {
     const numBeOf = (l: typeof papierRefs[number]) => Array.isArray(l.be_receptions) ? l.be_receptions[0]?.numero_be : l.be_receptions?.numero_be;
@@ -1213,12 +1251,23 @@ export default function BEDetailPage() {
           <CardTitle className="flex items-center gap-2 text-sm">
             <RefreshCw className="w-4 h-4 text-indigo-600" />
             Rapprochement saisie Centralink (③ pointage log)
-            {rappCl.hasCl && (
-              <span className={cn('ml-1 text-xs px-2 py-0.5 rounded-full font-medium',
-                rappCl.nbEcarts === 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700')}>
-                {rappCl.nbEcarts === 0 ? 'pointage conforme' : `${rappCl.nbEcarts} écart(s) de pointage`}
-              </span>
-            )}
+            {rappCl.hasCl && (() => {
+              const nbReg = rappCl.rows.filter(r => {
+                const p = r.papier ?? 0, c = r.cl ?? 0;
+                if (!(Math.abs(r.ecart) > 0.001) || p <= c) return false;
+                const reg = regulByRef.get(normalizeRef(r.ref));
+                return !!reg && (reg.regule + reg.avoir) >= (p - c) - 0.001;
+              }).length;
+              const aTraiter = rappCl.nbEcarts - nbReg;
+              return (
+                <span className={cn('ml-1 text-xs px-2 py-0.5 rounded-full font-medium',
+                  aTraiter === 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700')}>
+                  {rappCl.nbEcarts === 0 ? 'pointage conforme'
+                    : aTraiter === 0 ? `${rappCl.nbEcarts} écart(s) — tous régularisés`
+                    : `${aTraiter} écart(s) de pointage${nbReg > 0 ? ` · ${nbReg} régularisé(s)` : ''}`}
+                </span>
+              );
+            })()}
           </CardTitle>
         </CardHeader>
         <CardContent className="p-0">
@@ -1242,8 +1291,13 @@ export default function BEDetailPage() {
                 <tbody>
                   {rappCl.rows.map(r => {
                     const ko = Math.abs(r.ecart) > 0.001;
+                    // Écart ② > ③ couvert par une régule « Surplus … » et/ou un avoir ?
+                    const pp = r.papier ?? 0, cc = r.cl ?? 0;
+                    const reg = ko && pp > cc ? regulByRef.get(normalizeRef(r.ref)) : undefined;
+                    const couvert = reg ? reg.regule + reg.avoir : 0;
+                    const regularise = !!reg && (pp - cc) > 0.001 && couvert >= (pp - cc) - 0.001;
                     return (
-                      <tr key={r.ref} className={cn('border-b border-gray-50', ko && 'bg-amber-50/40')}>
+                      <tr key={r.ref} className={cn('border-b border-gray-50', ko && (regularise ? 'bg-emerald-50/40' : 'bg-amber-50/40'))}>
                         <td className="px-4 py-2 font-mono text-xs">{r.ref}</td>
                         <td className="px-4 py-2 text-right tabular-nums">
                           {r.papier ?? '—'}
@@ -1274,9 +1328,22 @@ export default function BEDetailPage() {
                               const doublon = p > 0 && Number.isInteger(c / p) && c / p >= 2;
                               return <span className="text-red-600">🔴 {doublon ? `Doublon (saisi ×${c / p})` : 'Sur-saisie log'} — {c - p} de trop <span className="text-red-400">(BL {p}, saisi {c})</span></span>;
                             }
-                            // ② > ③ : la log a saisi moins que le BL papier → oubli sur CE BE
-                            // (à saisir, ou peut-être saisi sous un mauvais n° de BE — à corriger côté log).
-                            return <span className="text-amber-700">🟠 Oubli — {p - c} non saisi(s) sur ce BE <span className="text-amber-500">(BL {p} / saisi {c})</span></span>;
+                            // ② > ③ : la log a saisi moins que le BL papier → oubli sur CE BE.
+                            // MAIS si ce manque est déjà régularisé ailleurs (commande « Surplus … » ou
+                            // avoir), ce n'est pas un oubli à investiguer : le surplus a été gardé/rendu.
+                            const manque = p - c;
+                            if (regularise) {
+                              const via = [
+                                reg!.regule > 0 ? `régule${reg!.numeros.length ? ' ' + reg!.numeros.join('/') : ''}` : null,
+                                reg!.avoir > 0 ? `avoir ${reg!.avoir}` : null,
+                              ].filter(Boolean).join(' + ');
+                              return <span className="text-emerald-600">✅ Régularisé — {manque} gardé(s)/rendu(s) via {via} <span className="text-emerald-500">(BL {p} / saisi {c} ; non saisi sous ce BE mais soldé ailleurs)</span></span>;
+                            }
+                            if (reg && couvert > 0.001) {
+                              const reste = manque - couvert;
+                              return <span className="text-amber-700">🟠 Partiellement régularisé — {couvert} via régule{reg.numeros.length ? ' ' + reg.numeros.join('/') : ''}/avoir, reste {reste.toFixed(0)} non saisi(s) <span className="text-amber-500">(BL {p} / saisi {c})</span></span>;
+                            }
+                            return <span className="text-amber-700">🟠 Oubli — {manque} non saisi(s) sur ce BE <span className="text-amber-500">(BL {p} / saisi {c})</span></span>;
                           })()}
                           {ko && (() => {
                             const cands = dispatchByRef.get(normalizeRef(r.ref)) ?? [];
