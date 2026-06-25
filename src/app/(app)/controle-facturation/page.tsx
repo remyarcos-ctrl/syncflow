@@ -51,9 +51,18 @@ export default function ControleFacturationPage() {
   const { data: lignesCmd = [] } = useQuery<LigneCommandeInput[]>({
     queryKey: ['cf_lignes_cmd'],
     queryFn: async () => {
-      const { data } = await supabase.from('lignes_commande')
-        .select('commande_id, reference_article, quantite_commandee, pu_commande, quantite_receptionnee_reelle');
-      return (data as LigneCommandeInput[]) ?? [];
+      // PostgREST plafonne à 1000 lignes ; lignes_commande dépasse → paginer, sinon
+      // des réfs commandées au-delà du 1000ᵉ rang passent pour non commandées/non reçues.
+      const all: LigneCommandeInput[] = [];
+      for (let from = 0; ; from += 1000) {
+        const { data } = await supabase.from('lignes_commande')
+          .select('commande_id, reference_article, quantite_commandee, pu_commande, quantite_receptionnee_reelle')
+          .range(from, from + 999);
+        if (!data || !data.length) break;
+        all.push(...(data as LigneCommandeInput[]));
+        if (data.length < 1000) break;
+      }
+      return all;
     },
     refetchInterval: 15000,
   });
@@ -68,8 +77,15 @@ export default function ControleFacturationPage() {
   const { data: saisies = [] } = useQuery<SaisieInput[]>({
     queryKey: ['cf_saisies'],
     queryFn: async () => {
-      const { data } = await supabase.from('saisies_cl').select('numero_be, commande_ref');
-      return (data as SaisieInput[]) ?? [];
+      // saisies_cl dépasse 1000 lignes → paginer (sinon liens BE↔commande incomplets).
+      const all: SaisieInput[] = [];
+      for (let from = 0; ; from += 1000) {
+        const { data } = await supabase.from('saisies_cl').select('numero_be, commande_ref').range(from, from + 999);
+        if (!data || !data.length) break;
+        all.push(...(data as SaisieInput[]));
+        if (data.length < 1000) break;
+      }
+      return all;
     },
     refetchInterval: 15000,
   });

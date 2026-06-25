@@ -53,18 +53,36 @@ export default function ControleReceptionPage() {
   const { data: lignesBe = [] } = useQuery<(LigneBeInput & { hors_systeme: boolean | null })[]>({
     queryKey: ['cr_lignes_be'],
     queryFn: async () => {
-      const { data } = await supabase.from('lignes_be')
-        .select('be_id, reference_article, designation, quantite_receptionnee, hors_systeme');
-      return (data as (LigneBeInput & { hors_systeme: boolean | null })[]) ?? [];
+      // PostgREST plafonne à 1000 lignes/requête → paginer, sinon un BE au-delà du
+      // 1000ᵉ rang est invisible et fausse le contrôle.
+      const all: (LigneBeInput & { hors_systeme: boolean | null })[] = [];
+      for (let from = 0; ; from += 1000) {
+        const { data } = await supabase.from('lignes_be')
+          .select('be_id, reference_article, designation, quantite_receptionnee, hors_systeme')
+          .range(from, from + 999);
+        if (!data || !data.length) break;
+        all.push(...(data as (LigneBeInput & { hors_systeme: boolean | null })[]));
+        if (data.length < 1000) break;
+      }
+      return all;
     },
     refetchInterval: 15000,
   });
   const { data: lignesCmd = [] } = useQuery<LigneCmdInput[]>({
     queryKey: ['cr_lignes_cmd'],
     queryFn: async () => {
-      const { data } = await supabase.from('lignes_commande')
-        .select('reference_article, quantite_commandee, quantite_receptionnee_reelle');
-      return (data as LigneCmdInput[]) ?? [];
+      // ⚠ lignes_commande dépasse 1000 lignes → SANS pagination, le select n'en
+      // ramène que 1000 et toute réf commandée au-delà passe pour « hors commande ».
+      const all: LigneCmdInput[] = [];
+      for (let from = 0; ; from += 1000) {
+        const { data } = await supabase.from('lignes_commande')
+          .select('reference_article, quantite_commandee, quantite_receptionnee_reelle')
+          .range(from, from + 999);
+        if (!data || !data.length) break;
+        all.push(...(data as LigneCmdInput[]));
+        if (data.length < 1000) break;
+      }
+      return all;
     },
     refetchInterval: 15000,
   });
