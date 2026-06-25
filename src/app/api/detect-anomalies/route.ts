@@ -353,12 +353,16 @@ export async function POST() {
     }
   }
 
-  // ── 3c-bis) ÉCART DÉCLARATION vs COMPTAGE, AGRÉGÉ PAR RÉFÉRENCE ───────────
-  // = ce que Colombi DÉCLARE sur l'ensemble de ses BL ; = ce que la log a COMPTÉ
-  // au total (toutes saisies, quel que soit le n° de BL). Si total ≥ total, tout
-  // est compté (au pire mal numéroté → mauvais n° de BE, déjà signalé en §3d) → rien.
-  // Si total > total → écart réel à vérifier : Colombi a sur-déclaré (risque de
-  // surfacturation, la facture tranchera) OU une saisie manque. Coupable non présumé.
+  // ── 3c-bis) ÉCART PAPIER vs REÇU, AGRÉGÉ PAR RÉFÉRENCE ───────────────────────
+  // papier = ce que Colombi DÉCLARE sur l'ensemble de ses BL. reçu = ce que la log a
+  // réellement réceptionné, mesuré au NIVEAU COMMANDE (quantite_receptionnee_reelle
+  // positive) — fiable et incluant les régules, contrairement au scrape par BL qui les rate.
+  // Si reçu ≥ papier → tout est réceptionné (au pire mal numéroté, vu en §3d) → rien.
+  // Si papier > reçu, on regarde si la réf a encore une commande ouverte :
+  //   • TOUT soldé (reçu ≥ commandé) → aucun slot pour saisir le surplus → SURPLUS COLOMBI
+  //     non régularisé (constaté : ex. 19803, annoté « pas sur intra » par l'acheteuse)
+  //     → Colombi (régule ou réclamation).
+  //   • commande encore ouverte → écart à vérifier (saisie en cours OU sur-déclaration).
   const papierTotParRef = new Map<string, { qte: number; desig: string | null; beId: string }>();
   for (const [beId, refs] of lbByBe) {
     for (const [k, info] of refs) {
@@ -368,27 +372,42 @@ export async function POST() {
       papierTotParRef.set(k, cur);
     }
   }
-  const saisieTotParRef = new Map<string, number>();
-  for (const s of saisies) {
-    const k = aliasRef(s.reference_article);
-    saisieTotParRef.set(k, (saisieTotParRef.get(k) ?? 0) + (Number(s.quantite_recue) || 0));
+  const cmdPositifParRef = new Map<string, number>();
+  const recuPositifParRef = new Map<string, number>();
+  for (const l of lignesCmd) {
+    const k = aliasRef(l.reference_article);
+    cmdPositifParRef.set(k, (cmdPositifParRef.get(k) ?? 0) + Math.max(0, Number(l.quantite_commandee) || 0));
+    recuPositifParRef.set(k, (recuPositifParRef.get(k) ?? 0) + Math.max(0, Number(l.quantite_receptionnee_reelle) || 0));
   }
   for (const [k, info] of papierTotParRef) {
     if (!refsCommandees.has(k)) continue;                  // hors-commande/SAV → traité ailleurs
     if (facteurConditionnement(info.desig) > 1) continue;  // conditionnement → géré par BE (unités)
     const pap = info.qte;
-    const sai = saisieTotParRef.get(k) ?? 0;
-    const manque = pap - sai;
-    if (manque < 0.5) continue;                            // couvre → tout compté (mal numéroté au pire)
+    const recu = recuPositifParRef.get(k) ?? 0;
+    const cmd = cmdPositifParRef.get(k) ?? 0;
+    const ecart = pap - recu;
+    if (ecart < 0.5) continue;                             // reçu couvre le papier → rien
     if (seen.has(key('pointage', info.beId, k, 'sur-livraison'))) continue;
-    nouvelles.push({
-      origine: 'pointage', destinataire: 'à vérifier', type_exception: 'sur-livraison',
-      be_id: info.beId, reference_article: k,
-      motif: `Écart déclaration (papier) vs comptage (saisi) ${k} : Colombi déclare ${pap} sur ses BL, la log a compté ${sai} en tout → ${manque.toFixed(0)} d'écart à vérifier (Colombi a sur-déclaré OU saisie incomplète)`,
-      valeur_attendue: pap, valeur_obtenue: sai, ecart: -manque,
-      statut_exception: 'ouverte', niveau_priorite: 'moyenne',
-      suggestion_action_ia: `À vérifier ${k} : total BL papier (déclaration Colombi) ${pap}, total saisi par la log ${sai}, écart ${manque.toFixed(0)}. Sans présumer le coupable : soit Colombi a sur-déclaré → risque de surfacturation, vérifier la facture avant de payer ; soit une saisie manque ou est sous un mauvais n° de BL → re-rapprocher.`,
-    });
+    const toutSolde = recu >= cmd - 0.001;                 // plus de commande ouverte pour cette réf
+    if (toutSolde) {
+      nouvelles.push({
+        origine: 'pointage', destinataire: 'Colombi', type_exception: 'sur-livraison',
+        be_id: info.beId, reference_article: k,
+        motif: `Surplus Colombi ${k} : papier (déclaré) ${pap} > reçu/saisi ${recu}, et toutes les commandes sont soldées (commandé ${cmd}) → ${ecart.toFixed(0)} livré(s) en plus jamais saisi(s) → à régulariser`,
+        valeur_attendue: pap, valeur_obtenue: recu, ecart: -ecart,
+        statut_exception: 'ouverte', niveau_priorite: 'moyenne',
+        suggestion_action_ia: `Surplus Colombi à régulariser : ${k} déclaré ${pap} sur les BL, ${recu} réceptionné/saisi, commandes déjà toutes soldées (${cmd}) → ${ecart.toFixed(0)} en trop sans commande pour les recevoir. Action : créer une commande de régule (avec le n° de BL dans « Bon de Livraison ») pour les encaisser, ou réclamer/retourner à Colombi.`,
+      });
+    } else {
+      nouvelles.push({
+        origine: 'pointage', destinataire: 'à vérifier', type_exception: 'sur-livraison',
+        be_id: info.beId, reference_article: k,
+        motif: `Écart papier vs reçu ${k} : papier (déclaré) ${pap} > reçu/saisi ${recu}, mais une commande est encore ouverte (commandé ${cmd}) → ${ecart.toFixed(0)} à vérifier (saisie en cours ou sur-déclaration)`,
+        valeur_attendue: pap, valeur_obtenue: recu, ecart: -ecart,
+        statut_exception: 'ouverte', niveau_priorite: 'moyenne',
+        suggestion_action_ia: `À vérifier ${k} : papier ${pap}, reçu/saisi ${recu}, commande encore ouverte (${cmd}). Soit la log n'a pas fini de saisir, soit Colombi a sur-déclaré → vérifier la facture avant de payer.`,
+      });
+    }
   }
 
   // Lignes marquées SAV au papier (hors_systeme) + la commande sous laquelle CL les a saisies.
