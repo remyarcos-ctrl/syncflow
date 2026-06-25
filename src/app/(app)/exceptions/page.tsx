@@ -149,9 +149,9 @@ export default function ExceptionsPage() {
     staleTime: 30000,
   });
 
-  const { data: bes = [] } = useQuery<Pick<BEReception, 'id' | 'numero_be'>[]>({
+  const { data: bes = [] } = useQuery<Pick<BEReception, 'id' | 'numero_be' | 'date_bl'>[]>({
     queryKey: ['bes-slim'],
-    queryFn: async () => { const { data } = await supabase.from('be_receptions').select('id,numero_be').limit(500); return (data ?? []) as Pick<BEReception, 'id' | 'numero_be'>[]; },
+    queryFn: async () => { const { data } = await supabase.from('be_receptions').select('id,numero_be,date_bl').limit(500); return (data ?? []) as Pick<BEReception, 'id' | 'numero_be' | 'date_bl'>[]; },
     staleTime: 30000,
   });
 
@@ -199,7 +199,14 @@ export default function ExceptionsPage() {
     refsSav.has(String(ref ?? '').toUpperCase().replace(/O/g, '0').replace(/[^A-Z0-9]/g, ''));
 
   const factureMap = useMemo(() => Object.fromEntries(factures.map(f => [f.id, f])) as Record<string, Pick<Facture, 'id' | 'numero_facture'>>, [factures]);
-  const beMap = useMemo(() => Object.fromEntries(bes.map(b => [b.id, b])) as Record<string, Pick<BEReception, 'id' | 'numero_be'>>, [bes]);
+  const beMap = useMemo(() => Object.fromEntries(bes.map(b => [b.id, b])) as Record<string, Pick<BEReception, 'id' | 'numero_be' | 'date_bl'>>, [bes]);
+  // La log saisit en ~1 semaine (2 max). Au-delà de 2 semaines après la date du BE,
+  // un manque ② > ③ ne peut plus être « en cours de saisie » → on n'affiche plus le badge.
+  const beRecent = (beId?: string | null) => {
+    const d = beId ? beMap[beId]?.date_bl : null;
+    if (!d) return false;
+    return (Date.now() - new Date(d).getTime()) < 14 * 24 * 3600 * 1000;
+  };
   const beOptions = useMemo(() => beIdsAvecAnomalies
     .map(id => ({ id, numero: beMap[id]?.numero_be ?? '' }))
     .filter(o => o.numero)
@@ -434,6 +441,77 @@ export default function ExceptionsPage() {
     telecharger(csv, `anomalies${filterDest !== 'all' ? '-' + filterDest : ''}.csv`, 'text/csv');
   };
 
+  // Récupère TOUT ce qui correspond aux filtres affichés (statut + type + priorité +
+  // origine + destinataire + BE), sans pagination → l'export = ce que l'utilisateur voit.
+  const fetchVisibles = async (): Promise<Exc[]> => {
+    let q = supabase.from('exceptions').select('*').order('type_exception');
+    if (filterStatut === 'actives') q = q.in('statut_exception', ['ouverte', 'en cours']);
+    else if (filterStatut === 'à analyser') q = q.eq('statut_exception', 'ouverte').eq('destinataire', 'Colombi');
+    else if (filterStatut === 'résolues') q = q.in('statut_exception', ['résolue', 'ignorée']);
+    if (filterType !== 'all') q = q.eq('type_exception', filterType);
+    if (filterPriorite !== 'all') q = q.eq('niveau_priorite', filterPriorite);
+    if (filterOrigine !== 'all') q = q.eq('origine', filterOrigine);
+    if (filterDest !== 'all') q = q.eq('destinataire', filterDest);
+    if (filterBe !== 'all') q = q.eq('be_id', filterBe);
+    const { data } = await q.limit(2000);
+    return (data ?? []) as Exc[];
+  };
+
+  // Export PDF : ouvre une page imprimable (→ « Enregistrer en PDF ») reprenant
+  // exactement la liste filtrée à l'écran, quantités mises en avant.
+  const exportPdf = async () => {
+    const rows = await fetchVisibles();
+    if (!rows.length) { toast.info('Aucune anomalie à exporter'); return; }
+    const esc = (s: unknown) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const labelType = (e: Exc) => {
+      let l = TYPE_CONFIG[e.type_exception]?.label ?? (e.type_exception as string);
+      if ((e.type_exception as string) === 'sur-saisie log') {
+        const m = e.motif ?? '';
+        if (/SAV/i.test(m)) l = 'SAV saisi sous commande';
+        else if (/n° de BE|hors papier|INVALIDE/i.test(m)) l = 'Mauvais n° de BE';
+        else if (/conditionnement/i.test(m)) l = 'À vérifier (unité)';
+        else l = 'Sur-saisie (doublon)';
+      }
+      return l;
+    };
+    const filtres = [
+      `Statut : ${filterStatut}`,
+      filterType !== 'all' ? `Type : ${filterType}` : null,
+      filterDest !== 'all' ? `Destinataire : ${filterDest}` : null,
+      filterBe !== 'all' ? `BE : ${beMap[filterBe]?.numero_be ?? filterBe}` : null,
+      filterPriorite !== 'all' ? `Priorité : ${filterPriorite}` : null,
+      filterOrigine !== 'all' ? `Origine : ${filterOrigine}` : null,
+    ].filter(Boolean).join(' · ');
+    const trs = rows.map(e => {
+      const be = e.be_id ? (beMap[e.be_id]?.numero_be ?? '') : (e.commande_id ? (cmdMap[e.commande_id]?.numero_commande_interne ?? '') : '');
+      const ec = e.ecart != null && Number(e.ecart) !== 0 ? `${Number(e.ecart) > 0 ? '+' : ''}${e.ecart}` : '';
+      return `<tr><td>${esc(labelType(e))}</td><td class="ref">${esc(e.reference_article)}</td>`
+        + `<td class="num">${e.valeur_attendue ?? ''}</td><td class="num">${e.valeur_obtenue ?? ''}</td>`
+        + `<td class="num ecart">${esc(ec)}</td><td>${esc(e.motif)}</td><td>${esc(be)}</td>`
+        + `<td>${esc(e.destinataire)}</td><td>${esc(e.statut_exception)}</td></tr>`;
+    }).join('');
+    const today = new Date().toLocaleDateString('fr-FR');
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Anomalies syncflow</title>`
+      + `<style>body{font-family:system-ui,Arial,sans-serif;margin:20px;color:#111}`
+      + `h1{font-size:18px;margin:0 0 4px}.meta{font-size:12px;color:#555;margin:0 0 14px}`
+      + `table{border-collapse:collapse;width:100%;font-size:11px}`
+      + `th,td{border:1px solid #ddd;padding:5px 7px;text-align:left;vertical-align:top}`
+      + `th{background:#f3f4f6;font-size:10px;text-transform:uppercase;letter-spacing:.03em;color:#444}`
+      + `.ref{font-family:ui-monospace,Menlo,monospace;font-weight:700;white-space:nowrap}`
+      + `.num{text-align:right;font-weight:700;white-space:nowrap}.ecart{color:#b91c1c}`
+      + `tr:nth-child(even) td{background:#fafafa}`
+      + `@media print{body{margin:0}th{-webkit-print-color-adjust:exact;print-color-adjust:exact}}</style>`
+      + `</head><body><h1>Anomalies syncflow — ${rows.length}</h1>`
+      + `<p class="meta">${esc(filtres)} — édité le ${today}</p>`
+      + `<table><thead><tr><th>Type</th><th>Référence</th><th>Attendu</th><th>Obtenu</th><th>Écart</th>`
+      + `<th>Motif</th><th>BE / Cmd</th><th>Destinataire</th><th>Statut</th></tr></thead><tbody>${trs}</tbody></table>`
+      + `</body></html>`;
+    const w = window.open('', '_blank');
+    if (!w) { toast.error('Pop-up bloquée — autorise les fenêtres pour exporter en PDF'); return; }
+    w.document.write(html); w.document.close(); w.focus();
+    setTimeout(() => w.print(), 300);
+  };
+
   const [listeModal, setListeModal] = useState<{ titre: string; texte: string; mailto?: string } | null>(null);
   const [detecting, setDetecting] = useState(false);
 
@@ -556,6 +634,7 @@ export default function ExceptionsPage() {
         <Button variant="outline" size="sm" onClick={() => genererListe('Colombi')}>📩 Réclamer à Colombi</Button>
         <Button variant="outline" size="sm" onClick={() => genererListe('log')}>🛠 Demander correction à la log</Button>
         <Button variant="outline" size="sm" onClick={exportCsv}>⬇ Exporter (CSV{filterDest !== 'all' ? ` · ${filterDest}` : ''})</Button>
+        <Button variant="outline" size="sm" onClick={exportPdf}>🖨 Exporter (PDF)</Button>
       </div>
 
       {/* Table */}
@@ -595,14 +674,27 @@ export default function ExceptionsPage() {
                   </td>
                   <td className="px-4 py-3 text-xs text-gray-700 max-w-[360px]">
                     {exc.reference_article && <div className="font-mono font-bold text-sm text-gray-900 mb-0.5">{exc.reference_article}</div>}
+                    {(exc.valeur_attendue != null || exc.valeur_obtenue != null) && (
+                      <div className="mb-1 flex flex-wrap items-center gap-1">
+                        {exc.valeur_attendue != null && (
+                          <span className="px-1.5 py-0.5 rounded bg-gray-100 text-xs text-gray-600">attendu <span className="font-bold text-sm text-gray-900">{exc.valeur_attendue}</span></span>
+                        )}
+                        {exc.valeur_obtenue != null && (
+                          <span className="px-1.5 py-0.5 rounded bg-gray-100 text-xs text-gray-600">obtenu <span className="font-bold text-sm text-gray-900">{exc.valeur_obtenue}</span></span>
+                        )}
+                        {exc.ecart != null && Number(exc.ecart) !== 0 && (
+                          <span className={cn('px-1.5 py-0.5 rounded text-xs font-semibold', Number(exc.ecart) > 0 ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-700')}>écart <span className="font-bold text-sm">{Number(exc.ecart) > 0 ? '+' : ''}{exc.ecart}</span></span>
+                        )}
+                      </div>
+                    )}
                     <div className="whitespace-normal text-gray-600">{exc.motif}</div>
                     {exc.suggestion_action_ia && (
                       <div className="mt-1 text-xs text-blue-900 bg-blue-50 border-l-4 border-blue-500 rounded-r px-2 py-1.5 whitespace-normal leading-snug">
                         <span className="font-semibold">🛠 Action :</span> {exc.suggestion_action_ia}
                       </div>
                     )}
-                    {enCours(exc.reference_article) && (
-                      <span className="inline-block mt-0.5 text-[11px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-600" title="La commande attend encore de la marchandise côté Centralink — la log n'a peut-être pas fini de saisir">
+                    {enCours(exc.reference_article) && beRecent(exc.be_id) && (
+                      <span className="inline-block mt-0.5 text-[11px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-600" title="BE de moins de 2 semaines et commande encore en attente côté Centralink — la log n'a peut-être pas fini de saisir">
                         ⏳ saisie peut-être en cours
                       </span>
                     )}
@@ -725,14 +817,62 @@ export default function ExceptionsPage() {
 
       {/* Modale détail */}
       {showDetail && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm">
-          <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md">
-            <div className="flex items-center gap-2 mb-3">
-              <AlertTriangle className="w-4 h-4 text-amber-500" />
-              <h2 className="text-base font-semibold text-gray-900">{TYPE_CONFIG[showDetail.type_exception]?.label ?? showDetail.type_exception}</h2>
-              <span className={cn('text-xs px-2 py-0.5 rounded-full border ml-auto', PRIORITE_CONFIG[showDetail.niveau_priorite] ?? '')}>{showDetail.niveau_priorite}</span>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col overflow-hidden">
+            {/* En-tête */}
+            <div className={cn('flex items-start gap-3 px-5 py-4 border-b',
+              showDetail.destinataire === 'log' ? 'bg-blue-50/60 border-blue-100' :
+              showDetail.destinataire === 'Colombi' ? 'bg-orange-50/60 border-orange-100' :
+              showDetail.destinataire === 'SAV' ? 'bg-teal-50/60 border-teal-100' :
+              'bg-gray-50 border-gray-100')}>
+              <div className="w-9 h-9 rounded-lg bg-white border border-gray-200 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-5 h-5 text-amber-500" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h2 className="text-base font-semibold text-gray-900 leading-tight">{TYPE_CONFIG[showDetail.type_exception]?.label ?? showDetail.type_exception}</h2>
+                <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                  {showDetail.origine && <span className="text-[11px] px-1.5 py-0.5 rounded-full bg-white/70 border border-gray-200 text-gray-500">source : {showDetail.origine}</span>}
+                  {showDetail.destinataire && <span className={cn('text-[11px] px-1.5 py-0.5 rounded-full', DEST_CONFIG[showDetail.destinataire] ?? 'bg-gray-100 text-gray-600')}>{showDetail.destinataire}</span>}
+                  <span className={cn('text-[11px] px-1.5 py-0.5 rounded-full border', PRIORITE_CONFIG[showDetail.niveau_priorite] ?? '')}>{showDetail.niveau_priorite}</span>
+                </div>
+              </div>
+              <button onClick={() => setShowDetail(null)} className="shrink-0 p-1 rounded-lg text-gray-400 hover:bg-white hover:text-gray-600 transition-colors">
+                <XCircle className="w-5 h-5" />
+              </button>
             </div>
-            <p className="text-sm text-gray-700 mb-3">{showDetail.motif}</p>
+
+            {/* Hero : référence + quantités en évidence */}
+            {(showDetail.reference_article || showDetail.valeur_attendue != null || showDetail.valeur_obtenue != null) && (
+              <div className="px-5 py-3 border-b border-gray-100">
+                {showDetail.reference_article && <div className="font-mono font-bold text-lg text-gray-900">{showDetail.reference_article}</div>}
+                {(showDetail.valeur_attendue != null || showDetail.valeur_obtenue != null) && (
+                  <div className="flex flex-wrap items-center gap-2 mt-1.5">
+                    {showDetail.valeur_attendue != null && (
+                      <div className="px-2.5 py-1 rounded-lg bg-gray-100 text-center min-w-[64px]">
+                        <div className="text-[10px] uppercase tracking-wide text-gray-400 leading-none">Attendu</div>
+                        <div className="font-bold text-base text-gray-900 leading-tight">{showDetail.valeur_attendue}</div>
+                      </div>
+                    )}
+                    {showDetail.valeur_obtenue != null && (
+                      <div className="px-2.5 py-1 rounded-lg bg-gray-100 text-center min-w-[64px]">
+                        <div className="text-[10px] uppercase tracking-wide text-gray-400 leading-none">Obtenu</div>
+                        <div className="font-bold text-base text-gray-900 leading-tight">{showDetail.valeur_obtenue}</div>
+                      </div>
+                    )}
+                    {showDetail.ecart != null && Number(showDetail.ecart) !== 0 && (
+                      <div className={cn('px-2.5 py-1 rounded-lg text-center min-w-[64px]', Number(showDetail.ecart) > 0 ? 'bg-red-50' : 'bg-amber-50')}>
+                        <div className={cn('text-[10px] uppercase tracking-wide leading-none', Number(showDetail.ecart) > 0 ? 'text-red-400' : 'text-amber-500')}>Écart</div>
+                        <div className={cn('font-bold text-base leading-tight', Number(showDetail.ecart) > 0 ? 'text-red-700' : 'text-amber-700')}>{Number(showDetail.ecart) > 0 ? '+' : ''}{showDetail.ecart}</div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Corps défilant */}
+            <div className="px-5 py-4 overflow-y-auto space-y-3">
+            <p className="text-sm text-gray-700">{showDetail.motif}</p>
             {showDetail.suggestion_action_ia && (
               <div className={cn('mb-3 p-3 rounded-lg border',
                 showDetail.destinataire === 'log' ? 'bg-blue-50 border-blue-100' :
@@ -791,12 +931,6 @@ export default function ExceptionsPage() {
               <div className="mt-3 p-3 bg-indigo-50 border border-indigo-100 rounded-lg">
                 <p className="text-xs font-medium text-indigo-700 mb-1">💡 Suggestion IA</p>
                 <p className="text-sm text-indigo-800">{showDetail.suggestion_ia}</p>
-              </div>
-            )}
-            {(showDetail.origine || showDetail.destinataire) && (
-              <div className="flex gap-2 mb-2 text-xs">
-                {showDetail.origine && <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">source : {showDetail.origine}</span>}
-                {showDetail.destinataire && <span className={cn('px-2 py-0.5 rounded-full', DEST_CONFIG[showDetail.destinataire] ?? 'bg-gray-100 text-gray-600')}>{showDetail.destinataire}</span>}
               </div>
             )}
             {(showDetail.type_exception as string) === 'sur-livraison' && ['ouverte', 'en cours'].includes(showDetail.statut_exception) && (
@@ -866,16 +1000,23 @@ export default function ExceptionsPage() {
             <Button variant="outline" size="sm" className="w-full mt-2" disabled={updating === showDetail.id} onClick={() => saveDetail(showDetail)}>
               Enregistrer assignation / note
             </Button>
-            {['ouverte', 'en cours'].includes(showDetail.statut_exception) && (
-              <div className="flex gap-2 mt-3">
-                <Button size="sm" onClick={() => updateStatut(showDetail, 'résolue')} className="flex-1">
-                  <CheckCircle2 className="w-4 h-4" /> Résoudre
-                </Button>
-                <Button variant="outline" size="sm" onClick={() => updateStatut(showDetail, 'en cours')}>En cours</Button>
-                <Button variant="ghost" size="sm" onClick={() => updateStatut(showDetail, 'ignorée')}>Ignorer</Button>
-              </div>
-            )}
-            <Button variant="outline" className="w-full mt-2" size="sm" onClick={() => setShowDetail(null)}>Fermer</Button>
+            </div>
+
+            {/* Pied collant : actions de statut */}
+            <div className="px-5 py-3 border-t border-gray-100 bg-gray-50/70 flex items-center gap-2">
+              {['ouverte', 'en cours'].includes(showDetail.statut_exception) ? (
+                <>
+                  <Button size="sm" onClick={() => updateStatut(showDetail, 'résolue')} className="flex-1">
+                    <CheckCircle2 className="w-4 h-4" /> Résoudre
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => updateStatut(showDetail, 'en cours')}>En cours</Button>
+                  <Button variant="ghost" size="sm" onClick={() => updateStatut(showDetail, 'ignorée')}>Ignorer</Button>
+                </>
+              ) : (
+                <span className="text-xs text-gray-500 flex-1">Anomalie {showDetail.statut_exception}</span>
+              )}
+              <Button variant="outline" size="sm" onClick={() => setShowDetail(null)}>Fermer</Button>
+            </div>
           </div>
         </div>
       )}
