@@ -652,7 +652,7 @@ export default function ExceptionsPage() {
               <th className="px-4 py-3"></th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-50">
+          <tbody className="divide-y divide-gray-200">
             {exceptions.map(exc => {
               let tc = TYPE_CONFIG[exc.type_exception] ?? { color: 'text-gray-600 bg-gray-50', label: exc.type_exception };
               // « sur-saisie log » recouvre 3 réalités très différentes → on précise le badge
@@ -665,7 +665,7 @@ export default function ExceptionsPage() {
                 else tc = { color: 'text-purple-700 bg-purple-50', label: 'Sur-saisie (doublon)' };
               }
               return (
-                <tr key={exc.id} className={cn('hover:bg-gray-50/50', ['haute', 'critique'].includes(exc.niveau_priorite) ? 'border-l-2 border-l-red-400' : exc.niveau_priorite === 'moyenne' ? 'border-l-2 border-l-orange-300' : '')}>
+                <tr key={exc.id} className={cn('even:bg-gray-50/60 hover:bg-indigo-50/40 transition-colors', ['haute', 'critique'].includes(exc.niveau_priorite) ? 'border-l-4 border-l-red-400' : exc.niveau_priorite === 'moyenne' ? 'border-l-4 border-l-orange-300' : 'border-l-4 border-l-transparent')}>
                   <td className="px-4 py-3">
                     <span className={cn('text-xs font-medium px-2 py-0.5 rounded-full', tc.color)}>{tc.label}</span>
                   </td>
