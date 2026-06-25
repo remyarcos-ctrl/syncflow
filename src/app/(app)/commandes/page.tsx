@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, Suspense } from 'react';
+import { useState, useEffect, useCallback, Suspense } from 'react';
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
@@ -50,6 +50,13 @@ function CommandesPageInner() {
   const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
   const [prixSuggere, setPrixSuggere] = useState<{ pu: number; designation: string | null } | null>(null);
 
+  // Champs recherche / fournisseur : pilotés en LOCAL (réactifs au clavier) puis poussés
+  // dans l'URL avec un léger délai. Avant, ils étaient liés directement à l'URL → chaque
+  // frappe relançait une navigation et le re-render restaurait l'ancienne valeur → on ne
+  // pouvait pas effacer. Le local rend la saisie/l'effacement instantanés.
+  const [searchInput, setSearchInput] = useState(search);
+  const [fournInput, setFournInput] = useState(filtreFournisseur);
+
   const setFilter = useCallback((key: string, value: string) => {
     const params = new URLSearchParams(searchParams.toString());
     params.delete('page');
@@ -85,6 +92,21 @@ function CommandesPageInner() {
     }
     router.replace(`${pathname}?${params.toString()}`);
   }, [searchParams, pathname, router, sortKey, sortDir]);
+
+  // Synchro champs locaux ↔ URL : on suit l'URL quand elle change de l'extérieur (Reset),
+  // et on pousse la saisie locale dans l'URL avec un léger délai (debounce 300 ms).
+  useEffect(() => { setSearchInput(search); }, [search]);
+  useEffect(() => { setFournInput(filtreFournisseur); }, [filtreFournisseur]);
+  useEffect(() => {
+    if (searchInput === search) return;
+    const t = setTimeout(() => setFilter('q', searchInput), 300);
+    return () => clearTimeout(t);
+  }, [searchInput, search, setFilter]);
+  useEffect(() => {
+    if (fournInput === filtreFournisseur) return;
+    const t = setTimeout(() => setFilter('fournisseur', fournInput), 300);
+    return () => clearTimeout(t);
+  }, [fournInput, filtreFournisseur, setFilter]);
 
   const { data: queryResult, isError, isLoading } = useQuery({
     queryKey: ['commandes', page, filtreStatut, filtreFournisseur, search, sortKey, sortDir, filtreReliquats, annee, mois],
@@ -305,17 +327,31 @@ function CommandesPageInner() {
           <Search className="absolute left-2.5 top-2.5 w-4 h-4 text-gray-400" />
           <Input
             placeholder="N° commande..."
-            value={search}
-            onChange={e => setFilter('q', e.target.value)}
-            className="w-56 pl-8"
+            value={searchInput}
+            onChange={e => setSearchInput(e.target.value)}
+            className="w-56 pl-8 pr-8"
           />
+          {searchInput && (
+            <button type="button" onClick={() => setSearchInput('')}
+              className="absolute right-2 top-2.5 text-gray-400 hover:text-gray-600" title="Effacer">
+              <X className="w-4 h-4" />
+            </button>
+          )}
         </div>
-        <Input
-          placeholder="Fournisseur..."
-          value={filtreFournisseur}
-          onChange={e => setFilter('fournisseur', e.target.value)}
-          className="w-52"
-        />
+        <div className="relative">
+          <Input
+            placeholder="Fournisseur..."
+            value={fournInput}
+            onChange={e => setFournInput(e.target.value)}
+            className="w-52 pr-8"
+          />
+          {fournInput && (
+            <button type="button" onClick={() => setFournInput('')}
+              className="absolute right-2 top-2.5 text-gray-400 hover:text-gray-600" title="Effacer">
+              <X className="w-4 h-4" />
+            </button>
+          )}
+        </div>
         <button
           onClick={() => {
             const params = new URLSearchParams(searchParams.toString());

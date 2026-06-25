@@ -202,7 +202,7 @@ export default function ExceptionsPage() {
   const factureMap = useMemo(() => Object.fromEntries(factures.map(f => [f.id, f])) as Record<string, Pick<Facture, 'id' | 'numero_facture'>>, [factures]);
   const beMap = useMemo(() => Object.fromEntries(bes.map(b => [b.id, b])) as Record<string, Pick<BEReception, 'id' | 'numero_be' | 'date_bl'>>, [bes]);
   // La log saisit en ~1 semaine (2 max). Au-delà de 2 semaines après la date du BE,
-  // un manque ② > ③ ne peut plus être « en cours de saisie » → on n'affiche plus le badge.
+  // un manque > ne peut plus être « en cours de saisie » → on n'affiche plus le badge.
   const beRecent = (beId?: string | null) => {
     const d = beId ? beMap[beId]?.date_bl : null;
     if (!d) return false;
@@ -665,10 +665,10 @@ export default function ExceptionsPage() {
                 else if (/conditionnement/i.test(m)) tc = { color: 'text-gray-600 bg-gray-50', label: 'À vérifier (unité)' };
                 else tc = { color: 'text-purple-700 bg-purple-50', label: 'Sur-saisie (doublon)' };
               }
-              // « sur-livraison » + destinataire « à vérifier » = écart déclaration ② vs comptage ③
+              // « sur-livraison » + destinataire « à vérifier » = écart déclaration vs comptage
               // (coupable inconnu) → badge distinct du vrai surplus Colombi.
               if ((exc.type_exception as string) === 'sur-livraison' && exc.destinataire === 'à vérifier') {
-                tc = { color: 'text-amber-700 bg-amber-50', label: 'Écart ②/③ à vérifier' };
+                tc = { color: 'text-amber-700 bg-amber-50', label: 'Écart papier/saisi à vérifier' };
               }
               return (
                 <tr key={exc.id} className={cn('even:bg-gray-50/60 hover:bg-indigo-50/40 transition-colors', ['haute', 'critique'].includes(exc.niveau_priorite) ? 'border-l-4 border-l-red-400' : exc.niveau_priorite === 'moyenne' ? 'border-l-4 border-l-orange-300' : 'border-l-4 border-l-transparent')}>

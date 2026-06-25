@@ -87,8 +87,8 @@ export async function POST() {
   // ── 1) RÉCEPTION → Colombi ──────────────────────────────────────────────────
   const beForRecep = lignesBe.filter((l) => !l.hors_systeme && (l.quantite_receptionnee ?? 0) > 0) as LigneBeInput[];
   const recep = controlerReceptions(beForRecep, lignesCmd as LigneCmdInput[]);
-  // Total reçu sur les BE papier (②) par référence — sert à confirmer ou non une sur-livraison
-  // (le papier est le contrôle physique indépendant de la saisie ③ Centralink).
+  // Total reçu sur les BE papier () par référence — sert à confirmer ou non une sur-livraison
+  // (le papier est le contrôle physique indépendant de la saisie Centralink).
   const totalBeParRef = new Map<string, number>();
   for (const l of beForRecep) {
     const k = normalizeRef(l.reference_article);
@@ -107,8 +107,8 @@ export async function POST() {
     const ecart = c.verdict === 'sur_livraison' ? c.surLivraisonNette : c.qteBe;
     // Pièce détachée SAV connue, livrée hors commande → destinataire SAV (info, pas Colombi).
     const estSav = c.verdict === 'hors_commande' && refsSav.has(normalizeRef(c.ref));
-    // Sur-livraison : reçu (③ saisie Centralink) > commandé. Deux causes possibles,
-    // INDISCERNABLES côté Centralink (« Attendu négatif » identique). Seul le BE papier (②)
+    // Sur-livraison : reçu (saisie Centralink) > commandé. Deux causes possibles,
+    // INDISCERNABLES côté Centralink (« Attendu négatif » identique). Seul le BE papier ()
     // tranche : si le papier confirme le surplus → Colombi a vraiment sur-livré ; si le
     // papier ne le montre pas → l'acheteuse a sur-saisi → log. Sans papier importé pour
     // la réf, on ne peut pas conclure → on reste prudent (Colombi) et on signale à vérifier.
@@ -143,7 +143,7 @@ export async function POST() {
     });
   }
 
-  // ── (Pointage ②↔③ retiré du centre : un BE couvre plusieurs commandes, donc
+  // ── (Pointage↔retiré du centre : un BE couvre plusieurs commandes, donc
   //     la comparaison par n° de BE est structurellement bruitée. Il reste
   //     consultable dans l'écran « Rappro. pointage ».) ──────────────────────────
 
@@ -192,9 +192,9 @@ export async function POST() {
     });
   }
 
-  // ── 3c) POINTAGE ②↔③ : la log a-t-elle saisi conformément au BL papier ? ──────
-  // Compare, PAR BE, le scan papier (②) à la saisie log (③, section Bon de Livraison).
-  // Sur-saisie (③ > ② papier, hors conditionnement) = doublon / erreur de saisie → log.
+  // ── 3c) POINTAGE↔: la log a-t-elle saisi conformément au BL papier ? ──────
+  // Compare, PAR BE, le scan papier () à la saisie log (, section Bon de Livraison).
+  // Sur-saisie (> papier, hors conditionnement) = doublon / erreur de saisie → log.
   const lbByBe = new Map<string, Map<string, { qte: number; desig: string | null }>>();
   for (const l of lignesBe) {
     if (l.hors_systeme) continue;
@@ -208,7 +208,7 @@ export async function POST() {
   const beNumById = new Map((beR.data ?? []).map((b) => [b.id, b.numero_be]));
   const beIdByNum = new Map((beR.data ?? []).map((b) => [nbe(b.numero_be), b.id]));
   // Alias de réf CL → réf Colombi (codes vrac : billes/plombs saisis sous un code
-  // générique dans Centralink). On traduit la saisie ③ vers le code du BL papier ②
+  // générique dans Centralink). On traduit la saisie vers le code du BL papier
   // avant de comparer ; l'écart d'unité (boîte/pièce) est ensuite géré par le
   // conditionnement (quantitesConcordent). Voir src/lib/ref-alias.ts.
   const aliasNorm = new Map(
@@ -260,14 +260,14 @@ export async function POST() {
     }
   }
   // Réfs réellement commandées (un oubli de saisie n'a de sens que là-dessus : les pièces SAV
-  // et le hors-commande sont hors-Centralink, donc ③ = 0 est NORMAL, pas un oubli).
+  // et le hors-commande sont hors-Centralink, donc = 0 est NORMAL, pas un oubli).
   const refsCommandees = new Set<string>();
   for (const l of lignesCmd) {
     if ((Number(l.quantite_commandee) || 0) > 0) refsCommandees.add(aliasRef(l.reference_article));
   }
   // (Les cartes papier/commandé/reçu par réf de l'ancien §3e ont été retirées avec lui :
-  //  le surplus se mesure désormais ③ vs ① en §1, pas ② vs commandé.)
-  // ── 3c) CONTRÔLE BE PAPIER ② vs SAISIE LOG ③, PAR BE ─────────────────────────
+  //  le surplus se mesure désormais vs en §1, pas vs commandé.)
+  // ── 3c) CONTRÔLE BE PAPIER vs SAISIE LOG, PAR BE ─────────────────────────
   // Le 1er contrôle : pour chaque BE qu'on a scanné, la log a-t-elle saisi dans
   // Centralink la même chose que notre BL papier ? CL reste la référence ; notre
   // papier est le contrôle indépendant. Un écart = erreur de saisie de la log
@@ -277,12 +277,12 @@ export async function POST() {
     for (const [k, info] of refs) {
       const papier = info.qte;
       if (papier <= 0) continue;
-      const saisie = saisieByBeRef.get(beId + '|' + k) ?? 0;             // ③ saisi sous CE BE
+      const saisie = saisieByBeRef.get(beId + '|' + k) ?? 0;             // saisi sous CE BE
       if (quantitesConcordent(papier, saisie, info.desig)) continue;     // OK : égal ou conditionnement
-      // Réf au conditionnement (X500, boîte de N…) : ② et ③ peuvent être en unités
+      // Réf au conditionnement (X500, boîte de N…) : et peuvent être en unités
       // différentes (pièces vs boîtes) → écart à vérifier, pas un manque ferme.
       const conditionne = facteurConditionnement(info.desig) > 1;
-      const condMotif = `À vérifier (conditionnement « ${info.desig} ») ${k} sur ${numBe} : BL papier ② ${papier} / saisi ③ ${saisie} — écart probablement dû aux unités (pièces/boîtes)`;
+      const condMotif = `À vérifier (conditionnement « ${info.desig} ») ${k} sur ${numBe} : BL papier ${papier} / saisi ${saisie} — écart probablement dû aux unités (pièces/boîtes)`;
       const condAction = `⚠ Conditionnement (« ${info.desig} ») : vérifier les unités (pièces vs boîtes) — ${numBe} : papier ${papier} / saisi ${saisie}.`;
       if (saisie > papier + 0.001) {
         // La log a saisi PLUS que le BL papier → sur-saisie / doublon.
@@ -293,14 +293,14 @@ export async function POST() {
           origine: 'pointage', destinataire: 'log', type_exception: 'sur-saisie log',
           be_id: beId, reference_article: k,
           motif: conditionne ? condMotif
-            : `Sur-saisie ${k} sur ${numBe} : BL papier ② ${papier} / saisi ③ ${saisie}${mult ? ` (×${mult})` : ''} → ${surplus.toFixed(0)} de trop`,
+            : `Sur-saisie ${k} sur ${numBe} : BL papier ${papier} / saisi ${saisie}${mult ? ` (×${mult})` : ''} → ${surplus.toFixed(0)} de trop`,
           valeur_attendue: papier, valeur_obtenue: saisie, ecart: surplus,
           statut_exception: 'ouverte', niveau_priorite: conditionne ? 'faible' : mult && mult >= 2 ? 'haute' : 'moyenne',
           suggestion_action_ia: conditionne ? condAction
             : `Corriger dans Centralink : sur ${numBe}, la log a saisi ${saisie} ${k} alors que le BL papier en montre ${papier} → réduire de ${surplus.toFixed(0)}${mult ? ` (doublon ×${mult})` : ''}.`,
         });
       } else {
-        // Le BL papier ② montre PLUS que la saisie ③ sous ce BE = SURPLUS COLOMBI.
+        // Le BL papier montre PLUS que la saisie sous ce BE = SURPLUS COLOMBI.
         // Colombi sur-livre en routine ; la log ne saisit que ce qui a une commande ouverte,
         // l'excédent reste non saisi sous ce BE → il remonte ici. Ce n'est PAS un oubli log :
         // c'est à arbitrer côté achat (garder → commande de régule AVEC le n° de BE dans la
@@ -318,7 +318,7 @@ export async function POST() {
           nouvelles.push({
             origine: 'pointage', destinataire: 'log', type_exception: 'sur-saisie log',
             be_id: beId, reference_article: k,
-            motif: `${k} manque sur ${numBe} (② ${papier} / ③ ${saisie}) mais saisi sous un n° de BE INVALIDE (${besInv}, mois > 12) → erreur de n° de BE`,
+            motif: `${k} manque sur ${numBe} (${papier} / ${saisie}) mais saisi sous un n° de BE INVALIDE (${besInv}, mois > 12) → erreur de n° de BE`,
             valeur_attendue: papier, valeur_obtenue: saisie, ecart: -manque,
             statut_exception: 'ouverte', niveau_priorite: 'haute',
             suggestion_action_ia: `Corriger dans Centralink : ${k} a été saisi sous un n° de BE invalide (${besInv}) → recoller sur le bon n° de BE ${numBe}. Le manque se fermera ensuite.`,
@@ -332,8 +332,8 @@ export async function POST() {
         // Si l'orpheline NE couvre PAS tout le manque (cas mixte type KI0001), le reste tombe en
         // surplus ci-dessous → on a bien les deux : recoller (log) + surplus net (Colombi).
         if ((qteSaisieHorsPapierParRef.get(k) ?? 0) >= manque - 0.001) continue;
-        if (!refsCommandees.has(k)) continue; // SAV / hors-commande → ③ = 0 normal, traité ailleurs
-        // Réf conditionnée (boîte/lot) : l'écart ②/③ vient probablement des unités
+        if (!refsCommandees.has(k)) continue; // SAV / hors-commande → = 0 normal, traité ailleurs
+        // Réf conditionnée (boîte/lot) : l'écart papier/saisi vient probablement des unités
         // (pièces vs boîtes) → on le signale PAR BE, à vérifier (pas un vrai manque).
         if (conditionne) {
           if (seen.has(key('pointage', beId, k, 'sur-livraison'))) continue;
@@ -345,20 +345,20 @@ export async function POST() {
           });
           continue;
         }
-        // Sinon : l'écart papier ② > saisie ③ PAR BE est trop bruité — la marchandise peut
+        // Sinon : l'écart papier > saisie PAR BE est trop bruité — la marchandise peut
         // être saisie sous un AUTRE n° de BL (mauvais n° de BE). On ne tranche donc PAS par
-        // BE : le vrai écart déclaration/comptage est jugé PAR RÉFÉRENCE (total ② vs total ③)
+        // BE : le vrai écart déclaration/comptage est jugé PAR RÉFÉRENCE (total vs total)
         // en §3c-bis, où la saisie sous d'autres BL est prise en compte.
       }
     }
   }
 
-  // ── 3c-bis) ÉCART DÉCLARATION ② vs COMPTAGE ③, AGRÉGÉ PAR RÉFÉRENCE ───────────
-  // ② = ce que Colombi DÉCLARE sur l'ensemble de ses BL ; ③ = ce que la log a COMPTÉ
-  // au total (toutes saisies, quel que soit le n° de BL). Si total ③ ≥ total ②, tout
+  // ── 3c-bis) ÉCART DÉCLARATION vs COMPTAGE, AGRÉGÉ PAR RÉFÉRENCE ───────────
+  // = ce que Colombi DÉCLARE sur l'ensemble de ses BL ; = ce que la log a COMPTÉ
+  // au total (toutes saisies, quel que soit le n° de BL). Si total ≥ total, tout
   // est compté (au pire mal numéroté → mauvais n° de BE, déjà signalé en §3d) → rien.
-  // Si total ② > total ③ → écart réel à vérifier : Colombi a sur-déclaré (risque de
-  // surfacturation, la facture ④ tranchera) OU une saisie manque. Coupable non présumé.
+  // Si total > total → écart réel à vérifier : Colombi a sur-déclaré (risque de
+  // surfacturation, la facture tranchera) OU une saisie manque. Coupable non présumé.
   const papierTotParRef = new Map<string, { qte: number; desig: string | null; beId: string }>();
   for (const [beId, refs] of lbByBe) {
     for (const [k, info] of refs) {
@@ -379,15 +379,15 @@ export async function POST() {
     const pap = info.qte;
     const sai = saisieTotParRef.get(k) ?? 0;
     const manque = pap - sai;
-    if (manque < 0.5) continue;                            // ③ couvre ② → tout compté (mal numéroté au pire)
+    if (manque < 0.5) continue;                            // couvre → tout compté (mal numéroté au pire)
     if (seen.has(key('pointage', info.beId, k, 'sur-livraison'))) continue;
     nouvelles.push({
       origine: 'pointage', destinataire: 'à vérifier', type_exception: 'sur-livraison',
       be_id: info.beId, reference_article: k,
-      motif: `Écart déclaration ② / comptage ③ ${k} : Colombi déclare ② ${pap} sur ses BL, la log a compté ③ ${sai} en tout → ${manque.toFixed(0)} d'écart à vérifier (Colombi a sur-déclaré OU saisie incomplète)`,
+      motif: `Écart déclaration (papier) vs comptage (saisi) ${k} : Colombi déclare ${pap} sur ses BL, la log a compté ${sai} en tout → ${manque.toFixed(0)} d'écart à vérifier (Colombi a sur-déclaré OU saisie incomplète)`,
       valeur_attendue: pap, valeur_obtenue: sai, ecart: -manque,
       statut_exception: 'ouverte', niveau_priorite: 'moyenne',
-      suggestion_action_ia: `À vérifier ${k} : total BL papier (déclaration Colombi ②) ${pap}, total saisi par la log ③ ${sai}, écart ${manque.toFixed(0)}. Sans présumer le coupable : soit Colombi a sur-déclaré → risque de surfacturation, vérifier la facture ④ avant de payer ; soit une saisie manque ou est sous un mauvais n° de BL → re-rapprocher.`,
+      suggestion_action_ia: `À vérifier ${k} : total BL papier (déclaration Colombi) ${pap}, total saisi par la log ${sai}, écart ${manque.toFixed(0)}. Sans présumer le coupable : soit Colombi a sur-déclaré → risque de surfacturation, vérifier la facture avant de payer ; soit une saisie manque ou est sous un mauvais n° de BL → re-rapprocher.`,
     });
   }
 
@@ -415,7 +415,7 @@ export async function POST() {
   }
 
   // ── 3d) SAISI HORS PAPIER (erreur de n° de BE) → log ─────────────────────────
-  // ③ saisi sous un BE scanné mais réf ABSENTE de son BL papier → la log a collé la
+  // saisi sous un BE scanné mais réf ABSENTE de son BL papier → la log a collé la
   // saisie au mauvais numéro de BE. Souvent la marchandise est bien reçue (juste mal
   // numérotée), donc pas un risque financier — mais une saisie SALE à nettoyer pour
   // garder CL propre. Piste (#12) : les BE où cette réf est sur papier avec un déficit.
@@ -476,12 +476,12 @@ export async function POST() {
   }
 
   // ── 3e) RETIRÉ ────────────────────────────────────────────────────────────────
-  // L'ancien §3e comparait le PAPIER ② au COMMANDÉ ① et déclarait « Sur-livraison
-  // Colombi ». C'était FAUX par construction : ② est la DÉCLARATION de Colombi, pas
+  // L'ancien §3e comparait le PAPIER au COMMANDÉ et déclarait « Sur-livraison
+  // Colombi ». C'était FAUX par construction : est la DÉCLARATION de Colombi, pas
   // le reçu ; et le commandé traîne régules/avoirs sur un périmètre différent → faux
-  // surplus (cf. 19803 : ② 29 vs commandé 28 = faux +1, alors que reçu ③ net 20 =
-  // commandé net 20). Le VRAI surplus se mesure RÉCEPTION ③ > COMMANDÉ ①, déjà fait
-  // par §1 (controlerReceptions, surLivraisonNette nette des avoirs). L'écart ② vs ③
+  // surplus (cf. 19803 : 29 vs commandé 28 = faux +1, alors que reçu net 20 =
+  // commandé net 20). Le VRAI surplus se mesure RÉCEPTION > COMMANDÉ, déjà fait
+  // par §1 (controlerReceptions, surLivraisonNette nette des avoirs). L'écart papier vs saisi
   // (déclaration vs comptage) est traité en §3c, sans présumer le coupable.
 
   // ── 4) NUMÉROS DE BE IMPOSSIBLES (faute de frappe log : mois > 12) → log ─────
