@@ -95,7 +95,9 @@ export default function ExceptionsPage() {
       if (filterType !== 'all') query = query.eq('type_exception', filterType);
       if (filterPriorite !== 'all') query = query.eq('niveau_priorite', filterPriorite);
       if (filterOrigine !== 'all') query = query.eq('origine', filterOrigine);
-      if (filterDest !== 'all') query = query.eq('destinataire', filterDest);
+      // « à analyser » impose déjà destinataire = Colombi → ne pas re-appliquer filterDest
+      // (sinon « Colombi ET log » = requête impossible → 0 résultat).
+      if (filterDest !== 'all' && filterStatut !== 'à analyser') query = query.eq('destinataire', filterDest);
       if (filterBe !== 'all') query = query.eq('be_id', filterBe);
 
       query = query.range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1);
@@ -452,7 +454,7 @@ export default function ExceptionsPage() {
     if (filterType !== 'all') q = q.eq('type_exception', filterType);
     if (filterPriorite !== 'all') q = q.eq('niveau_priorite', filterPriorite);
     if (filterOrigine !== 'all') q = q.eq('origine', filterOrigine);
-    if (filterDest !== 'all') q = q.eq('destinataire', filterDest);
+    if (filterDest !== 'all' && filterStatut !== 'à analyser') q = q.eq('destinataire', filterDest);
     if (filterBe !== 'all') q = q.eq('be_id', filterBe);
     const { data } = await q.limit(2000);
     return (data ?? []) as Exc[];
@@ -564,7 +566,7 @@ export default function ExceptionsPage() {
       {/* Bandeau « à analyser » : les décisions qui t'attendent */}
       {kpiData.aAnalyser > 0 && filterStatut !== 'à analyser' && (
         <button
-          onClick={() => { setFilterStatut('à analyser'); setPage(1); }}
+          onClick={() => { setFilterStatut('à analyser'); setFilterDest('all'); setPage(1); }}
           className="w-full mb-4 flex items-center gap-3 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-left hover:bg-indigo-100 transition-colors"
         >
           <span className="text-lg">🆕</span>
@@ -579,7 +581,7 @@ export default function ExceptionsPage() {
       {/* KPIs */}
       <div className="grid grid-cols-4 gap-4 mb-5">
         {[
-          { label: '🆕 À analyser', value: kpiData.aAnalyser, color: 'text-indigo-600', onClick: () => { setFilterStatut('à analyser'); setPage(1); } },
+          { label: '🆕 À analyser', value: kpiData.aAnalyser, color: 'text-indigo-600', onClick: () => { setFilterStatut('à analyser'); setFilterDest('all'); setPage(1); } },
           { label: 'Actives', value: kpiData.total, color: 'text-gray-900', onClick: () => { setFilterStatut('actives'); setPage(1); } },
           { label: 'Haute priorité', value: kpiData.haute, color: 'text-red-600' },
           { label: 'À corriger (log)', value: kpiData.log, color: 'text-blue-600', onClick: () => { setFilterStatut('actives'); setFilterDest('log'); setPage(1); } },
@@ -619,7 +621,7 @@ export default function ExceptionsPage() {
         <select value={filterDest} onChange={e => { setFilterDest(e.target.value); setPage(1); }}
           className="h-9 rounded-lg border border-gray-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
           <option value="all">Tous destinataires</option>
-          {['Colombi', 'log', 'SAV', 'interne'].map(d => <option key={d} value={d}>{d}</option>)}
+          {['Colombi', 'log', 'à vérifier', 'SAV', 'interne'].map(d => <option key={d} value={d}>{d}</option>)}
         </select>
         <select value={filterBe} onChange={e => { setFilterBe(e.target.value); setPage(1); }}
           className="h-9 rounded-lg border border-gray-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
