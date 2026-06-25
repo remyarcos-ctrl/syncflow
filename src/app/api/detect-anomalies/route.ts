@@ -541,6 +541,49 @@ export async function POST() {
     }
   }
 
+  // ── CROISEMENT STOCK (bar-code) sur les SUR-LIVRAISONS Colombi ───────────────
+  // Une « sur-livraison Colombi » suppose que Colombi a livré en trop → réclamation.
+  // MAIS la log rentre souvent la marchandise en stock au BAR-CODE (scan direct, sans
+  // réception de commande) : le surplus est alors un FAUX surplus déjà absorbé en
+  // stock, PAS une réclamation. Le stock CL temps réel (fiche produit) fait foi.
+  //
+  // GARDE-FOU (réponse à « et s'il y a quand même une erreur malgré le bar-code ? ») :
+  // le bar-code n'est PAS un blanc-seing. On vérifie que le surplus est réellement
+  // absorbé : stock CL réel + ventes 90j doivent COUVRIR le surplus.
+  //   • couvre   → faux surplus probable → priorité faible, destinataire « à vérifier »,
+  //                 sort de la file de réclamation Colombi (mais reste VISIBLE, jamais supprimé).
+  //   • NE COUVRE PAS → le bar-code n'explique pas tout → on GARDE l'anomalie « à vérifier »
+  //                 (vraie sur-livraison Colombi ou erreur de saisie) → elle reste remontée.
+  // Rien n'est gommé en silence : on requalifie + on justifie. (cf écran Stock Centralink)
+  const stkR = await selectAll(() =>
+    sb.from('stocks_cl').select('reference_article, stock_cl, floating, has_barcode, ventes, stock_source'));
+  const stockByRef = new Map<string, { stock_cl: number | null; floating: number | null; has_barcode: boolean | null; ventes: number | null; stock_source: string | null }>();
+  for (const s of (stkR.data ?? [])) {
+    const k = normalizeRef(s.reference_article as string);
+    if (k && !stockByRef.has(k)) stockByRef.set(k, s as never);
+  }
+  for (const n of nouvelles) {
+    if (n.type_exception !== 'sur-livraison' || n.destinataire !== 'Colombi') continue;
+    const st = stockByRef.get(normalizeRef(n.reference_article));
+    if (!st || st.has_barcode !== true) continue;            // pas de bar-code connu → inchangé
+    const S = Math.abs(Number(n.ecart) || 0);                // ampleur du surplus
+    const stock = Number(st.stock_cl) || 0;
+    const ventes = Number(st.ventes) || 0;
+    const src = st.stock_source === 'fiche' ? 'temps réel' : 'snapshot minuit';
+    const couvre = stock + ventes >= S - 0.001;
+    if (couvre) {
+      n.destinataire = 'à vérifier';
+      n.niveau_priorite = 'faible';
+      n.motif += ` · 🏷 BAR-CODE : stock CL ${src} ${stock} + ventes 90j ${ventes} couvrent le surplus ${S.toFixed(0)} → faux surplus probable (déjà en stock), PAS une réclamation Colombi`;
+      n.suggestion_action_ia = `Faux surplus probable : ${n.reference_article} est géré au bar-code (rentré en stock sans réception) et le stock CL ${src} (${stock}) + ventes 90j (${ventes}) couvrent les ${S.toFixed(0)} en trop → NE PAS réclamer à Colombi ; vérifier au stock (écran Stock Centralink).`;
+    } else {
+      n.destinataire = 'à vérifier';
+      n.niveau_priorite = 'moyenne';
+      n.motif += ` · ⚠ BAR-CODE mais stock CL ${src} (${stock}) + ventes 90j (${ventes}) NE couvrent PAS le surplus ${S.toFixed(0)} → à vérifier : vraie sur-livraison Colombi ou erreur de saisie`;
+      n.suggestion_action_ia = `À vérifier ${n.reference_article} : géré au bar-code, mais le stock CL ${src} (${stock}) + ventes 90j (${ventes}) n'expliquent pas les ${S.toFixed(0)} en trop → contrôler physiquement (vraie sur-livraison Colombi à réclamer, ou erreur de saisie à corriger).`;
+    }
+  }
+
   let inserted = 0;
   if (nouvelles.length > 0) {
     const { error, count } = await sb.from('exceptions').insert(nouvelles, { count: 'exact' });

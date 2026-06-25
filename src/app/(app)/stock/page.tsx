@@ -14,11 +14,13 @@ interface StockRow {
   ean13: string | null;
   titre: string | null;
   stock_cl: number | null;
+  floating: number | null;
+  stock_source: string | null;   // 'fiche' = temps réel · 'etat' = snapshot minuit
   prix_ht: number | null;
   has_barcode: boolean | null;
   entrees_reception: number | null;
   entrees_barcode: number | null;
-  ventes: number | null;
+  ventes: number | null;          // ventes 90j (fiable)
   reconstitue_ok: boolean | null;
 }
 interface LigneCmd { reference_article: string | null; quantite_commandee: number | null; quantite_receptionnee_reelle: number | null; }
@@ -30,6 +32,9 @@ interface Row {
   refBrute: string;       // réf telle qu'affichée
   designation: string | null;
   stock: number | null;
+  floating: number | null;
+  tempsReel: boolean;     // stock_source === 'fiche'
+  ventes: number | null;  // ventes 90j
   prixHt: number | null;
   hasBarcode: boolean | null;
   reconstitueOk: boolean | null;
@@ -39,7 +44,7 @@ interface Row {
   enStock: boolean;       // présent dans stocks_cl
 }
 
-type Filtre = 'tous' | 'barcode' | 'surplus' | 'recon_ko' | 'sans_stock';
+type Filtre = 'tous' | 'barcode' | 'surplus' | 'a_verifier' | 'recon_ko' | 'sans_stock';
 
 const fmt = (n: number | null | undefined) => (n == null ? '—' : new Intl.NumberFormat('fr-FR').format(n));
 
@@ -55,7 +60,7 @@ export default function StockPage() {
       for (;;) {
         const { data } = await supabase
           .from('stocks_cl')
-          .select('reference_article, ean13, titre, stock_cl, prix_ht, has_barcode, entrees_reception, entrees_barcode, ventes, reconstitue_ok')
+          .select('reference_article, ean13, titre, stock_cl, floating, stock_source, prix_ht, has_barcode, entrees_reception, entrees_barcode, ventes, reconstitue_ok')
           .range(from, from + 999);
         if (!data || !data.length) break;
         all.push(...(data as StockRow[]));
@@ -122,7 +127,9 @@ export default function StockPage() {
         const s = stockByRef.get(k);
         r = {
           ref: k, refBrute: brute, designation: s?.titre ?? null,
-          stock: s?.stock_cl ?? null, prixHt: s?.prix_ht ?? null,
+          stock: s?.stock_cl ?? null, floating: s?.floating ?? null,
+          tempsReel: s?.stock_source === 'fiche', ventes: s?.ventes ?? null,
+          prixHt: s?.prix_ht ?? null,
           hasBarcode: s?.has_barcode ?? null, reconstitueOk: s?.reconstitue_ok ?? null,
           cmd: 0, recu: 0, papier: 0, enStock: !!s,
         };
@@ -150,15 +157,23 @@ export default function StockPage() {
     return [...agg.values()].sort((a, b) => a.ref.localeCompare(b.ref));
   }, [stocks, cmds, bes]);
 
-  // surplus = reçu OU papier dépasse le commandé
+  // surplus = reçu OU papier dépasse le commandé (indicateur au niveau réf ;
+  // le surplus exact à réclamer est calculé par le moteur d'anomalies, par BE).
   const estSurplus = (r: Row) => r.cmd > 0 && (r.recu > r.cmd + 0.001 || r.papier > r.cmd + 0.001);
-  // faux surplus probable : surplus + rentré au bar-code (marchandise déjà en stock sans réception)
-  const fauxSurplus = (r: Row) => estSurplus(r) && r.hasBarcode === true;
+  const ampleurSurplus = (r: Row) => Math.max(r.recu, r.papier) - r.cmd;
+  // Garde-fou bar-code : un surplus géré au bar-code est un FAUX surplus SEULEMENT si le
+  // stock CL réel + ventes 90j couvrent l'excédent (marchandise réellement absorbée).
+  // Sinon le bar-code n'explique pas tout → reste « à vérifier » (vraie erreur visible).
+  const surplusCouvert = (r: Row) =>
+    (Number(r.stock) || 0) + (Number(r.ventes) || 0) >= ampleurSurplus(r) - 0.001;
+  const fauxSurplus = (r: Row) => estSurplus(r) && r.hasBarcode === true && surplusCouvert(r);
+  const barcodeNonCouvert = (r: Row) => estSurplus(r) && r.hasBarcode === true && !surplusCouvert(r);
 
   const filtered = useMemo(() => {
     let list = rows;
     if (filtre === 'barcode') list = list.filter(r => r.hasBarcode === true);
     else if (filtre === 'surplus') list = list.filter(estSurplus);
+    else if (filtre === 'a_verifier') list = list.filter(barcodeNonCouvert);
     else if (filtre === 'recon_ko') list = list.filter(r => r.reconstitueOk === false);
     else if (filtre === 'sans_stock') list = list.filter(r => !r.enStock);
     if (q.trim()) {
@@ -172,9 +187,11 @@ export default function StockPage() {
   const stats = useMemo(() => ({
     total: rows.length,
     enStock: rows.filter(r => r.enStock).length,
+    tempsReel: rows.filter(r => r.tempsReel).length,
     barcode: rows.filter(r => r.hasBarcode === true).length,
     surplus: rows.filter(estSurplus).length,
     faux: rows.filter(fauxSurplus).length,
+    aVerifier: rows.filter(barcodeNonCouvert).length,
     reconKo: rows.filter(r => r.reconstitueOk === false).length,
     sansStock: rows.filter(r => !r.enStock).length,
   }), [rows]);
@@ -183,6 +200,7 @@ export default function StockPage() {
     { id: 'tous', label: 'Toutes', count: stats.total, tone: 'indigo' },
     { id: 'barcode', label: 'Bar-code', count: stats.barcode, tone: 'amber' },
     { id: 'surplus', label: 'Surplus (②/③ > ①)', count: stats.surplus, tone: 'orange' },
+    { id: 'a_verifier', label: 'Bar-code à vérifier', count: stats.aVerifier, tone: 'rose' },
     { id: 'recon_ko', label: 'Reconstruction KO', count: stats.reconKo, tone: 'rose' },
     { id: 'sans_stock', label: 'Sans stock CL', count: stats.sansStock, tone: 'slate' },
   ];
@@ -191,19 +209,29 @@ export default function StockPage() {
     <div className="space-y-6">
       <PageHeader
         title="Rapprochement stock Centralink"
-        subtitle={`${stats.total} réfs contrôlées · ${stats.enStock} en stock CL · ${stats.barcode} gérées au bar-code · ${stats.faux} faux surplus probables`}
+        subtitle={`${stats.total} réfs contrôlées · ${stats.tempsReel} en stock temps réel · ${stats.barcode} gérées au bar-code · ${stats.faux} faux surplus · ${stats.aVerifier} bar-code à vérifier`}
       />
 
-      {/* Bandeau d'explication faux surplus */}
-      {stats.faux > 0 && (
+      {/* Bandeau d'explication faux surplus + garde-fou */}
+      {(stats.faux > 0 || stats.aVerifier > 0) && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 flex items-start gap-2">
           <Barcode className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
-          <p className="text-sm text-amber-800">
-            <span className="font-semibold">{stats.faux} référence{stats.faux > 1 ? 's' : ''}</span> en surplus
-            {' '}mais <span className="font-semibold">rentrée{stats.faux > 1 ? 's' : ''} au bar-code</span> : la marchandise est entrée
-            directement en stock sans passer par une réception de commande → ce n&apos;est probablement <span className="font-semibold">pas</span> une
-            réclamation Colombi. Le stock CL fait foi.
-          </p>
+          <div className="text-sm text-amber-800 space-y-1">
+            {stats.faux > 0 && (
+              <p>
+                <span className="font-semibold">{stats.faux} faux surplus</span> : en surplus mais rentré au bar-code,
+                {' '}et le <span className="font-semibold">stock réel + ventes 90j couvrent l&apos;excédent</span> → déjà en stock,
+                {' '}<span className="font-semibold">pas</span> une réclamation Colombi.
+              </p>
+            )}
+            {stats.aVerifier > 0 && (
+              <p>
+                <span className="font-semibold">{stats.aVerifier} bar-code à vérifier</span> : surplus géré au bar-code
+                {' '}mais le <span className="font-semibold">stock réel + ventes ne couvrent PAS</span> l&apos;excédent → le bar-code
+                {' '}n&apos;explique pas tout, à contrôler (vraie sur-livraison ou erreur de saisie).
+              </p>
+            )}
+          </div>
         </div>
       )}
 
@@ -244,19 +272,20 @@ export default function StockPage() {
               <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-400">Réf.</th>
               <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-400">Désignation</th>
               <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-400">Stock CL</th>
+              <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-400">Floating</th>
+              <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-400">Ventes 90j</th>
               <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-400">Cmd ①</th>
               <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-400">Reçu ③</th>
               <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-400">Papier ②</th>
               <th className="text-center px-4 py-2.5 text-xs font-semibold text-gray-400">Bar-code</th>
-              <th className="text-center px-4 py-2.5 text-xs font-semibold text-gray-400">Reconstr.</th>
               <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-400">État</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-50">
             {loading ? (
-              <tr><td colSpan={9} className="px-4 py-16 text-center text-gray-400 text-sm">Chargement…</td></tr>
+              <tr><td colSpan={10} className="px-4 py-16 text-center text-gray-400 text-sm">Chargement…</td></tr>
             ) : filtered.length === 0 ? (
-              <tr><td colSpan={9} className="px-4 py-16 text-center text-gray-400 text-sm">Aucune référence.</td></tr>
+              <tr><td colSpan={10} className="px-4 py-16 text-center text-gray-400 text-sm">Aucune référence.</td></tr>
             ) : filtered.map(r => {
               const surplus = estSurplus(r);
               const faux = fauxSurplus(r);
@@ -265,8 +294,17 @@ export default function StockPage() {
                   <td className="px-4 py-2.5 font-mono text-xs font-medium text-gray-800">{r.refBrute}</td>
                   <td className="px-4 py-2.5 text-xs text-gray-500 max-w-[260px] truncate" title={r.designation ?? ''}>{r.designation ?? '—'}</td>
                   <td className="px-4 py-2.5 text-right font-mono text-xs font-semibold text-gray-900">
-                    {r.enStock ? fmt(r.stock) : <span className="text-gray-300">absent</span>}
+                    {r.enStock ? (
+                      <span className="inline-flex items-center gap-1 justify-end">
+                        {fmt(r.stock)}
+                        {r.tempsReel
+                          ? <span title="Stock temps réel (fiche produit)" className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" />
+                          : <span title="Snapshot product/state (mis à jour à minuit)" className="w-1.5 h-1.5 rounded-full bg-gray-300 inline-block" />}
+                      </span>
+                    ) : <span className="text-gray-300">absent</span>}
                   </td>
+                  <td className="px-4 py-2.5 text-right font-mono text-xs text-gray-500">{r.floating != null && r.floating > 0 ? fmt(r.floating) : <span className="text-gray-300">—</span>}</td>
+                  <td className="px-4 py-2.5 text-right font-mono text-xs text-gray-500">{r.ventes != null ? fmt(r.ventes) : <span className="text-gray-300">—</span>}</td>
                   <td className="px-4 py-2.5 text-right font-mono text-xs text-gray-600">{fmt(r.cmd)}</td>
                   <td className="px-4 py-2.5 text-right font-mono text-xs text-gray-600">{fmt(r.recu)}</td>
                   <td className={cn('px-4 py-2.5 text-right font-mono text-xs', r.papier > r.recu + 0.001 ? 'text-orange-600 font-semibold' : 'text-gray-600')}>{fmt(r.papier)}</td>
@@ -276,15 +314,14 @@ export default function StockPage() {
                       : r.hasBarcode === false ? <span className="text-gray-300 text-xs">non</span>
                       : <span className="text-gray-300 text-xs">?</span>}
                   </td>
-                  <td className="px-4 py-2.5 text-center">
-                    {r.reconstitueOk === true ? <CheckCircle2 className="w-4 h-4 text-emerald-500 inline" />
-                      : r.reconstitueOk === false ? <span title="Σ entrées − ventes ≠ stock"><AlertTriangle className="w-4 h-4 text-rose-400 inline" /></span>
-                      : <span className="text-gray-300 text-xs">—</span>}
-                  </td>
                   <td className="px-4 py-2.5">
                     {faux ? (
                       <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700">
                         <Barcode className="w-3 h-3" /> Faux surplus (bar-code)
+                      </span>
+                    ) : barcodeNonCouvert(r) ? (
+                      <span title="Stock réel + ventes ne couvrent pas le surplus" className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[11px] font-medium text-rose-700">
+                        <AlertTriangle className="w-3 h-3" /> Bar-code à vérifier
                       </span>
                     ) : surplus ? (
                       <span className="inline-flex items-center gap-1 rounded-full border border-orange-200 bg-orange-50 px-2 py-0.5 text-[11px] font-medium text-orange-700">
