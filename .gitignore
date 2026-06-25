@@ -44,3 +44,6 @@ next-env.d.ts
 backups/
 .claude/worktrees/
 dev_server.log
+
+# Fichiers de travail (imports PDF locaux)
+tmp_import/
