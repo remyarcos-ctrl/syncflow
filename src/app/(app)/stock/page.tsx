@@ -346,8 +346,9 @@ export default function StockPage() {
 
       <p className="text-xs text-gray-400 flex items-center gap-1.5">
         <Boxes className="w-3.5 h-3.5" />
-        Stock CL = état Centralink (product/state, scrapé). Bar-code &amp; reconstruction = mouvements de la fiche article.
-        Le montant exact des entrées bar-code n&apos;est pas fiable (remises à zéro) ; seuls le stock actuel et la présence bar-code le sont.
+        Stock CL : <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500 mx-0.5" /> = temps réel (fiche produit) ·
+        sinon snapshot product/state (minuit). Bar-code, floating &amp; ventes 90j = fiche produit.
+        Le montant exact des entrées bar-code n&apos;est pas fiable (remises à zéro) ; seuls le stock, le floating et la présence bar-code le sont.
       </p>
     </div>
   );
