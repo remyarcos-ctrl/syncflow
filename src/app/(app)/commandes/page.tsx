@@ -93,10 +93,11 @@ function CommandesPageInner() {
     router.replace(`${pathname}?${params.toString()}`);
   }, [searchParams, pathname, router, sortKey, sortDir]);
 
-  // Synchro champs locaux ↔ URL : on suit l'URL quand elle change de l'extérieur (Reset),
-  // et on pousse la saisie locale dans l'URL avec un léger délai (debounce 300 ms).
-  useEffect(() => { setSearchInput(search); }, [search]);
-  useEffect(() => { setFournInput(filtreFournisseur); }, [filtreFournisseur]);
+  // Saisie locale = SEULE source de vérité du champ (réactive au clavier). On la pousse
+  // dans l'URL avec un léger délai (debounce 300 ms). On NE resynchronise PAS depuis l'URL :
+  // la mise à jour async de l'URL arrivait avec l'ancienne valeur et restaurait les
+  // caractères qu'on venait d'effacer → on ne pouvait pas vider le champ. Le Reset vide le
+  // local explicitement (voir bouton Reset).
   useEffect(() => {
     if (searchInput === search) return;
     const t = setTimeout(() => setFilter('q', searchInput), 300);
@@ -370,7 +371,7 @@ function CommandesPageInner() {
           <Package className="w-3.5 h-3.5" /> Reliquats
         </button>
         {(search || filtreStatut !== 'all' || filtreFournisseur || filtreReliquats || annee) && (
-          <button onClick={() => router.replace(pathname)} className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1">
+          <button onClick={() => { setSearchInput(''); setFournInput(''); router.replace(pathname); }} className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1">
             <X className="w-3.5 h-3.5" /> Reset
           </button>
         )}
