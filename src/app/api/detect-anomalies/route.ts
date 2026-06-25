@@ -374,38 +374,56 @@ export async function POST() {
   }
   const cmdPositifParRef = new Map<string, number>();
   const recuPositifParRef = new Map<string, number>();
+  const avoirParRef = new Map<string, number>();
   for (const l of lignesCmd) {
     const k = aliasRef(l.reference_article);
+    const r = Number(l.quantite_receptionnee_reelle) || 0;
     cmdPositifParRef.set(k, (cmdPositifParRef.get(k) ?? 0) + Math.max(0, Number(l.quantite_commandee) || 0));
-    recuPositifParRef.set(k, (recuPositifParRef.get(k) ?? 0) + Math.max(0, Number(l.quantite_receptionnee_reelle) || 0));
+    recuPositifParRef.set(k, (recuPositifParRef.get(k) ?? 0) + Math.max(0, r));
+    if (r < 0) avoirParRef.set(k, (avoirParRef.get(k) ?? 0) + (-r));   // avoir = surplus refusé/rendu
+  }
+  // Saisies sur des BL qu'on n'a PAS scannés (souvent antérieurs à notre 1er scan) : le reçu
+  // commande les compte, mais on n'a pas leur papier en face. On les RAJOUTE pour ne comparer
+  // le papier qu'au reçu DE LA MÊME PÉRIODE (les bons qu'on a scannés). Ça neutralise sans bruit
+  // l'historique d'avant nos scans : un vieux reçu sans papier ne crée plus de faux surplus
+  // (réfs gros volume) ni de fausse compensation (réfs à vrai surplus comme 19803).
+  const saisieHorsScanParRef = new Map<string, number>();
+  for (const s of saisies) {
+    if (beIdByNum.has(nbe(s.numero_be))) continue;                    // saisie sur un BL scanné → on garde
+    const k = aliasRef(s.reference_article);
+    saisieHorsScanParRef.set(k, (saisieHorsScanParRef.get(k) ?? 0) + (Number(s.quantite_recue) || 0));
   }
   for (const [k, info] of papierTotParRef) {
     if (!refsCommandees.has(k)) continue;                  // hors-commande/SAV → traité ailleurs
     if (facteurConditionnement(info.desig) > 1) continue;  // conditionnement → géré par BE (unités)
     const pap = info.qte;
-    const recu = recuPositifParRef.get(k) ?? 0;
+    const recuCmd = recuPositifParRef.get(k) ?? 0;
     const cmd = cmdPositifParRef.get(k) ?? 0;
-    const ecart = pap - recu;
-    if (ecart < 0.5) continue;                             // reçu couvre le papier → rien
+    const avoir = avoirParRef.get(k) ?? 0;
+    const horsScan = saisieHorsScanParRef.get(k) ?? 0;
+    const recu = Math.max(0, recuCmd - horsScan);          // reçu sur NOS bons (hors saisies de bons non scannés)
+    const ecart = pap - recu - avoir;                      // surplus livré, ni reçu ni rendu
+    if (ecart < 0.5) continue;                             // tout réceptionné/rendu sur la période → rien
     if (seen.has(key('pointage', info.beId, k, 'sur-livraison'))) continue;
-    const toutSolde = recu >= cmd - 0.001;                 // plus de commande ouverte pour cette réf
+    const toutSolde = recuCmd >= cmd - 0.001;              // plus de commande ouverte pour cette réf
+    const detail = `papier ${pap}, reçu ${recu}${avoir > 0 ? `, avoir ${avoir}` : ''}`;
     if (toutSolde) {
       nouvelles.push({
         origine: 'pointage', destinataire: 'Colombi', type_exception: 'sur-livraison',
         be_id: info.beId, reference_article: k,
-        motif: `Surplus Colombi ${k} : papier (déclaré) ${pap} > reçu/saisi ${recu}, et toutes les commandes sont soldées (commandé ${cmd}) → ${ecart.toFixed(0)} livré(s) en plus jamais saisi(s) → à régulariser`,
+        motif: `Surplus Colombi ${k} : ${ecart.toFixed(0)} livré(s) en plus jamais saisi(s) ni rendu(s) (${detail}, toutes commandes soldées) → à régulariser`,
         valeur_attendue: pap, valeur_obtenue: recu, ecart: -ecart,
         statut_exception: 'ouverte', niveau_priorite: 'moyenne',
-        suggestion_action_ia: `Surplus Colombi à régulariser : ${k} déclaré ${pap} sur les BL, ${recu} réceptionné/saisi, commandes déjà toutes soldées (${cmd}) → ${ecart.toFixed(0)} en trop sans commande pour les recevoir. Action : créer une commande de régule (avec le n° de BL dans « Bon de Livraison ») pour les encaisser, ou réclamer/retourner à Colombi.`,
+        suggestion_action_ia: `Surplus Colombi à régulariser : ${k} → ${ecart.toFixed(0)} en trop (${detail}), commandes déjà soldées, aucune ouverte pour les recevoir. Action : commande de régule (avec le n° de BL dans « Bon de Livraison ») pour les encaisser, ou réclamer/retourner à Colombi.`,
       });
     } else {
       nouvelles.push({
         origine: 'pointage', destinataire: 'à vérifier', type_exception: 'sur-livraison',
         be_id: info.beId, reference_article: k,
-        motif: `Écart papier vs reçu ${k} : papier (déclaré) ${pap} > reçu/saisi ${recu}, mais une commande est encore ouverte (commandé ${cmd}) → ${ecart.toFixed(0)} à vérifier (saisie en cours ou sur-déclaration)`,
+        motif: `Écart papier vs reçu ${k} : ${ecart.toFixed(0)} d'écart (${detail}), mais une commande est encore ouverte (commandé ${cmd}) → à vérifier (saisie en cours ou sur-déclaration)`,
         valeur_attendue: pap, valeur_obtenue: recu, ecart: -ecart,
         statut_exception: 'ouverte', niveau_priorite: 'moyenne',
-        suggestion_action_ia: `À vérifier ${k} : papier ${pap}, reçu/saisi ${recu}, commande encore ouverte (${cmd}). Soit la log n'a pas fini de saisir, soit Colombi a sur-déclaré → vérifier la facture avant de payer.`,
+        suggestion_action_ia: `À vérifier ${k} : ${detail}, et une commande reste ouverte (commandé ${cmd}). Soit la log n'a pas fini de saisir, soit Colombi a sur-déclaré → vérifier la facture avant de payer.`,
       });
     }
   }
