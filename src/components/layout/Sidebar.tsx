@@ -5,7 +5,7 @@ import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard, Mail, Package, FileText,
   Link2, AlertTriangle, ClipboardList, Building2, Settings,
-  TrendingUp, X, Upload, Bell, Receipt, Bot, GitCompare, Coins, ScanLine, ShieldCheck, PackageCheck, ShoppingCart
+  TrendingUp, X, Upload, Bell, Receipt, Bot, GitCompare, Coins, ScanLine, ShieldCheck, PackageCheck, ShoppingCart, Boxes
 } from 'lucide-react';
 import { cn } from '@/utils';
 
@@ -24,6 +24,7 @@ const navGroups = [
       { label: 'BE à scanner',     href: '/be-a-scanner',        icon: ScanLine },
       { label: 'Contrôle réception', href: '/controle-reception', icon: PackageCheck },
       { label: 'Rappro. pointage', href: '/rapprochement-pointage', icon: GitCompare },
+      { label: 'Stock Centralink', href: '/stock',               icon: Boxes },
       { label: 'Import PDF',       href: '/import',              icon: Upload },
       { label: 'Coûts Claude',     href: '/couts-claude',        icon: Coins },
     ],
