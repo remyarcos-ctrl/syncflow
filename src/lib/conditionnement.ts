@@ -4,7 +4,11 @@
 
 export function facteurConditionnement(designation: string | null | undefined): number {
   const d = String(designation ?? '').toUpperCase();
-  const m = d.match(/[X×*]\s*(\d{2,})|PAR\s+(\d+)|LOT\s+DE\s+(\d+)|BO[IÎ]TE\s+DE\s+(\d+)/);
+  // ⚠ Ne PAS confondre une spec d'optique « <grossissement>X<objectif> » (4X32, 3-9X40,
+  // 1X22 d'une lunette/point rouge) avec un conditionnement vrac (« C50 X50 », « X500 »).
+  // On exige donc que le X ne soit PAS précédé d'un chiffre (le grossissement de l'optique) :
+  // « 4X32 » → ignoré (lunette) ; « C50 X50 », « X500 » → lus (X précédé d'un espace/lettre).
+  const m = d.match(/(?<!\d)[X×*]\s*(\d{2,})|PAR\s+(\d+)|LOT\s+DE\s+(\d+)|BO[IÎ]TE\s+DE\s+(\d+)/);
   if (!m) return 1;
   const n = parseInt(m[1] ?? m[2] ?? m[3] ?? m[4] ?? '1', 10);
   return n > 1 && n <= 100000 ? n : 1;
