@@ -263,6 +263,13 @@ export async function POST(req: Request) {
     const mois = Number(m[1]);
     return mois > 12 || mois === 0;
   };
+  // Signature d'un BE = année + séquence (on IGNORE le mois) : un BE invalide (mois > 12)
+  // est le typo de son jumeau de même signature. Ex. BE-25-13-0787 ≡ BE-25-12-0787 (250787).
+  // Sert à ne recoller le BE invalide qu'à son vrai BE, pas à tous les manques de la réf.
+  const beSignature = (n: string | null | undefined): string | null => {
+    const m = String(n ?? '').toUpperCase().match(/BE-?(\d{2})-?\d{2}-?(\d+)/);
+    return m ? m[1] + m[2] : null;
+  };
   const saisieSousBeInvalide = new Map<string, { numBe: string; qte: number }[]>();
   for (const s of saisies) {
     if (!beInvalide(s.numero_be)) continue;
@@ -339,8 +346,12 @@ export async function POST(req: Request) {
         // CAS LOG (cas 1/2) : réf en manque MAIS saisie sous un n° de BE INVALIDE (mois > 12)
         // → erreur de n° de BE de la log (la marchandise est saisie, juste mal numérotée),
         // PAS un surplus → à recoller sur le bon BE.
-        const sousInvalide = saisieSousBeInvalide.get(k);
-        if (sousInvalide && sousInvalide.length) {
+        // ⚠ On ne rattache le BE invalide qu'à son JUMEAU (même signature année+séquence) :
+        // BE-25-13-0787 ne recolle que sur BE-25-12-0787, pas sur un autre manque de la réf
+        // (sinon, avec plusieurs manques, on génère une anomalie redondante mal aiguillée).
+        const sig = beSignature(numBe);
+        const sousInvalide = (saisieSousBeInvalide.get(k) ?? []).filter((x) => sig && beSignature(x.numBe) === sig);
+        if (sousInvalide.length) {
           if (seen.has(key('pointage', beId, k, 'sur-saisie log'))) continue;
           const besInv = [...new Set(sousInvalide.map((x) => x.numBe))].slice(0, 3).join(', ');
           nouvelles.push({
