@@ -10,7 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { cn } from '@/utils';
 import { PackageCheck, ChevronRight } from 'lucide-react';
 import {
-  controlerReceptions, estAnomalieReception, verdictReceptionLabel,
+  controlerReceptions, estAnomalieReception, verdictReceptionLabel, aliasKey,
   type LigneBeInput, type LigneCmdInput, type VerdictReception,
 } from '@/lib/reception';
 
@@ -97,6 +97,19 @@ export default function ControleReceptionPage() {
     refetchInterval: 15000,
   });
 
+  // Réfs de pièces détachées SAV : un « hors-commande » sur une réf SAV n'est PAS un
+  // problème Colombi (pièce livrée hors commande, hors Centralink) → on l'affiche comme SAV.
+  const { data: refsSav = [] } = useQuery<{ reference_article: string }[]>({
+    queryKey: ['cr_refs_sav'],
+    queryFn: async () => {
+      const { data } = await supabase.from('refs_sav').select('reference_article');
+      return data ?? [];
+    },
+    refetchInterval: 30000,
+  });
+  const savSet = useMemo(() => new Set(refsSav.map((r) => aliasKey(r.reference_article))), [refsSav]);
+  const estSav = (ref: string) => savSet.has(aliasKey(ref));
+
   const qc = useQueryClient();
   const classer = useMutation({
     mutationFn: async (v: { be_id: string; reference_article: string; classement: string }) => {
@@ -122,14 +135,16 @@ export default function ControleReceptionPage() {
   );
 
   const kpis = useMemo(() => {
-    const k = { lignes: controles.length, sur: 0, hors: 0, aClasser: 0 };
+    const k = { lignes: controles.length, sur: 0, hors: 0, sav: 0, aClasser: 0 };
     for (const c of controles) {
+      const sav = c.verdict === 'hors_commande' && estSav(c.ref);
       if (c.verdict === 'sur_livraison') k.sur++;
-      else if (c.verdict === 'hors_commande') k.hors++;
-      if (estAnomalieReception(c.verdict) && (classementByKey.get(`${c.be_id}|${c.ref}`) ?? 'à classer') === 'à classer') k.aClasser++;
+      else if (c.verdict === 'hors_commande') { if (sav) k.sav++; else k.hors++; }
+      // SAV connu = déjà classé (pièce détachée), pas dans le backlog « à classer »
+      if (estAnomalieReception(c.verdict) && !sav && (classementByKey.get(`${c.be_id}|${c.ref}`) ?? 'à classer') === 'à classer') k.aClasser++;
     }
     return k;
-  }, [controles, classementByKey]);
+  }, [controles, classementByKey, savSet]);
 
   const lignes = useMemo(() => {
     const arr = filtre === 'anomalies' ? controles.filter((c) => estAnomalieReception(c.verdict)) : controles;
@@ -151,7 +166,7 @@ export default function ControleReceptionPage() {
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <Card><CardHeader className="pb-1"><CardTitle className="text-xs font-medium text-gray-500">Sur-livraisons</CardTitle></CardHeader><CardContent><p className="text-2xl font-semibold text-orange-600">{kpis.sur}</p></CardContent></Card>
-        <Card><CardHeader className="pb-1"><CardTitle className="text-xs font-medium text-gray-500">Hors commande</CardTitle></CardHeader><CardContent><p className="text-2xl font-semibold text-red-600">{kpis.hors}</p></CardContent></Card>
+        <Card><CardHeader className="pb-1"><CardTitle className="text-xs font-medium text-gray-500">Hors commande</CardTitle></CardHeader><CardContent><p className="text-2xl font-semibold text-red-600">{kpis.hors}{kpis.sav > 0 && <span className="text-xs font-medium text-gray-400"> +{kpis.sav} SAV</span>}</p></CardContent></Card>
         <Card><CardHeader className="pb-1"><CardTitle className="text-xs font-medium text-gray-500">À classer</CardTitle></CardHeader><CardContent><p className={cn('text-2xl font-semibold', kpis.aClasser ? 'text-indigo-600' : 'text-emerald-600')}>{kpis.aClasser}</p></CardContent></Card>
         <Card><CardHeader className="pb-1"><CardTitle className="text-xs font-medium text-gray-500">Lignes de BE</CardTitle></CardHeader><CardContent><p className="text-2xl font-semibold text-gray-900">{kpis.lignes}</p></CardContent></Card>
       </div>
@@ -200,8 +215,9 @@ export default function ControleReceptionPage() {
                 <tbody>
                   {lignes.map((c, i) => {
                     const be = beById.get(c.be_id);
+                    const sav = c.verdict === 'hors_commande' && estSav(c.ref);
                     return (
-                      <tr key={c.be_id + '|' + c.ref + '|' + i} className={cn('border-b border-gray-50', rowCls[c.verdict])}>
+                      <tr key={c.be_id + '|' + c.ref + '|' + i} className={cn('border-b border-gray-50', sav ? 'bg-gray-50/40' : rowCls[c.verdict])}>
                         <td className="px-3 py-2.5 whitespace-nowrap">
                           <Link href={`/be-receptions/${c.be_id}`} className="text-indigo-600 hover:underline font-medium">{be?.numero_be ?? '—'}</Link>
                         </td>
@@ -217,8 +233,8 @@ export default function ControleReceptionPage() {
                           </span>
                         </td>
                         <td className="px-3 py-2.5">
-                          <span className={cn('inline-block px-1.5 py-0.5 rounded text-xs font-medium', badge[c.verdict])}>
-                            {verdictReceptionLabel[c.verdict]}
+                          <span className={cn('inline-block px-1.5 py-0.5 rounded text-xs font-medium', sav ? 'bg-gray-100 text-gray-600' : badge[c.verdict])}>
+                            {sav ? 'Pièce SAV' : verdictReceptionLabel[c.verdict]}
                           </span>
                         </td>
                         <td className="px-3 py-2.5">
