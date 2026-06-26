@@ -2,6 +2,8 @@
 // Répond à : « Colombi a-t-il livré ce qu'on a commandé, en quantité ? »
 // Utilisable dès l'import du BE, avant que la log saisisse.
 
+import { REF_ALIAS_CL_TO_COLOMBI } from './ref-alias';
+
 export const normalizeRef = (s: string | null | undefined): string => {
   // Certaines commandes Centralink préfixent le code article par un n° de
   // commande : « 1404/16928A ». Le vrai code article (celui du BE papier) est
@@ -9,6 +11,21 @@ export const normalizeRef = (s: string | null | undefined): string => {
   const raw = String(s ?? '');
   const seg = raw.includes('/') ? raw.slice(raw.lastIndexOf('/') + 1) : raw;
   return seg.toUpperCase().replace(/O/g, '0').replace(/[^A-Z0-9]/g, '');
+};
+
+// Alias code Centralink → code Colombi (billes/plombs vrac, LTL…). Le BL papier (②)
+// utilise le code Colombi, les commandes (①, scrapées de CL) le code Centralink :
+// sans traduction, un produit au double codage remonte en faux « hors commande ».
+// On normalise tout vers le code Colombi avant de rapprocher.
+const ALIAS_NORM = new Map(
+  Object.entries(REF_ALIAS_CL_TO_COLOMBI).map(([cl, col]) => [
+    String(cl).toUpperCase().replace(/O/g, '0').replace(/[^A-Z0-9]/g, ''),
+    String(col).toUpperCase().replace(/O/g, '0').replace(/[^A-Z0-9]/g, ''),
+  ]),
+);
+export const aliasKey = (s: string | null | undefined): string => {
+  const k = normalizeRef(s);
+  return ALIAS_NORM.get(k) ?? k;
 };
 
 export type VerdictReception = 'conforme' | 'sur_livraison' | 'hors_commande';
@@ -56,7 +73,7 @@ export function controlerReceptions(
   // → la log a saisi la réception plusieurs fois. On retient le « vrai » reçu (= commandé).
   const parRef = new Map<string, { cmd: number; recu: number; retour: number; dbl: boolean }>();
   for (const l of lignesCmd) {
-    const k = normalizeRef(l.reference_article);
+    const k = aliasKey(l.reference_article);
     if (!k) continue;
     const cur = parRef.get(k) ?? { cmd: 0, recu: 0, retour: 0, dbl: false };
     const q = Number(l.quantite_commandee) || 0;
@@ -77,7 +94,7 @@ export function controlerReceptions(
   }
 
   return lignesBe.map((l) => {
-    const k = normalizeRef(l.reference_article);
+    const k = aliasKey(l.reference_article);
     const agg = parRef.get(k);
     // Sur-livraison NETTE : reçu (corrigé des doubles) − commandé − retours.
     const surLiv = agg ? agg.recu - agg.cmd - agg.retour : 0;
