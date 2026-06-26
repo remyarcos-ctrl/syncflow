@@ -217,6 +217,63 @@ export default function ExceptionsPage() {
   const estRefSav = (ref: string | null | undefined) =>
     refsSav.has(String(ref ?? '').toUpperCase().replace(/O/g, '0').replace(/[^A-Z0-9]/g, ''));
 
+  // ── Réconciliation PAR RÉFÉRENCE (s'affiche quand on filtre sur une réf) ──────
+  // L'appli FAIT REMONTER l'écart sans l'expliquer : elle pose les chiffres bruts
+  // (commandé ① / reçu papier ② par bon / saisi ③ par bon / avoir / régule) et signale
+  // ce qui ne balance pas. L'instruction reste à l'humain.
+  const refRecon = filterRef.trim();
+  type ReconRow = { be: string; papier: number; saisi: number };
+  type Recon = {
+    ref: string; cmde: number; papier: number; saisi: number; avoir: number; regule: number;
+    ecart: number; couvert: number; aInstruire: number; parBe: ReconRow[];
+    avoirs: string[]; regules: string[];
+  };
+  const { data: recon } = useQuery<Recon | null>({
+    queryKey: ['recon-ref', refRecon],
+    enabled: refRecon.length >= 2,
+    staleTime: 20000,
+    queryFn: async () => {
+      const norm = (s: string | null | undefined) => String(s ?? '').toUpperCase().replace(/O/g, '0').replace(/[^A-Z0-9]/g, '');
+      const target = norm(refRecon);
+      const beNum = (v: unknown): string => Array.isArray(v) ? (v[0] as { numero_be?: string })?.numero_be ?? '' : (v as { numero_be?: string })?.numero_be ?? '';
+      const [beR, saR, cmR] = await Promise.all([
+        supabase.from('lignes_be').select('reference_article, quantite_receptionnee, hors_systeme, be_receptions(numero_be)').ilike('reference_article', `%${refRecon}%`),
+        supabase.from('saisies_cl').select('reference_article, numero_be, quantite_recue').ilike('reference_article', `%${refRecon}%`),
+        supabase.from('lignes_commande').select('reference_article, quantite_commandee, quantite_receptionnee_reelle, commandes(numero_commande_interne, bls_centralink)').ilike('reference_article', `%${refRecon}%`),
+      ]);
+      const beRows = (beR.data ?? []).filter((l) => norm(l.reference_article) === target && !l.hors_systeme);
+      const saRows = (saR.data ?? []).filter((s) => norm(s.reference_article) === target);
+      const cmRows = (cmR.data ?? []).filter((l) => norm(l.reference_article) === target);
+      if (!beRows.length && !saRows.length && !cmRows.length) return null;
+      // papier & saisi par bon
+      const papByBe = new Map<string, number>();
+      for (const l of beRows) { const b = beNum(l.be_receptions); if (b) papByBe.set(b, (papByBe.get(b) ?? 0) + (Number(l.quantite_receptionnee) || 0)); }
+      const saiByBe = new Map<string, number>();
+      for (const s of saRows) { const b = s.numero_be ?? '?'; saiByBe.set(b, (saiByBe.get(b) ?? 0) + (Number(s.quantite_recue) || 0)); }
+      const bes = [...new Set([...papByBe.keys(), ...saiByBe.keys()])].sort();
+      const parBe = bes.map((be) => ({ be, papier: papByBe.get(be) ?? 0, saisi: saiByBe.get(be) ?? 0 }));
+      // commandé / avoir / régule
+      let cmde = 0, avoir = 0, regule = 0; const avoirs: string[] = [], regules: string[] = [];
+      for (const l of cmRows) {
+        const c = Array.isArray(l.commandes) ? l.commandes[0] : l.commandes;
+        const q = Number(l.quantite_commandee) || 0;
+        const r = Number(l.quantite_receptionnee_reelle) || 0;
+        if (q > 0) cmde += q;
+        if (r < 0) { avoir += -r; if (c?.numero_commande_interne) avoirs.push(c.numero_commande_interne); }
+        else if (c && /surplus/i.test(c.bls_centralink ?? '')) { regule += r; if (c.numero_commande_interne) regules.push(c.numero_commande_interne); }
+      }
+      const papier = [...papByBe.values()].reduce((a, b) => a + b, 0);
+      const saisi = [...saiByBe.values()].reduce((a, b) => a + b, 0);
+      // Repère fiable, même période : reçu papier ② vs saisi ③. L'écart est « absorbé »
+      // par les avoirs (retours crédités) + régules (surplus gardé régularisé). Ce qui reste
+      // non couvert = à instruire (sur-livraison à réclamer en avoir, ou saisie à compléter).
+      const ecart = papier - saisi;
+      const couvert = avoir + regule;
+      const aInstruire = Math.max(0, ecart - couvert);
+      return { ref: refRecon.toUpperCase(), cmde, papier, saisi, avoir, regule, ecart, couvert, aInstruire, parBe, avoirs: [...new Set(avoirs)], regules: [...new Set(regules)] };
+    },
+  });
+
   const factureMap = useMemo(() => Object.fromEntries(factures.map(f => [f.id, f])) as Record<string, Pick<Facture, 'id' | 'numero_facture'>>, [factures]);
   const beMap = useMemo(() => Object.fromEntries(bes.map(b => [b.id, b])) as Record<string, Pick<BEReception, 'id' | 'numero_be' | 'date_bl'>>, [bes]);
   // La log saisit en ~1 semaine (2 max). Au-delà de 2 semaines après la date du BE,
@@ -708,6 +765,69 @@ export default function ExceptionsPage() {
         <Button variant="outline" size="sm" onClick={exportCsv}>⬇ Exporter (CSV{filterDest !== 'all' ? ` · ${filterDest}` : ''})</Button>
         <Button variant="outline" size="sm" onClick={exportPdf}>🖨 Exporter (PDF)</Button>
       </div>
+
+      {/* Réconciliation de la référence filtrée — fait remonter l'écart, ne l'explique pas */}
+      {recon && (
+        <div className="mb-4 rounded-xl border border-indigo-200 bg-indigo-50/40 p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <span className="font-mono font-bold text-sm text-gray-900">{recon.ref}</span>
+            <span className="text-xs text-gray-500">— réconciliation</span>
+          </div>
+          {/* Écart global reçu ② vs saisi ③, et sa couverture (avoir/régule) */}
+          {recon.ecart > 0 ? (
+            recon.aInstruire > 0 ? (
+              <div className="mb-2 rounded-lg border border-orange-300 bg-orange-50 px-3 py-2 text-sm text-orange-800">
+                🟠 <b>{recon.aInstruire} reçu(s) non expliqué(s)</b> (reçu papier {recon.papier} / saisi {recon.saisi}
+                {recon.couvert > 0 && <>, dont {recon.couvert} couvert</>}) →
+                <b> à instruire</b> : sur-livraison à réclamer (<b>demander un avoir</b>) ou saisie à compléter.
+              </div>
+            ) : (
+              <div className="mb-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+                ✅ Écart de {recon.ecart} (reçu {recon.papier} / saisi {recon.saisi}) <b>couvert</b>
+                {recon.avoirs.length > 0 && <> par avoir {recon.avoirs.join(', ')}</>}
+                {recon.regules.length > 0 && <> par régule {recon.regules.join(', ')}</>} — rien à réclamer.
+              </div>
+            )
+          ) : recon.ecart < 0 ? (
+            <div className="mb-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              🔴 Saisi &gt; reçu de {-recon.ecart} (saisi {recon.saisi} / reçu papier {recon.papier}) → sur-saisie probable (doublon / mauvais n° de BE).
+            </div>
+          ) : null}
+          {/* Détail par bon : papier ② vs saisi ③ */}
+          <div className="overflow-x-auto rounded-lg border border-gray-100 bg-white">
+            <table className="w-full text-xs">
+              <thead><tr className="bg-gray-50 text-gray-500">
+                <th className="text-left px-3 py-1.5 font-medium">Bon (BE)</th>
+                <th className="text-right px-3 py-1.5 font-medium">② reçu papier</th>
+                <th className="text-right px-3 py-1.5 font-medium">③ saisi CL</th>
+                <th className="text-right px-3 py-1.5 font-medium">écart</th>
+              </tr></thead>
+              <tbody>
+                {recon.parBe.map((r) => {
+                  const e = r.papier - r.saisi;
+                  return (
+                    <tr key={r.be} className={cn('border-t border-gray-50', e !== 0 && 'bg-amber-50/40')}>
+                      <td className="px-3 py-1.5 font-mono">{r.be}</td>
+                      <td className="px-3 py-1.5 text-right tabular-nums">{r.papier || '—'}</td>
+                      <td className="px-3 py-1.5 text-right tabular-nums">{r.saisi || '—'}</td>
+                      <td className={cn('px-3 py-1.5 text-right tabular-nums font-semibold', e > 0 ? 'text-amber-700' : e < 0 ? 'text-red-600' : 'text-gray-300')}>
+                        {e === 0 ? '0' : e > 0 ? `+${e}` : e}
+                      </td>
+                    </tr>
+                  );
+                })}
+                <tr className="border-t-2 border-gray-200 font-semibold bg-gray-50/60">
+                  <td className="px-3 py-1.5">Totaux — commandé ① {recon.cmde}{recon.avoir > 0 ? ` · avoir ${recon.avoir}` : ''}{recon.regule > 0 ? ` · régule ${recon.regule}` : ''}</td>
+                  <td className="px-3 py-1.5 text-right tabular-nums">{recon.papier}</td>
+                  <td className="px-3 py-1.5 text-right tabular-nums">{recon.saisi}</td>
+                  <td className={cn('px-3 py-1.5 text-right tabular-nums', recon.papier - recon.saisi !== 0 ? 'text-amber-700' : 'text-gray-300')}>{recon.papier - recon.saisi > 0 ? '+' : ''}{recon.papier - recon.saisi}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p className="text-[11px] text-gray-400 mt-1.5">② = reçu sur tes BL · ③ = saisi par la log dans Centralink · écart par bon = à pointer. L'appli pose les chiffres ; à toi d'instruire.</p>
+        </div>
+      )}
 
       {/* Table */}
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
