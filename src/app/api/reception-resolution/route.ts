@@ -10,7 +10,7 @@ function adminSb() {
 
 const CLASSEMENTS = [
   'à classer', 'pièce détachée', 'sur-livraison Colombi',
-  'hors-commande Colombi', 'commandé autrement', 'résolu',
+  'hors-commande Colombi', 'commandé autrement', 'surplus vu DH (gardé)', 'résolu',
 ].map(s => s.normalize('NFC'));
 
 // POST : étiqueter une anomalie de réception (BE + référence)
