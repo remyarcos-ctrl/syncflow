@@ -224,7 +224,7 @@ export default function ExceptionsPage() {
   const refRecon = filterRef.trim();
   type ReconRow = { be: string; papier: number; saisi: number };
   type Recon = {
-    ref: string; cmde: number; papier: number; saisi: number; avoir: number; regule: number;
+    ref: string; cmde: number; papier: number; saisi: number; saisiAilleurs: number; avoir: number; regule: number;
     ecart: number; couvert: number; aInstruire: number; parBe: ReconRow[];
     avoirs: string[]; regules: string[];
   };
@@ -263,14 +263,18 @@ export default function ExceptionsPage() {
         else if (c && /surplus/i.test(c.bls_centralink ?? '')) { regule += r; if (c.numero_commande_interne) regules.push(c.numero_commande_interne); }
       }
       const papier = [...papByBe.values()].reduce((a, b) => a + b, 0);
-      const saisi = [...saiByBe.values()].reduce((a, b) => a + b, 0);
-      // Repère fiable, même période : reçu papier ② vs saisi ③. L'écart est « absorbé »
-      // par les avoirs (retours crédités) + régules (surplus gardé régularisé). Ce qui reste
-      // non couvert = à instruire (sur-livraison à réclamer en avoir, ou saisie à compléter).
+      // On NE compte dans l'écart que les saisies sur TES bons (ceux qui ont du papier).
+      // Les saisies sous des bons sans papier scanné (mauvais n° récent, OU vieux bon hors
+      // période) sont montrées à part — sinon un vieux bon fausse le total (ex. EK0003 : 100
+      // saisis sous un bon de janvier 2025 → faux « saisi > reçu »).
+      const saisi = parBe.filter((r) => r.papier > 0).reduce((a, r) => a + r.saisi, 0);
+      const saisiAilleurs = parBe.filter((r) => r.papier === 0).reduce((a, r) => a + r.saisi, 0);
+      // Repère fiable, même période : reçu papier ② vs saisi ③ (sur tes bons). L'écart est
+      // « absorbé » par les avoirs (retours crédités) + régules (surplus gardé régularisé).
       const ecart = papier - saisi;
       const couvert = avoir + regule;
       const aInstruire = Math.max(0, ecart - couvert);
-      return { ref: refRecon.toUpperCase(), cmde, papier, saisi, avoir, regule, ecart, couvert, aInstruire, parBe, avoirs: [...new Set(avoirs)], regules: [...new Set(regules)] };
+      return { ref: refRecon.toUpperCase(), cmde, papier, saisi, saisiAilleurs, avoir, regule, ecart, couvert, aInstruire, parBe, avoirs: [...new Set(avoirs)], regules: [...new Set(regules)] };
     },
   });
 
@@ -825,7 +829,10 @@ export default function ExceptionsPage() {
               </tbody>
             </table>
           </div>
-          <p className="text-[11px] text-gray-400 mt-1.5">② = reçu sur tes BL · ③ = saisi par la log dans Centralink · écart par bon = à pointer. L'appli pose les chiffres ; à toi d'instruire.</p>
+          {recon.saisiAilleurs > 0 && (
+            <p className="text-[11px] text-amber-600 mt-1.5">⚠ {recon.saisiAilleurs} saisi(s) sous un bon SANS papier scanné (mauvais n° récent à recoller, ou vieux bon hors période) — pas comptés dans l'écart ci-dessus.</p>
+          )}
+          <p className="text-[11px] text-gray-400 mt-1">② = reçu sur tes BL · ③ = saisi par la log dans Centralink (sur tes bons) · écart par bon = à pointer. L'appli pose les chiffres ; à toi d'instruire.</p>
         </div>
       )}
 
