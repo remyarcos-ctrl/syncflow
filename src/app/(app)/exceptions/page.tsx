@@ -518,13 +518,15 @@ export default function ExceptionsPage() {
   const [listeModal, setListeModal] = useState<{ titre: string; texte: string; mailto?: string } | null>(null);
   const [detecting, setDetecting] = useState(false);
 
-  const detecter = async () => {
+  const detecter = async (refresh = false) => {
     setDetecting(true);
     try {
-      const r = await fetch('/api/detect-anomalies', { method: 'POST' });
-      const d = await r.json() as { inserees?: number; detail?: Record<string, number>; error?: string };
+      const r = await fetch(`/api/detect-anomalies${refresh ? '?refresh=1' : ''}`, { method: 'POST' });
+      const d = await r.json() as { inserees?: number; purgees?: number; detail?: Record<string, number>; error?: string };
       if (d.error) { toast.error(d.error); return; }
-      toast.success(`${d.inserees} nouvelle(s) · réception ${d.detail?.réception ?? 0}, pointage ${d.detail?.pointage ?? 0}, facturation ${d.detail?.facturation ?? 0}`);
+      toast.success(refresh
+        ? `Rafraîchi : ${d.purgees ?? 0} corrigée(s) clôturée(s) · ${d.inserees ?? 0} nouvelle(s)`
+        : `${d.inserees} nouvelle(s) · réception ${d.detail?.réception ?? 0}, pointage ${d.detail?.pointage ?? 0}, facturation ${d.detail?.facturation ?? 0}`);
       qc.invalidateQueries({ queryKey: ['exceptions'] });
       qc.invalidateQueries({ queryKey: ['exceptions-kpis'] });
     } catch {
@@ -633,7 +635,14 @@ export default function ExceptionsPage() {
 
       {/* Actions */}
       <div className="flex flex-wrap gap-2 mb-4">
-        <Button size="sm" disabled={detecting} onClick={detecter}>{detecting ? 'Détection…' : '🔄 Détecter les anomalies'}</Button>
+        <Button size="sm" disabled={detecting} onClick={() => detecter(true)}
+          title="Clôt les anomalies corrigées à la source (qui ne se reproduisent plus) et redétecte sur les données fraîches. Les anomalies travaillées (commentées/assignées) sont préservées.">
+          {detecting ? 'En cours…' : '♻️ Rafraîchir (clore les corrigées)'}
+        </Button>
+        <Button variant="outline" size="sm" disabled={detecting} onClick={() => detecter(false)}
+          title="Ajoute les nouvelles anomalies sans rien clôturer.">
+          {detecting ? '…' : '🔄 Détecter (ajout seul)'}
+        </Button>
         <Button variant="outline" size="sm" onClick={() => genererListe('Colombi')}>📩 Réclamer à Colombi</Button>
         <Button variant="outline" size="sm" onClick={() => genererListe('log')}>🛠 Demander correction à la log</Button>
         <Button variant="outline" size="sm" onClick={exportCsv}>⬇ Exporter (CSV{filterDest !== 'all' ? ` · ${filterDest}` : ''})</Button>

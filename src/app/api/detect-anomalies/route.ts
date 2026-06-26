@@ -52,8 +52,24 @@ interface NewExc {
 
 // POST : détecte les anomalies des 3 contrôles et les déverse dans `exceptions`
 // (idempotent : clé = origine | ancre (be/facture) | réf | type).
-export async function POST() {
+export async function POST(req: Request) {
   const sb = adminSb();
+
+  // Mode « rafraîchir » (?refresh=1) : avant de re-détecter, on purge les anomalies
+  // VIERGES (ouvertes, sans aucun travail humain : ni commentaire, ni assignation, ni
+  // résolution). Effet : une anomalie corrigée à la source (la log corrige Centralink,
+  // Colombi fait un avoir…) ne se reproduit pas à la détection → elle disparaît toute
+  // seule. SÛR : les vierges encore valides sont immédiatement recréées par la détection
+  // ci-dessous ; les anomalies travaillées ne sont JAMAIS touchées.
+  let purgees = 0;
+  if (new URL(req.url).searchParams.get('refresh')) {
+    const { data: del } = await sb.from('exceptions').delete()
+      .eq('statut_exception', 'ouverte')
+      .is('commentaire', null).is('resolu_par', null).is('assigne_a', null)
+      .is('echeance', null).is('date_resolution', null)
+      .select('id');
+    purgees = del?.length ?? 0;
+  }
 
   const [lbeR, lcR, saisR, beR, lfR, factR, cmdR, exR, savR, resR] = await Promise.all([
     selectAll(() => sb.from('lignes_be').select('be_id, reference_article, designation, quantite_receptionnee, hors_systeme, statut_retour')),
@@ -613,6 +629,7 @@ export async function POST() {
   const parOrigine = (o: string) => nouvelles.filter((n) => n.origine === o).length;
   return NextResponse.json({
     inserees: inserted,
+    purgees,
     detail: { réception: parOrigine('réception'), pointage: parOrigine('pointage'), facturation: parOrigine('facturation') },
     deja_presentes: seen.size,
   });
