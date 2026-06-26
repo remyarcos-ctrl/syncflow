@@ -48,6 +48,7 @@ interface NewExc {
   motif: string; valeur_attendue: number | null; valeur_obtenue: number | null; ecart: number | null;
   statut_exception: string; niveau_priorite: string;
   suggestion_action_ia?: string | null;
+  commentaire?: string | null;
 }
 
 // POST : détecte les anomalies des 3 contrôles et les déverse dans `exceptions`
@@ -95,6 +96,16 @@ export async function POST(req: Request) {
     (resR.data ?? [])
       .filter((r) => SAV_CLASSEMENTS.has(String(r.classement)))
       .map((r) => `${r.be_id}|${normalizeRef(r.reference_article)}`),
+  );
+  // Classements « disposés » sur la fiche Contrôle réception = la ligne a été TRAITÉE par
+  // l'humain → l'anomalie de réception correspondante naît directement « résolue » (elle
+  // quitte la liste active du Centre). Connecte les 2 écrans : classer = résoudre.
+  // (Les classements « … Colombi » restent OUVERTS : ce sont des actions confirmées à mener.)
+  const DISPOSE_CLASSEMENTS = new Set(['pièce détachée', 'SAV / échange', 'surplus vu DH (gardé)', 'commandé autrement', 'résolu']);
+  const disposeClasse = new Map<string, string>(
+    (resR.data ?? [])
+      .filter((r) => DISPOSE_CLASSEMENTS.has(String(r.classement)))
+      .map((r) => [`${r.be_id}|${normalizeRef(r.reference_article)}`, String(r.classement)]),
   );
 
   const lignesBe = lbeR.data ?? [];
@@ -147,6 +158,10 @@ export async function POST(req: Request) {
     const destinataire = c.verdict === 'sur_livraison'
       ? (versLog ? 'log' : 'Colombi')
       : (estSav ? 'SAV' : 'Colombi');
+    // Ligne déjà DISPOSÉE sur la fiche Contrôle réception (SAV/échange, gardé, commandé
+    // autrement, résolu…) → l'anomalie naît « résolue » (classer = résoudre, les 2 écrans
+    // sont connectés). Ne s'applique pas aux classements « … Colombi » (actions à mener).
+    const dispose = disposeClasse.get(`${c.be_id}|${normalizeRef(c.ref)}`);
     nouvelles.push({
       origine: 'réception', destinataire, type_exception: type, be_id: c.be_id, reference_article: c.ref,
       motif: c.verdict === 'sur_livraison'
@@ -160,7 +175,8 @@ export async function POST(req: Request) {
           : `Hors commande ${c.ref} : reçu ${c.qteBe}, jamais commandé`,
       valeur_attendue: c.verdict === 'sur_livraison' ? c.totalCommande : null,
       valeur_obtenue: c.verdict === 'sur_livraison' ? c.totalRecu : c.qteBe,
-      ecart, statut_exception: 'ouverte', niveau_priorite: estSav ? 'faible' : 'moyenne',
+      ecart, statut_exception: dispose ? 'résolue' : 'ouverte', niveau_priorite: estSav ? 'faible' : 'moyenne',
+      commentaire: dispose ? `Classé « ${dispose} » sur la fiche Contrôle réception` : undefined,
       suggestion_action_ia: c.verdict === 'sur_livraison'
         ? versLog
           ? `Corriger dans Centralink : la saisie ${c.ref} (${c.totalRecu}) dépasse le commandé (${c.totalCommande}) sans que le BE papier (${bePapierRef}) le confirme → ramener le reçu au réel (${bePapierRef || c.totalCommande}).`
