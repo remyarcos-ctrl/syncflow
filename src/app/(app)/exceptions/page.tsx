@@ -64,6 +64,20 @@ const PRIORITE_CONFIG: Record<string, string> = {
   critique: 'bg-red-200 text-red-800 border-red-300',
 };
 
+// Libellés CONTEXTUELS des deux valeurs (attendu/obtenu) selon le type d'anomalie :
+// « obtenu » ne veut pas dire la même chose pour un pointage (saisi ③) que pour une
+// facturation (facturé) ou une réception (reçu). On nomme chaque colonne explicitement.
+const valLabels = (e: { type_exception?: string; origine?: string | null }): { att: string; obt: string } => {
+  const t = String(e.type_exception ?? '');
+  const o = e.origine ?? '';
+  if (t === 'sur-saisie log') return { att: 'BL papier ②', obt: 'saisi CL ③' };
+  if (t === 'sur-livraison') return o === 'réception' ? { att: 'commandé ①', obt: 'reçu ③' } : { att: 'BL papier ②', obt: 'saisi CL ③' };
+  if (t === 'hors-commande') return { att: '', obt: 'reçu' };
+  if (t === 'surfacturation quantité') return { att: 'reçu ③', obt: 'facturé ④' };
+  if (t === 'écart prix') return { att: 'prix commande', obt: 'prix facturé' };
+  return { att: 'attendu', obt: 'obtenu' };
+};
+
 export default function ExceptionsPage() {
   const qc = useQueryClient();
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -74,6 +88,7 @@ export default function ExceptionsPage() {
   const [filterOrigine, setFilterOrigine] = useState('all');
   const [filterDest, setFilterDest] = useState('all');
   const [filterBe, setFilterBe] = useState('all');
+  const [filterRef, setFilterRef] = useState('');
   const [showDetail, setShowDetail] = useState<Exc | null>(null);
   const [comment, setComment] = useState('');
   const [assigne, setAssigne] = useState('');
@@ -81,7 +96,7 @@ export default function ExceptionsPage() {
   const [updating, setUpdating] = useState<string | null>(null);
 
   const { data: exceptionsResult = { exceptions: [], total: 0 }, isError } = useQuery<{ exceptions: Exc[]; total: number }>({
-    queryKey: ['exceptions', page, filterStatut, filterType, filterPriorite, filterOrigine, filterDest, filterBe],
+    queryKey: ['exceptions', page, filterStatut, filterType, filterPriorite, filterOrigine, filterDest, filterBe, filterRef],
     queryFn: async () => {
       let query = supabase
         .from('exceptions')
@@ -99,6 +114,7 @@ export default function ExceptionsPage() {
       // (sinon « Colombi ET log » = requête impossible → 0 résultat).
       if (filterDest !== 'all' && filterStatut !== 'à analyser') query = query.eq('destinataire', filterDest);
       if (filterBe !== 'all') query = query.eq('be_id', filterBe);
+      if (filterRef.trim()) query = query.ilike('reference_article', `%${filterRef.trim()}%`);
 
       query = query.range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1);
 
@@ -665,6 +681,16 @@ export default function ExceptionsPage() {
           <option value="all">Tous les BE</option>
           {beOptions.map(o => <option key={o.id} value={o.id}>{o.numero}</option>)}
         </select>
+        <div className="relative">
+          <input value={filterRef} onChange={e => { setFilterRef(e.target.value); setPage(1); }}
+            placeholder="Réf. (ex. REM003)…"
+            className="h-9 w-44 rounded-lg border border-gray-200 bg-white pl-8 pr-3 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+          <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-sm">🔍</span>
+          {filterRef && (
+            <button onClick={() => { setFilterRef(''); setPage(1); }}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-xs">✕</button>
+          )}
+        </div>
       </div>
 
       {/* Actions */}
@@ -727,11 +753,11 @@ export default function ExceptionsPage() {
                     {exc.reference_article && <div className="font-mono font-bold text-sm text-gray-900 mb-0.5">{exc.reference_article}</div>}
                     {(exc.valeur_attendue != null || exc.valeur_obtenue != null) && (
                       <div className="mb-1 flex flex-wrap items-center gap-1">
-                        {exc.valeur_attendue != null && (
-                          <span className="px-1.5 py-0.5 rounded bg-gray-100 text-xs text-gray-600">attendu <span className="font-bold text-sm text-gray-900">{exc.valeur_attendue}</span></span>
+                        {exc.valeur_attendue != null && valLabels(exc).att && (
+                          <span className="px-1.5 py-0.5 rounded bg-gray-100 text-xs text-gray-600">{valLabels(exc).att} <span className="font-bold text-sm text-gray-900">{exc.valeur_attendue}</span></span>
                         )}
                         {exc.valeur_obtenue != null && (
-                          <span className="px-1.5 py-0.5 rounded bg-gray-100 text-xs text-gray-600">obtenu <span className="font-bold text-sm text-gray-900">{exc.valeur_obtenue}</span></span>
+                          <span className="px-1.5 py-0.5 rounded bg-gray-100 text-xs text-gray-600">{valLabels(exc).obt} <span className="font-bold text-sm text-gray-900">{exc.valeur_obtenue}</span></span>
                         )}
                         {exc.ecart != null && Number(exc.ecart) !== 0 && (
                           <span className={cn('px-1.5 py-0.5 rounded text-xs font-semibold', Number(exc.ecart) > 0 ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-700')}>écart <span className="font-bold text-sm">{Number(exc.ecart) > 0 ? '+' : ''}{exc.ecart}</span></span>
@@ -898,15 +924,15 @@ export default function ExceptionsPage() {
                 {showDetail.reference_article && <div className="font-mono font-bold text-lg text-gray-900">{showDetail.reference_article}</div>}
                 {(showDetail.valeur_attendue != null || showDetail.valeur_obtenue != null) && (
                   <div className="flex flex-wrap items-center gap-2 mt-1.5">
-                    {showDetail.valeur_attendue != null && (
+                    {showDetail.valeur_attendue != null && valLabels(showDetail).att && (
                       <div className="px-2.5 py-1 rounded-lg bg-gray-100 text-center min-w-[64px]">
-                        <div className="text-[10px] uppercase tracking-wide text-gray-400 leading-none">Attendu</div>
+                        <div className="text-[10px] uppercase tracking-wide text-gray-400 leading-none">{valLabels(showDetail).att}</div>
                         <div className="font-bold text-base text-gray-900 leading-tight">{showDetail.valeur_attendue}</div>
                       </div>
                     )}
                     {showDetail.valeur_obtenue != null && (
                       <div className="px-2.5 py-1 rounded-lg bg-gray-100 text-center min-w-[64px]">
-                        <div className="text-[10px] uppercase tracking-wide text-gray-400 leading-none">Obtenu</div>
+                        <div className="text-[10px] uppercase tracking-wide text-gray-400 leading-none">{valLabels(showDetail).obt}</div>
                         <div className="font-bold text-base text-gray-900 leading-tight">{showDetail.valeur_obtenue}</div>
                       </div>
                     )}
