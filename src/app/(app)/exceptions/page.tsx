@@ -391,6 +391,40 @@ export default function ExceptionsPage() {
     }
   };
 
+  // Classer une anomalie de RÉCEPTION directement depuis le Centre (écrit le classement
+  // sur la fiche réception ET résout l'anomalie si le classement est « disposé »).
+  const CLASSEMENTS_RECEPTION = ['pièce détachée', 'SAV / échange', 'commandé autrement', 'surplus vu DH (gardé)', 'sur-livraison Colombi', 'hors-commande Colombi', 'résolu'];
+  const DISPOSE_CLASSEMENTS = new Set(['pièce détachée', 'SAV / échange', 'commandé autrement', 'surplus vu DH (gardé)', 'résolu']);
+  const classerReception = async (exc: Exc, classement: string) => {
+    if (!exc.be_id || !exc.reference_article) return;
+    setUpdating(exc.id);
+    try {
+      const r = await fetch('/api/reception-resolution', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ be_id: exc.be_id, reference_article: exc.reference_article, classement }),
+      });
+      if (!r.ok) throw new Error((await r.json()).error ?? 'Erreur');
+      // Classement « disposé » → on résout l'anomalie ; « … Colombi » → reste à traiter.
+      if (DISPOSE_CLASSEMENTS.has(classement)) {
+        await supabase.from('exceptions').update({
+          statut_exception: 'résolue',
+          commentaire: `Classé « ${classement} » (fiche Contrôle réception)${comment ? ' — ' + comment : ''}`,
+        }).eq('id', exc.id);
+      } else {
+        await supabase.from('exceptions').update({ commentaire: `Classé « ${classement} »${comment ? ' — ' + comment : ''}` }).eq('id', exc.id);
+      }
+      qc.invalidateQueries({ queryKey: ['exceptions'] });
+      qc.invalidateQueries({ queryKey: ['exceptions-kpis'] });
+      qc.invalidateQueries({ queryKey: ['refs-sav'] });
+      setShowDetail(null); setComment('');
+      toast.success(`Classé « ${classement} »${DISPOSE_CLASSEMENTS.has(classement) ? ' — résolu' : ''}`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Erreur');
+    } finally {
+      setUpdating(null);
+    }
+  };
+
   const ouvrirDetail = (exc: Exc) => {
     setShowDetail(exc);
     setComment(exc.commentaire ?? '');
@@ -950,9 +984,24 @@ export default function ExceptionsPage() {
                 <p className="text-sm text-indigo-800">{showDetail.suggestion_ia}</p>
               </div>
             )}
+            {showDetail.origine === 'réception' && showDetail.be_id && ['ouverte', 'en cours'].includes(showDetail.statut_exception) && (
+              <div className="mb-2 p-2.5 rounded-lg bg-indigo-50/60 border border-indigo-100">
+                <p className="text-xs font-medium text-indigo-700 mb-1.5">📂 Classer cette réception</p>
+                <select defaultValue="" disabled={updating === showDetail.id}
+                  onChange={e => { if (e.target.value) classerReception(showDetail, e.target.value); }}
+                  className="w-full border border-indigo-200 rounded-lg p-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                  <option value="" disabled>— Choisir un classement —</option>
+                  {CLASSEMENTS_RECEPTION.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+                <p className="text-[11px] text-gray-500 mt-1">
+                  SAV/échange · pièce détachée · commandé autrement · surplus gardé · résolu → <b>classe et résout</b> (quitte la liste).
+                  « … Colombi » → reste à traiter (réclamation).
+                </p>
+              </div>
+            )}
             {(showDetail.type_exception as string) === 'sur-livraison' && ['ouverte', 'en cours'].includes(showDetail.statut_exception) && (
               <div className="mb-2 p-2 rounded-lg bg-gray-50 border border-gray-100">
-                <p className="text-xs text-gray-500 mb-1.5">Décision sur le surplus :</p>
+                <p className="text-xs text-gray-500 mb-1.5">Décision rapide sur le surplus :</p>
                 <div className="flex gap-2">
                   <Button variant="outline" size="sm" className="flex-1 border-emerald-200 text-emerald-700 hover:bg-emerald-50"
                     disabled={updating === showDetail.id} onClick={() => disposerSurLiv(showDetail, 'garde')}>
