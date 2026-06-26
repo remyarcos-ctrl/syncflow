@@ -430,6 +430,14 @@ export async function POST(req: Request) {
     const k = kk.slice(kk.indexOf('|') + 1);
     saisieScanParRef.set(k, (saisieScanParRef.get(k) ?? 0) + v);
   }
+  // Les saisies sous un n° de BE INVALIDE (typo mois>12, ex. BE-25-13-0787) sont NOS
+  // marchandises, juste mal numérotées (déjà signalées par l'anomalie « recoller » §3c).
+  // On les compte donc comme saisies ici, sinon le surplus par-réf re-compte le même manque
+  // → double anomalie sur le même écart (cf. CR00002 : 16 du typo affiché 2×).
+  for (const [k, arr] of saisieSousBeInvalide) {
+    const q = arr.reduce((s, x) => s + (Number(x.qte) || 0), 0);
+    if (q > 0) saisieScanParRef.set(k, (saisieScanParRef.get(k) ?? 0) + q);
+  }
   // Commandes de RÉGULE (note « Surplus … » dans bls_centralink) = surplus gardé régularisé.
   const reguleCmdIds = new Set(
     (cmdR.data ?? []).filter((c) => /surplus/i.test(c.bls_centralink || '')).map((c) => c.id),
