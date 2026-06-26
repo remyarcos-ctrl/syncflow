@@ -450,6 +450,12 @@ export async function POST() {
   // saisie au mauvais numéro de BE. Souvent la marchandise est bien reçue (juste mal
   // numérotée), donc pas un risque financier — mais une saisie SALE à nettoyer pour
   // garder CL propre. Piste (#12) : les BE où cette réf est sur papier avec un déficit.
+  //
+  // ⚠ On ne lève l'anomalie QUE si la réf a un déficit papier ailleurs (= une vraie
+  // cible de re-dispatch). Sans déficit nulle part, l'« orphelin » est un faux signal :
+  // c'est typiquement un article à FORT DÉBIT (pistolets/revolvers en gros lots) que la
+  // log booke sous plein de n° de BE — dont on ne scanne qu'une fraction des BL. Rien à
+  // recoller → pas une erreur récupérable, on n'invente pas l'anomalie.
   const deficitParRef = new Map<string, { numBe: string; manque: number }[]>();
   for (const [beId, refs] of lbByBe) {
     for (const [k, info] of refs) {
@@ -472,14 +478,15 @@ export async function POST() {
     if (!numBe) continue;
     if (seen.has(key('pointage', beId, k, 'sur-saisie log'))) continue;
     const pistes = (deficitParRef.get(k) ?? []).filter((p) => p.numBe !== numBe);
-    const pistesStr = pistes.length ? pistes.slice(0, 3).map((p) => `${p.numBe} (manque ${p.manque.toFixed(0)})`).join(', ') : null;
+    if (!pistes.length) continue;                       // orphelin sans déficit ailleurs → faux signal (fort débit), on n'invente pas
+    const pistesStr = pistes.slice(0, 3).map((p) => `${p.numBe} (manque ${p.manque.toFixed(0)})`).join(', ');
     nouvelles.push({
       origine: 'pointage', destinataire: 'log', type_exception: 'sur-saisie log',
       be_id: beId, reference_article: k,
-      motif: `Saisi hors papier : ${sv.toFixed(0)} ${k} saisis sous ${numBe}, mais la réf est ABSENTE de son BL papier → probable erreur de n° de BE`,
+      motif: `Saisi hors papier : ${sv.toFixed(0)} ${k} saisis sous ${numBe}, mais la réf est ABSENTE de son BL papier → probable erreur de n° de BE (manque ailleurs : ${pistesStr})`,
       valeur_attendue: 0, valeur_obtenue: sv, ecart: sv,
       statut_exception: 'ouverte', niveau_priorite: 'moyenne',
-      suggestion_action_ia: `Corriger dans Centralink : ${sv.toFixed(0)} ${k} saisis sous ${numBe} alors qu'absents de son BL papier (mauvais n° de BE).${pistesStr ? ` Cette réf manque sur : ${pistesStr} → re-saisir sous le bon n° de BE.` : ` Vérifier sous quel BL elle a réellement été livrée.`}`,
+      suggestion_action_ia: `Corriger dans Centralink : ${sv.toFixed(0)} ${k} saisis sous ${numBe} alors qu'absents de son BL papier (mauvais n° de BE). Cette réf manque sur : ${pistesStr} → re-saisir sous le bon n° de BE.`,
     });
   }
 
