@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
 
-const CLASSEMENTS = ['à classer', 'pièce détachée', 'sur-livraison Colombi', 'hors-commande Colombi', 'commandé autrement', 'surplus vu DH (gardé)', 'résolu'];
+const CLASSEMENTS = ['à classer', 'pièce détachée', 'SAV / échange', 'sur-livraison Colombi', 'hors-commande Colombi', 'commandé autrement', 'surplus vu DH (gardé)', 'résolu'];
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { cn } from '@/utils';
 import { PackageCheck, ChevronRight } from 'lucide-react';

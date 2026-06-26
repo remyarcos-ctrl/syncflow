@@ -55,7 +55,7 @@ interface NewExc {
 export async function POST() {
   const sb = adminSb();
 
-  const [lbeR, lcR, saisR, beR, lfR, factR, cmdR, exR, savR] = await Promise.all([
+  const [lbeR, lcR, saisR, beR, lfR, factR, cmdR, exR, savR, resR] = await Promise.all([
     selectAll(() => sb.from('lignes_be').select('be_id, reference_article, designation, quantite_receptionnee, hors_systeme, statut_retour')),
     selectAll(() => sb.from('lignes_commande').select('commande_id, reference_article, quantite_commandee, pu_commande, quantite_receptionnee_reelle, quantite_restante_a_recevoir')),
     selectAll(() => sb.from('saisies_cl').select('numero_be, reference_article, quantite_recue, commande_ref')),
@@ -66,10 +66,20 @@ export async function POST() {
     selectAll(() => sb.from('exceptions').select('be_id, facture_id, commande_id, reference_article, type_exception, origine')
       .in('origine', ['réception', 'pointage', 'facturation'])),
     selectAll(() => sb.from('refs_sav').select('reference_article')),
+    selectAll(() => sb.from('reception_resolution').select('be_id, reference_article, classement')),
   ]);
 
   // Réfs de pièces détachées SAV (livrées hors commande, hors Centralink).
   const refsSav = new Set((savR.data ?? []).map((r) => normalizeRef(r.reference_article)));
+  // Classements de la fiche Contrôle réception qui valent SAV pour CETTE ligne (be|réf) :
+  // permet de traiter une livraison comme SAV/échange SANS mettre un produit vendable
+  // dans refs_sav (qui masquerait toute future erreur Colombi sur ce produit).
+  const SAV_CLASSEMENTS = new Set(['pièce détachée', 'SAV / échange']);
+  const savClasse = new Set(
+    (resR.data ?? [])
+      .filter((r) => SAV_CLASSEMENTS.has(String(r.classement)))
+      .map((r) => `${r.be_id}|${normalizeRef(r.reference_article)}`),
+  );
 
   const lignesBe = lbeR.data ?? [];
   const lignesCmd = (lcR.data ?? []);
@@ -105,8 +115,10 @@ export async function POST() {
     recepVus.add(dk);
     if (seen.has(key('réception', c.be_id, c.ref, type))) continue;
     const ecart = c.verdict === 'sur_livraison' ? c.surLivraisonNette : c.qteBe;
-    // Pièce détachée SAV connue, livrée hors commande → destinataire SAV (info, pas Colombi).
-    const estSav = c.verdict === 'hors_commande' && refsSav.has(normalizeRef(c.ref));
+    // Pièce détachée SAV connue (refs_sav) OU ligne classée SAV/échange sur la fiche →
+    // destinataire SAV (info, pas Colombi).
+    const estSav = c.verdict === 'hors_commande'
+      && (refsSav.has(normalizeRef(c.ref)) || savClasse.has(`${c.be_id}|${normalizeRef(c.ref)}`));
     // Sur-livraison : reçu (saisie Centralink) > commandé. Deux causes possibles,
     // INDISCERNABLES côté Centralink (« Attendu négatif » identique). Seul le BE papier ()
     // tranche : si le papier confirme le surplus → Colombi a vraiment sur-livré ; si le

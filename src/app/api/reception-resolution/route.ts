@@ -9,7 +9,7 @@ function adminSb() {
 }
 
 const CLASSEMENTS = [
-  'à classer', 'pièce détachée', 'sur-livraison Colombi',
+  'à classer', 'pièce détachée', 'SAV / échange', 'sur-livraison Colombi',
   'hors-commande Colombi', 'commandé autrement', 'surplus vu DH (gardé)', 'résolu',
 ].map(s => s.normalize('NFC'));
 
