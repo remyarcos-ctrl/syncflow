@@ -22,4 +22,5 @@ export const REF_ALIAS_CL_TO_COLOMBI: Record<string, string> = {
   'GNQ-PLOMBS-PLATS-55': 'PO0005',  // plombs plats C5.5 (x250)
   'GNQ-VERROU-PONTET': '2001',      // verrou de pontet à clé
   'LTLPK03': 'LTL014',              // pistolet LTL Bravo 1.50 : code CL ≠ code BL Colombi
+  '490041': '490042',               // revolver Crosman Vigilante : code CL 490041 ≠ code BL 490042
 };
