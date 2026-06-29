@@ -10,7 +10,6 @@ import Pagination from '@/components/shared/Pagination';
 import { Button } from '@/components/ui/button';
 import { formatDate } from '@/utils';
 import { REF_ALIAS_CL_TO_COLOMBI } from '@/lib/ref-alias';
-import { ouvrirBonVerification } from '@/lib/bonVerification';
 import { AlertTriangle, TrendingUp, Package, FileText, CheckCircle2, Eye, XCircle, RotateCcw } from 'lucide-react';
 import { toast } from 'sonner';
 import type { Exception, Facture, BEReception, Commande } from '@/types';
@@ -91,7 +90,6 @@ export default function ExceptionsPage() {
   const [filterDest, setFilterDest] = useState('all');
   const [filterBe, setFilterBe] = useState('all');
   const [filterRef, setFilterRef] = useState('');
-  const [genBon, setGenBon] = useState(false);
   // Deep-link depuis le « Bon de vérification » (/stock) : /exceptions?ref=XXX → pré-filtre la réf
   // (le panneau de réconciliation s'affiche aussi, quel que soit le statut de l'anomalie).
   useEffect(() => {
@@ -360,6 +358,25 @@ export default function ExceptionsPage() {
     },
     enabled: !!showDetail?.reference_article && !!detailBeNum,
     staleTime: 30000,
+  });
+
+  // Vérif stock pour CETTE anomalie : emplacement + Dispo/Floating/Réel théo. de la réf,
+  // pour que la vérif physique soit posée sur le cas précis (pas un bouton global en haut).
+  const { data: stockDetail } = useQuery<{ emplacement: string | null; dispo: number | null; floating: number | null; reel: number | null; hasBarcode: boolean | null } | null>({
+    queryKey: ['stock-detail', showDetail?.reference_article],
+    enabled: !!showDetail?.reference_article,
+    staleTime: 30000,
+    queryFn: async () => {
+      const ref = showDetail?.reference_article; if (!ref) return null;
+      const { data } = await supabase.from('stocks_cl')
+        .select('reference_article, emplacement, stock_cl, floating, has_barcode')
+        .ilike('reference_article', `%${ref}%`);
+      const s = (data ?? []).find((r) => normRefEx(r.reference_article) === normRefEx(ref));
+      if (!s) return null;
+      const dispo = s.stock_cl == null ? null : Number(s.stock_cl);
+      const floating = s.floating == null ? null : Number(s.floating);
+      return { emplacement: s.emplacement, dispo, floating, reel: dispo == null ? null : dispo + (floating ?? 0), hasBarcode: s.has_barcode };
+    },
   });
 
   const updateStatut = async (exc: Exc, statut: Exc['statut_exception']) => {
@@ -801,11 +818,6 @@ export default function ExceptionsPage() {
         <Button variant="outline" size="sm" onClick={() => genererListe('log')}>🛠 Demander correction à la log</Button>
         <Button variant="outline" size="sm" onClick={exportCsv}>⬇ Exporter (CSV{filterDest !== 'all' ? ` · ${filterDest}` : ''})</Button>
         <Button variant="outline" size="sm" onClick={exportPdf}>🖨 Exporter (PDF)</Button>
-        <Button variant="outline" size="sm" disabled={genBon}
-          onClick={async () => { setGenBon(true); try { await ouvrirBonVerification(); } finally { setGenBon(false); } }}
-          title="Sort les anomalies actives à vérifier au stock (emplacement, Dispo/Floating/Réel théo.), imprimable et cliquable.">
-          {genBon ? '…' : '📋 Bon de vérification'}
-        </Button>
       </div>
 
       {/* Réconciliation de la référence filtrée — fait remonter l'écart, ne l'explique pas */}
@@ -1135,6 +1147,20 @@ export default function ExceptionsPage() {
                   🛠 Action à mener{showDetail.destinataire ? ` — ${showDetail.destinataire}` : ''}
                 </p>
                 <p className="text-sm text-gray-800">{showDetail.suggestion_action_ia}</p>
+              </div>
+            )}
+            {/* Vérif stock posée SUR ce cas précis : où aller, et combien on devrait trouver. */}
+            {stockDetail && (
+              <div className="mb-3 p-3 rounded-lg border border-sky-200 bg-sky-50 text-xs">
+                <p className="font-semibold text-sky-800 mb-1.5">📍 Vérifier au stock</p>
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                  <span>Emplacement : <b className="font-mono">{stockDetail.emplacement ?? '— non renseigné'}</b></span>
+                  <span className="text-gray-500">Dispo {stockDetail.dispo ?? '—'}</span>
+                  <span className="text-gray-500">Floating {stockDetail.floating ? '+' + stockDetail.floating : '0'}</span>
+                  <span>Réel théo. (D+F) : <b>{stockDetail.reel ?? '—'}</b></span>
+                  {stockDetail.hasBarcode && <span className="text-amber-600">🏷 code-barres</span>}
+                </div>
+                <p className="text-[11px] text-sky-700 mt-1.5">Compter le réel à cet emplacement et comparer au <b>Réel théo.</b> : si ça colle, l&apos;écart vient du canal code-barres (RAS) ; sinon, vrai écart à corriger en CL.</p>
               </div>
             )}
             {detailBeNum && dispatchDetail.length > 0 && (() => {
