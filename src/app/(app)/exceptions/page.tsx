@@ -10,6 +10,7 @@ import Pagination from '@/components/shared/Pagination';
 import { Button } from '@/components/ui/button';
 import { formatDate } from '@/utils';
 import { REF_ALIAS_CL_TO_COLOMBI } from '@/lib/ref-alias';
+import { ouvrirBonVerification } from '@/lib/bonVerification';
 import { AlertTriangle, TrendingUp, Package, FileText, CheckCircle2, Eye, XCircle, RotateCcw } from 'lucide-react';
 import { toast } from 'sonner';
 import type { Exception, Facture, BEReception, Commande } from '@/types';
@@ -90,6 +91,7 @@ export default function ExceptionsPage() {
   const [filterDest, setFilterDest] = useState('all');
   const [filterBe, setFilterBe] = useState('all');
   const [filterRef, setFilterRef] = useState('');
+  const [genBon, setGenBon] = useState(false);
   // Deep-link depuis le « Bon de vérification » (/stock) : /exceptions?ref=XXX → pré-filtre la réf
   // (le panneau de réconciliation s'affiche aussi, quel que soit le statut de l'anomalie).
   useEffect(() => {
@@ -799,6 +801,11 @@ export default function ExceptionsPage() {
         <Button variant="outline" size="sm" onClick={() => genererListe('log')}>🛠 Demander correction à la log</Button>
         <Button variant="outline" size="sm" onClick={exportCsv}>⬇ Exporter (CSV{filterDest !== 'all' ? ` · ${filterDest}` : ''})</Button>
         <Button variant="outline" size="sm" onClick={exportPdf}>🖨 Exporter (PDF)</Button>
+        <Button variant="outline" size="sm" disabled={genBon}
+          onClick={async () => { setGenBon(true); try { await ouvrirBonVerification(); } finally { setGenBon(false); } }}
+          title="Sort les anomalies actives à vérifier au stock (emplacement, Dispo/Floating/Réel théo.), imprimable et cliquable.">
+          {genBon ? '…' : '📋 Bon de vérification'}
+        </Button>
       </div>
 
       {/* Réconciliation de la référence filtrée — fait remonter l'écart, ne l'explique pas */}
