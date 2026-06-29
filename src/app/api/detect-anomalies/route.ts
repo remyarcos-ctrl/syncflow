@@ -665,7 +665,9 @@ export async function POST(req: Request) {
     // entrée scan créerait un stock négatif. Mais ce n'est pas non plus blanchi : un vrai
     // doublon de commande gonfle le reçu (facture). On annote + on baisse la priorité (haute →
     // moyenne) pour que l'humain vérifie le canal AVANT de corriger. (faire remonter, pas gommer)
-    if (n.type_exception === 'sur-saisie log') {
+    // Le sous-type « SAV saisi sous commande » est indépendant du canal stock : le SAV ne doit
+    // pas compter dans le reçu, code-barres ou pas → on le laisse tel quel (reste haute).
+    if (n.type_exception === 'sur-saisie log' && !/^SAV saisi sous commande/.test(n.motif)) {
       if (n.niveau_priorite === 'haute') n.niveau_priorite = 'moyenne';
       n.motif += ` · 🏷 BAR-CODE : réf gérée au code-barres (stock CL ${src} ${stock}, ventes 90j ${ventes}) → le surplus ${S.toFixed(0)} peut être une entrée scan, PAS forcément un doublon de commande`;
       n.suggestion_action_ia = `⚠ ${n.reference_article} est géré au code-barres : AVANT de réduire la saisie, vérifier sur la fiche Centralink si le surplus ${S.toFixed(0)} est une vraie double-saisie de commande (→ corriger, impacte la facture) ou une entrée code-barres (→ NE PAS toucher, sinon stock négatif). Recouper avec le stock dispo / les mouvements.`;
