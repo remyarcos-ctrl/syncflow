@@ -633,28 +633,43 @@ export async function POST(req: Request) {
     if (k && !stockByRef.has(k)) stockByRef.set(k, s as never);
   }
   for (const n of nouvelles) {
-    // Couvre les sur-livraisons §1 (reçu > commandé, dest. Colombi) ET les surplus §3c-bis
-    // par-réf (papier ② > pointage ③), qu'ils soient « Colombi » (cmde soldée) ou « à vérifier »
-    // (cmde ouverte). Cas CR00031 : papier non pointé mais entré au code-barres → faux manque.
-    if (n.type_exception !== 'sur-livraison') continue;
-    if (n.destinataire !== 'Colombi' && n.destinataire !== 'à vérifier') continue;
     const st = stockByRef.get(normalizeRef(n.reference_article));
     if (!st || st.has_barcode !== true) continue;            // pas de bar-code connu → inchangé
-    const S = Math.abs(Number(n.ecart) || 0);                // ampleur du surplus
+    const S = Math.abs(Number(n.ecart) || 0);                // ampleur de l'écart
     const stock = Number(st.stock_cl) || 0;
     const ventes = Number(st.ventes) || 0;
     const src = st.stock_source === 'fiche' ? 'temps réel' : 'snapshot minuit';
     const couvre = stock + ventes >= S - 0.001;
-    if (couvre) {
-      n.destinataire = 'à vérifier';
-      n.niveau_priorite = 'faible';
-      n.motif += ` · 🏷 BAR-CODE : stock CL ${src} ${stock} + ventes 90j ${ventes} couvrent le surplus ${S.toFixed(0)} → faux surplus probable (déjà en stock), PAS une réclamation Colombi`;
-      n.suggestion_action_ia = `Faux surplus probable : ${n.reference_article} est géré au bar-code (rentré en stock sans réception) et le stock CL ${src} (${stock}) + ventes 90j (${ventes}) couvrent les ${S.toFixed(0)} en trop → NE PAS réclamer à Colombi ; vérifier au stock (écran Stock Centralink).`;
-    } else {
-      n.destinataire = 'à vérifier';
-      n.niveau_priorite = 'moyenne';
-      n.motif += ` · ⚠ BAR-CODE mais stock CL ${src} (${stock}) + ventes 90j (${ventes}) NE couvrent PAS le surplus ${S.toFixed(0)} → à vérifier : vraie sur-livraison Colombi ou erreur de saisie`;
-      n.suggestion_action_ia = `À vérifier ${n.reference_article} : géré au bar-code, mais le stock CL ${src} (${stock}) + ventes 90j (${ventes}) n'expliquent pas les ${S.toFixed(0)} en trop → contrôler physiquement (vraie sur-livraison Colombi à réclamer, ou erreur de saisie à corriger).`;
+
+    // (a) SUR-LIVRAISON §1 (reçu > commandé, dest. Colombi) + surplus §3c-bis par-réf
+    // (papier ② > pointage ③), « Colombi » (cmde soldée) ou « à vérifier » (cmde ouverte).
+    // Cas CR00031 : papier non pointé mais entré au code-barres → faux manque.
+    if (n.type_exception === 'sur-livraison' && (n.destinataire === 'Colombi' || n.destinataire === 'à vérifier')) {
+      if (couvre) {
+        n.destinataire = 'à vérifier';
+        n.niveau_priorite = 'faible';
+        n.motif += ` · 🏷 BAR-CODE : stock CL ${src} ${stock} + ventes 90j ${ventes} couvrent le surplus ${S.toFixed(0)} → faux surplus probable (déjà en stock), PAS une réclamation Colombi`;
+        n.suggestion_action_ia = `Faux surplus probable : ${n.reference_article} est géré au bar-code (rentré en stock sans réception) et le stock CL ${src} (${stock}) + ventes 90j (${ventes}) couvrent les ${S.toFixed(0)} en trop → NE PAS réclamer à Colombi ; vérifier au stock (écran Stock Centralink).`;
+      } else {
+        n.destinataire = 'à vérifier';
+        n.niveau_priorite = 'moyenne';
+        n.motif += ` · ⚠ BAR-CODE mais stock CL ${src} (${stock}) + ventes 90j (${ventes}) NE couvrent PAS le surplus ${S.toFixed(0)} → à vérifier : vraie sur-livraison Colombi ou erreur de saisie`;
+        n.suggestion_action_ia = `À vérifier ${n.reference_article} : géré au bar-code, mais le stock CL ${src} (${stock}) + ventes 90j (${ventes}) n'expliquent pas les ${S.toFixed(0)} en trop → contrôler physiquement (vraie sur-livraison Colombi à réclamer, ou erreur de saisie à corriger).`;
+      }
+      continue;
+    }
+
+    // (b) SUR-SAISIE LOG (saisi ③ > papier ②) sur réf au code-barres : le surplus peut venir
+    // d'une ENTRÉE SCAN (2 canaux : réception + code-barres), pas forcément un doublon de
+    // commande à supprimer (cf 17655). ⚠ On NE conclut PAS « supprime » : supprimer une vraie
+    // entrée scan créerait un stock négatif. Mais ce n'est pas non plus blanchi : un vrai
+    // doublon de commande gonfle le reçu (facture). On annote + on baisse la priorité (haute →
+    // moyenne) pour que l'humain vérifie le canal AVANT de corriger. (faire remonter, pas gommer)
+    if (n.type_exception === 'sur-saisie log') {
+      if (n.niveau_priorite === 'haute') n.niveau_priorite = 'moyenne';
+      n.motif += ` · 🏷 BAR-CODE : réf gérée au code-barres (stock CL ${src} ${stock}, ventes 90j ${ventes}) → le surplus ${S.toFixed(0)} peut être une entrée scan, PAS forcément un doublon de commande`;
+      n.suggestion_action_ia = `⚠ ${n.reference_article} est géré au code-barres : AVANT de réduire la saisie, vérifier sur la fiche Centralink si le surplus ${S.toFixed(0)} est une vraie double-saisie de commande (→ corriger, impacte la facture) ou une entrée code-barres (→ NE PAS toucher, sinon stock négatif). Recouper avec le stock dispo / les mouvements.`;
+      continue;
     }
   }
 
