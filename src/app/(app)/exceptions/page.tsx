@@ -90,6 +90,13 @@ export default function ExceptionsPage() {
   const [filterDest, setFilterDest] = useState('all');
   const [filterBe, setFilterBe] = useState('all');
   const [filterRef, setFilterRef] = useState('');
+  // Deep-link depuis le « Bon de vérification » (/stock) : /exceptions?ref=XXX → pré-filtre la réf
+  // (le panneau de réconciliation s'affiche aussi, quel que soit le statut de l'anomalie).
+  useEffect(() => {
+    const r = new URLSearchParams(window.location.search).get('ref');
+    if (r) setFilterRef(r);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [showDetail, setShowDetail] = useState<Exc | null>(null);
   const [comment, setComment] = useState('');
   const [assigne, setAssigne] = useState('');
