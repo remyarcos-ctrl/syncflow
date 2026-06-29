@@ -633,7 +633,11 @@ export async function POST(req: Request) {
     if (k && !stockByRef.has(k)) stockByRef.set(k, s as never);
   }
   for (const n of nouvelles) {
-    if (n.type_exception !== 'sur-livraison' || n.destinataire !== 'Colombi') continue;
+    // Couvre les sur-livraisons §1 (reçu > commandé, dest. Colombi) ET les surplus §3c-bis
+    // par-réf (papier ② > pointage ③), qu'ils soient « Colombi » (cmde soldée) ou « à vérifier »
+    // (cmde ouverte). Cas CR00031 : papier non pointé mais entré au code-barres → faux manque.
+    if (n.type_exception !== 'sur-livraison') continue;
+    if (n.destinataire !== 'Colombi' && n.destinataire !== 'à vérifier') continue;
     const st = stockByRef.get(normalizeRef(n.reference_article));
     if (!st || st.has_barcode !== true) continue;            // pas de bar-code connu → inchangé
     const S = Math.abs(Number(n.ecart) || 0);                // ampleur du surplus

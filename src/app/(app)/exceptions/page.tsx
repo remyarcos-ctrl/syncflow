@@ -227,6 +227,7 @@ export default function ExceptionsPage() {
   type Recon = {
     ref: string; cmde: number; papier: number; saisi: number; saisiAilleurs: number; avoir: number; regule: number;
     ecart: number; couvert: number; aInstruire: number; parBe: ReconRow[];
+    hasBarcode: boolean; stockCl: number | null; entreesBarcode: number;
     avoirs: string[]; regules: string[];
   };
   const { data: recon } = useQuery<Recon | null>({
@@ -250,14 +251,16 @@ export default function ExceptionsPage() {
       }
       const orClause = [...codesRaw].map((c) => `reference_article.ilike.%${c}%`).join(',');
       const beNum = (v: unknown): string => Array.isArray(v) ? (v[0] as { numero_be?: string })?.numero_be ?? '' : (v as { numero_be?: string })?.numero_be ?? '';
-      const [beR, saR, cmR] = await Promise.all([
+      const [beR, saR, cmR, stR] = await Promise.all([
         supabase.from('lignes_be').select('reference_article, quantite_receptionnee, hors_systeme, be_receptions(numero_be)').or(orClause),
         supabase.from('saisies_cl').select('reference_article, numero_be, quantite_recue').or(orClause),
         supabase.from('lignes_commande').select('reference_article, quantite_commandee, quantite_receptionnee_reelle, commandes(numero_commande_interne, bls_centralink)').or(orClause),
+        supabase.from('stocks_cl').select('reference_article, stock_cl, has_barcode, entrees_barcode').or(orClause),
       ]);
       const beRows = (beR.data ?? []).filter((l) => equiv.has(norm(l.reference_article)) && !l.hors_systeme);
       const saRows = (saR.data ?? []).filter((s) => equiv.has(norm(s.reference_article)));
       const cmRows = (cmR.data ?? []).filter((l) => equiv.has(norm(l.reference_article)));
+      const stRows = (stR.data ?? []).filter((s) => equiv.has(norm(s.reference_article)));
       if (!beRows.length && !saRows.length && !cmRows.length) return null;
       // papier & saisi par bon
       const papByBe = new Map<string, number>();
@@ -288,7 +291,14 @@ export default function ExceptionsPage() {
       const ecart = papier - saisi;
       const couvert = avoir + regule;
       const aInstruire = Math.max(0, ecart - couvert);
-      return { ref: refRecon.toUpperCase(), cmde, papier, saisi, saisiAilleurs, avoir, regule, ecart, couvert, aInstruire, parBe, avoirs: [...new Set(avoirs)], regules: [...new Set(regules)] };
+      // Croisement stock : le pointage ③ n'est PAS le seul canal d'entrée. Si la réf est
+      // gérée au code-barres (has_barcode), un reçu papier non pointé peut être entré par
+      // scan (cf CR00031 : 6 du BE-0075 jamais pointés mais en stock). On ne crie donc pas
+      // au manque — fiables = présence code-barres + stock fiche (PAS la reconstitution).
+      const hasBarcode = stRows.some((s) => s.has_barcode === true);
+      const stockCl = stRows.length ? stRows.reduce((a, s) => a + (Number(s.stock_cl) || 0), 0) : null;
+      const entreesBarcode = stRows.reduce((a, s) => a + (Number(s.entrees_barcode) || 0), 0);
+      return { ref: refRecon.toUpperCase(), cmde, papier, saisi, saisiAilleurs, avoir, regule, ecart, couvert, aInstruire, hasBarcode, stockCl, entreesBarcode, parBe, avoirs: [...new Set(avoirs)], regules: [...new Set(regules)] };
     },
   });
 
@@ -794,11 +804,20 @@ export default function ExceptionsPage() {
           {/* Écart global reçu ② vs saisi ③, et sa couverture (avoir/régule) */}
           {recon.ecart > 0 ? (
             recon.aInstruire > 0 ? (
-              <div className="mb-2 rounded-lg border border-orange-300 bg-orange-50 px-3 py-2 text-sm text-orange-800">
-                🟠 <b>{recon.aInstruire} reçu(s) non expliqué(s)</b> (reçu papier {recon.papier} / saisi {recon.saisi}
-                {recon.couvert > 0 && <>, dont {recon.couvert} couvert</>}) →
-                <b> à instruire</b> : sur-livraison à réclamer (<b>demander un avoir</b>) ou saisie à compléter.
-              </div>
+              recon.hasBarcode ? (
+                <div className="mb-2 rounded-lg border border-sky-300 bg-sky-50 px-3 py-2 text-sm text-sky-800">
+                  🔵 Écart de {recon.aInstruire} (reçu papier {recon.papier} / pointé {recon.saisi}
+                  {recon.couvert > 0 && <>, dont {recon.couvert} couvert</>}) sur une réf <b>gérée au code-barres</b> →
+                  probablement <b>entré par scan</b>, pas par le pointage.
+                  {recon.stockCl != null && <> Stock fiche actuel : <b>{recon.stockCl}</b>.</>} À <b>confirmer au stock</b> avant tout avoir.
+                </div>
+              ) : (
+                <div className="mb-2 rounded-lg border border-orange-300 bg-orange-50 px-3 py-2 text-sm text-orange-800">
+                  🟠 <b>{recon.aInstruire} reçu(s) non expliqué(s)</b> (reçu papier {recon.papier} / saisi {recon.saisi}
+                  {recon.couvert > 0 && <>, dont {recon.couvert} couvert</>}) →
+                  <b> à instruire</b> : sur-livraison à réclamer (<b>demander un avoir</b>) ou saisie à compléter.
+                </div>
+              )
             ) : (
               <div className="mb-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
                 ✅ Écart de {recon.ecart} (reçu {recon.papier} / saisi {recon.saisi}) <b>couvert</b>
