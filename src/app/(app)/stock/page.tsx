@@ -6,7 +6,7 @@ import { supabase } from '@/lib/supabase';
 import PageHeader from '@/components/shared/PageHeader';
 import { normalizeRef } from '@/lib/reception';
 import { cn } from '@/utils';
-import { Boxes, Barcode, AlertTriangle, CheckCircle2, PackageX, Search } from 'lucide-react';
+import { Boxes, Barcode, AlertTriangle, CheckCircle2, PackageX, Search, ClipboardList } from 'lucide-react';
 
 // ── Types des sources ────────────────────────────────────────────────────────
 interface StockRow {
@@ -17,6 +17,7 @@ interface StockRow {
   floating: number | null;
   stock_source: string | null;   // 'fiche' = temps réel · 'etat' = snapshot minuit
   prix_ht: number | null;
+  emplacement: string | null;     // emplacement physique (ex. F-164-010)
   has_barcode: boolean | null;
   entrees_reception: number | null;
   entrees_barcode: number | null;
@@ -51,6 +52,7 @@ const fmt = (n: number | null | undefined) => (n == null ? '—' : new Intl.Numb
 export default function StockPage() {
   const [filtre, setFiltre] = useState<Filtre>('tous');
   const [q, setQ] = useState('');
+  const [genBon, setGenBon] = useState(false);
 
   const { data: stocks = [], isLoading: lS } = useQuery<StockRow[]>({
     queryKey: ['stocks_cl'],
@@ -60,7 +62,7 @@ export default function StockPage() {
       for (;;) {
         const { data } = await supabase
           .from('stocks_cl')
-          .select('reference_article, ean13, titre, stock_cl, floating, stock_source, prix_ht, has_barcode, entrees_reception, entrees_barcode, ventes, reconstitue_ok')
+          .select('reference_article, ean13, titre, stock_cl, floating, stock_source, prix_ht, emplacement, has_barcode, entrees_reception, entrees_barcode, ventes, reconstitue_ok')
           .range(from, from + 999);
         if (!data || !data.length) break;
         all.push(...(data as StockRow[]));
@@ -205,6 +207,36 @@ export default function StockPage() {
     { id: 'sans_stock', label: 'Sans stock CL', count: stats.sansStock, tone: 'slate' },
   ];
 
+  // Bon de vérification stock : sort les anomalies ACTIVES à vérifier physiquement, avec
+  // emplacement + stock théorique CL, dans une fenêtre imprimable (colonnes « Compté » / « OK ? »
+  // à remplir au rayon). Ne garde que les réfs localisables (présentes en stock CL).
+  const genererBon = async () => {
+    setGenBon(true);
+    try {
+      const { data: exc } = await supabase
+        .from('exceptions')
+        .select('reference_article, ecart, motif, niveau_priorite, type_exception')
+        .in('statut_exception', ['ouverte', 'en cours']);
+      const stockByRef = new Map<string, StockRow>();
+      for (const s of stocks) { const k = normalizeRef(s.reference_article); if (k && !stockByRef.has(k)) stockByRef.set(k, s); }
+      const esc = (s: unknown) => String(s ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c] as string));
+      const items = (exc ?? [])
+        .map((e) => {
+          const s = stockByRef.get(normalizeRef(e.reference_article));
+          const bon = (String(e.motif ?? '').match(/BE-\d{2}-\d{2}-\d{3,5}/) ?? [''])[0];
+          return { ref: e.reference_article, desig: s?.titre ?? '', emplacement: s?.emplacement ?? '', stock: s?.stock_cl ?? null, ecart: e.ecart, bon, s };
+        })
+        .filter((it) => it.s)  // localisable (en stock CL)
+        .sort((a, b) => String(a.emplacement).localeCompare(String(b.emplacement)));
+      const lignes = items.map((it) => `<tr><td>${esc(it.ref)}</td><td>${esc(it.desig)}</td><td style="font-weight:700">${esc(it.emplacement || '—')}</td><td style="text-align:right">${it.stock ?? '—'}</td><td style="text-align:right">${it.ecart != null ? (Number(it.ecart) > 0 ? '+' : '') + Number(it.ecart) : ''}</td><td>${esc(it.bon)}</td><td></td><td></td></tr>`).join('');
+      const html = `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Bon de vérification stock</title><style>body{font-family:system-ui,sans-serif;font-size:12px;color:#111;padding:24px}h1{font-size:17px;margin:0 0 4px}p{color:#555;margin:0 0 14px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #cbd5e1;padding:6px 8px;text-align:left}th{background:#f1f5f9;font-size:11px}td:nth-child(7),td:nth-child(8),th:nth-child(7),th:nth-child(8){width:64px;text-align:center}button{margin-bottom:14px;padding:6px 14px;font-size:13px;cursor:pointer}@media print{button{display:none}}</style></head><body><h1>Bon de vérification stock — ${new Date().toLocaleDateString('fr-FR')}</h1><p>${items.length} référence(s) à vérifier · trié par emplacement. Compter le réel au rayon, comparer au stock théorique CL.</p><button onclick="window.print()">Imprimer</button><table><thead><tr><th>Réf</th><th>Désignation</th><th>📍 Emplacement</th><th>Stock théo. CL</th><th>Écart</th><th>Bon</th><th>Compté</th><th>OK ?</th></tr></thead><tbody>${lignes || '<tr><td colspan="8" style="text-align:center;color:#999;padding:24px">Aucune anomalie active à vérifier.</td></tr>'}</tbody></table></body></html>`;
+      const w = window.open('', '_blank');
+      if (w) { w.document.write(html); w.document.close(); }
+    } finally {
+      setGenBon(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -253,7 +285,16 @@ export default function StockPage() {
               filtre === c.id ? 'bg-white/20 text-white' : 'bg-gray-100 text-gray-500')}>{c.count}</span>
           </button>
         ))}
-        <div className="ml-auto relative">
+        <button
+          onClick={genererBon}
+          disabled={genBon}
+          className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
+          title="Sortir la liste des anomalies actives à vérifier au stock (emplacement + stock théorique), imprimable"
+        >
+          <ClipboardList className="w-3.5 h-3.5" />
+          {genBon ? 'Génération…' : 'Bon de vérification'}
+        </button>
+        <div className="relative">
           <Search className="w-3.5 h-3.5 text-gray-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
           <input
             value={q}
