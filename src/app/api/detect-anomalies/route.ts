@@ -336,22 +336,31 @@ export async function POST(req: Request) {
     const cur = dupCount.get(kk) ?? { numBe, ref, qte, cmd: s.commande_ref ?? '', n: 0 };
     cur.n++; dupCount.set(kk, cur);
   }
-  const dupBeRef = new Set<string>();   // beId|réf déjà traités ici → §3c ne doit PAS re-traiter
+  const dupBeRef = new Set<string>();   // beId|réf que §3g possède (flag réel) → §3c ne re-traite pas
   for (const d of dupCount.values()) {
     if (d.n < 2) continue;
     const beId = beIdByNum.get(nbe(d.numBe));
-    if (!beId) continue;                               // bon non scanné → pas d'ancre fiable, on ne traite que le concret
+    if (!beId) continue;                               // bon non scanné → pas d'ancre fiable
     const k = aliasRef(d.ref);
-    dupBeRef.add(beId + '|' + k);
-    if (seen.has(key('pointage', beId, k, 'sur-saisie log'))) continue;   // idempotent (même type stocké que §3c)
-    const enTrop = d.qte * (d.n - 1);
+    // GARDE-FOU anti-faux-positif : un doublon n'est une SUR-réception que s'il fait dépasser
+    // le PAPIER de ce bon. Sinon = ligne légitime / conditionnement (PO0005, papier 400) / simple
+    // déficit → ce n'est pas « en trop », on laisse §3c/§3d/conditionnement gérer.
+    const info = lbByBe.get(beId)?.get(k);
+    const papierBeRef = info?.qte ?? 0;
+    const totalSaisi = saisieByBeRef.get(beId + '|' + k) ?? 0;
+    if (papierBeRef <= 0) continue;                                          // réf pas sur ce bon → §3d
+    if (quantitesConcordent(papierBeRef, totalSaisi, info?.desig)) continue; // concorde (dont conditionnement)
+    if (totalSaisi <= papierBeRef + 0.001) continue;                         // déficit, pas une sur-saisie
+    dupBeRef.add(beId + '|' + k);   // §3g prend la main UNIQUEMENT sur ce vrai cas de sur-réception
+    if (seen.has(key('pointage', beId, k, 'sur-saisie log'))) continue;      // idempotent (même type stocké que §3c)
+    const enTrop = totalSaisi - papierBeRef;
     nouvelles.push({
       origine: 'pointage', destinataire: 'log', type_exception: 'sur-saisie log',
       be_id: beId, reference_article: k,
-      motif: `Réception saisie en double : ${k} sur ${d.numBe} saisi ${d.n}× à l'identique (${d.qte} chacune${d.cmd ? `, cmde ${d.cmd}` : ''}) → ${enTrop} en trop. Pointage seulement (le stock réel n'est pas touché).`,
-      valeur_attendue: d.qte, valeur_obtenue: d.qte * d.n, ecart: enTrop,
+      motif: `Réception saisie en double : ${k} sur ${d.numBe} (papier ${papierBeRef} / saisi ${totalSaisi}, ligne ${d.qte} répétée ${d.n}×) → ${enTrop} en trop. Pointage seulement (le stock réel n'est pas touché).`,
+      valeur_attendue: papierBeRef, valeur_obtenue: totalSaisi, ecart: enTrop,
       statut_exception: 'ouverte', niveau_priorite: 'haute',
-      suggestion_action_ia: `Corriger dans Centralink : ${k} a sa réception saisie ${d.n}× sur ${d.numBe} (lignes identiques) → supprimer ${d.n - 1} saisie(s) en double. N'affecte pas le stock physique, mais gonfle le reçu (risque facturation).`,
+      suggestion_action_ia: `Corriger dans Centralink : ${k} a sa réception saisie en double sur ${d.numBe} (papier ${papierBeRef}, saisi ${totalSaisi}) → supprimer la/les saisie(s) en trop. N'affecte pas le stock physique, mais gonfle le reçu (risque facturation).`,
     });
   }
 
