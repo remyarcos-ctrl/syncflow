@@ -129,6 +129,7 @@ export async function GET() {
           if (pRef === sRef) continue;
           if (pc.papier !== sc.saisi) continue;                       // même quantité exacte
           if (aliasKey(sc.raw) === aliasKey(pc.raw)) continue;         // alias déjà connu
+          if (aliasKey(sc.raw) !== normalizeRef(sc.raw)) continue;     // code saisi déjà aliasé ailleurs → résolu
           const titre = titreByRef.get(sRef) ?? null;
           const communs = motsDistinctifsCommuns(pc.design, titre);
           const confirme = communs.length >= 1;
