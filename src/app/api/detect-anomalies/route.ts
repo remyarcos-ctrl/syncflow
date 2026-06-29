@@ -318,6 +318,43 @@ export async function POST(req: Request) {
   }
   // (Les cartes papier/commandé/reçu par réf de l'ancien §3e ont été retirées avec lui :
   //  le surplus se mesure désormais vs en §1, pas vs commandé.)
+
+  // ── 3g) DOUBLE SAISIE DE RÉCEPTION (lignes saisie STRICTEMENT identiques) ──────
+  // Quand la log saisit la réception d'un même bon plusieurs fois dans Centralink, la même
+  // ligne (n° BE + réf + qté + commande) revient à l'identique N fois → le « reçu » est gonflé.
+  // On l'attrape DIRECTEMENT, AVANT les garde-fous code-barres/conditionnement — sinon le couac
+  // est masqué (ex. PO0005 lu comme « conditionnement », 17655 adouci par le bar-code). C'est du
+  // pointage en trop côté log (le STOCK réel n'est pas touché, cf. 2 couches Centralink distinctes).
+  const dupCount = new Map<string, { numBe: string; ref: string; qte: number; cmd: string; n: number }>();
+  for (const s of saisies) {
+    const ref = String(s.reference_article ?? '').trim();
+    if (!ref || /^EXTRA$/i.test(ref)) continue;            // ligne de frais, pas un article
+    const numBe = String(s.numero_be ?? '').trim();
+    const qte = Number(s.quantite_recue) || 0;
+    if (!numBe || qte <= 0) continue;
+    const kk = `${numBe}|${ref}|${qte}|${s.commande_ref ?? ''}`;
+    const cur = dupCount.get(kk) ?? { numBe, ref, qte, cmd: s.commande_ref ?? '', n: 0 };
+    cur.n++; dupCount.set(kk, cur);
+  }
+  const dupBeRef = new Set<string>();   // beId|réf déjà traités ici → §3c ne doit PAS re-traiter
+  for (const d of dupCount.values()) {
+    if (d.n < 2) continue;
+    const beId = beIdByNum.get(nbe(d.numBe));
+    if (!beId) continue;                               // bon non scanné → pas d'ancre fiable, on ne traite que le concret
+    const k = aliasRef(d.ref);
+    dupBeRef.add(beId + '|' + k);
+    if (seen.has(key('pointage', beId, k, 'sur-saisie log'))) continue;   // idempotent (même type stocké que §3c)
+    const enTrop = d.qte * (d.n - 1);
+    nouvelles.push({
+      origine: 'pointage', destinataire: 'log', type_exception: 'sur-saisie log',
+      be_id: beId, reference_article: k,
+      motif: `Réception saisie en double : ${k} sur ${d.numBe} saisi ${d.n}× à l'identique (${d.qte} chacune${d.cmd ? `, cmde ${d.cmd}` : ''}) → ${enTrop} en trop. Pointage seulement (le stock réel n'est pas touché).`,
+      valeur_attendue: d.qte, valeur_obtenue: d.qte * d.n, ecart: enTrop,
+      statut_exception: 'ouverte', niveau_priorite: 'haute',
+      suggestion_action_ia: `Corriger dans Centralink : ${k} a sa réception saisie ${d.n}× sur ${d.numBe} (lignes identiques) → supprimer ${d.n - 1} saisie(s) en double. N'affecte pas le stock physique, mais gonfle le reçu (risque facturation).`,
+    });
+  }
+
   // ── 3c) CONTRÔLE BE PAPIER vs SAISIE LOG, PAR BE ─────────────────────────
   // Le 1er contrôle : pour chaque BE qu'on a scanné, la log a-t-elle saisi dans
   // Centralink la même chose que notre BL papier ? CL reste la référence ; notre
@@ -328,6 +365,7 @@ export async function POST(req: Request) {
     for (const [k, info] of refs) {
       const papier = info.qte;
       if (papier <= 0) continue;
+      if (dupBeRef.has(beId + '|' + k)) continue;   // double saisie identique → déjà traité en §3g (clair), pas de doublon/mauvais label
       const saisie = saisieByBeRef.get(beId + '|' + k) ?? 0;             // saisi sous CE BE
       if (quantitesConcordent(papier, saisie, info.desig)) continue;     // OK : égal ou conditionnement
       // Réf au conditionnement (X500, boîte de N…) : et peuvent être en unités
@@ -667,7 +705,7 @@ export async function POST(req: Request) {
     // moyenne) pour que l'humain vérifie le canal AVANT de corriger. (faire remonter, pas gommer)
     // Le sous-type « SAV saisi sous commande » est indépendant du canal stock : le SAV ne doit
     // pas compter dans le reçu, code-barres ou pas → on le laisse tel quel (reste haute).
-    if (n.type_exception === 'sur-saisie log' && !/^SAV saisi sous commande/.test(n.motif)) {
+    if (n.type_exception === 'sur-saisie log' && !/^SAV saisi sous commande/.test(n.motif) && !/^Réception saisie en double/.test(n.motif)) {
       if (n.niveau_priorite === 'haute') n.niveau_priorite = 'moyenne';
       n.motif += ` · 🏷 BAR-CODE : réf gérée au code-barres (stock CL ${src} ${stock}, ventes 90j ${ventes}) → le surplus ${S.toFixed(0)} peut être une entrée scan, PAS forcément un doublon de commande`;
       n.suggestion_action_ia = `⚠ ${n.reference_article} est géré au code-barres : AVANT de réduire la saisie, vérifier sur la fiche Centralink si le surplus ${S.toFixed(0)} est une vraie double-saisie de commande (→ corriger, impacte la facture) ou une entrée code-barres (→ NE PAS toucher, sinon stock négatif). Recouper avec le stock dispo / les mouvements.`;
