@@ -9,6 +9,7 @@ import EmptyState from '@/components/shared/EmptyState';
 import Pagination from '@/components/shared/Pagination';
 import { Button } from '@/components/ui/button';
 import { formatDate } from '@/utils';
+import { REF_ALIAS_CL_TO_COLOMBI } from '@/lib/ref-alias';
 import { AlertTriangle, TrendingUp, Package, FileText, CheckCircle2, Eye, XCircle, RotateCcw } from 'lucide-react';
 import { toast } from 'sonner';
 import type { Exception, Facture, BEReception, Commande } from '@/types';
@@ -235,15 +236,28 @@ export default function ExceptionsPage() {
     queryFn: async () => {
       const norm = (s: string | null | undefined) => String(s ?? '').toUpperCase().replace(/O/g, '0').replace(/[^A-Z0-9]/g, '');
       const target = norm(refRecon);
+      // Alias-aware : une réf peut être saisie ③ sous un autre code que le papier ② (vrac,
+      // double codification, ou renommage récent ex. ART0003→SN0047). On regroupe tous les
+      // codes équivalents (la cible + tout code du mapping qui lui correspond, dans les deux
+      // sens) pour que le panneau réconcilie comme l'engine de détection.
+      const equiv = new Set<string>([target]);
+      const codesRaw = new Set<string>([refRecon]);
+      for (const [cl, colombi] of Object.entries(REF_ALIAS_CL_TO_COLOMBI)) {
+        if (norm(cl) === target || norm(colombi) === target) {
+          equiv.add(norm(cl)); equiv.add(norm(colombi));
+          codesRaw.add(cl); codesRaw.add(colombi);
+        }
+      }
+      const orClause = [...codesRaw].map((c) => `reference_article.ilike.%${c}%`).join(',');
       const beNum = (v: unknown): string => Array.isArray(v) ? (v[0] as { numero_be?: string })?.numero_be ?? '' : (v as { numero_be?: string })?.numero_be ?? '';
       const [beR, saR, cmR] = await Promise.all([
-        supabase.from('lignes_be').select('reference_article, quantite_receptionnee, hors_systeme, be_receptions(numero_be)').ilike('reference_article', `%${refRecon}%`),
-        supabase.from('saisies_cl').select('reference_article, numero_be, quantite_recue').ilike('reference_article', `%${refRecon}%`),
-        supabase.from('lignes_commande').select('reference_article, quantite_commandee, quantite_receptionnee_reelle, commandes(numero_commande_interne, bls_centralink)').ilike('reference_article', `%${refRecon}%`),
+        supabase.from('lignes_be').select('reference_article, quantite_receptionnee, hors_systeme, be_receptions(numero_be)').or(orClause),
+        supabase.from('saisies_cl').select('reference_article, numero_be, quantite_recue').or(orClause),
+        supabase.from('lignes_commande').select('reference_article, quantite_commandee, quantite_receptionnee_reelle, commandes(numero_commande_interne, bls_centralink)').or(orClause),
       ]);
-      const beRows = (beR.data ?? []).filter((l) => norm(l.reference_article) === target && !l.hors_systeme);
-      const saRows = (saR.data ?? []).filter((s) => norm(s.reference_article) === target);
-      const cmRows = (cmR.data ?? []).filter((l) => norm(l.reference_article) === target);
+      const beRows = (beR.data ?? []).filter((l) => equiv.has(norm(l.reference_article)) && !l.hors_systeme);
+      const saRows = (saR.data ?? []).filter((s) => equiv.has(norm(s.reference_article)));
+      const cmRows = (cmR.data ?? []).filter((l) => equiv.has(norm(l.reference_article)));
       if (!beRows.length && !saRows.length && !cmRows.length) return null;
       // papier & saisi par bon
       const papByBe = new Map<string, number>();

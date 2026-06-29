@@ -23,4 +23,5 @@ export const REF_ALIAS_CL_TO_COLOMBI: Record<string, string> = {
   'GNQ-VERROU-PONTET': '2001',      // verrou de pontet à clé
   'LTLPK03': 'LTL014',              // pistolet LTL Bravo 1.50 : code CL ≠ code BL Colombi
   '490041': '490042',               // revolver Crosman Vigilante : code CL 490041 ≠ code BL 490042
+  'ART0003': 'SN0047',              // renommage : ancien code ART0003 → SN0047 (saisies faites avant la mise à jour)
 };
