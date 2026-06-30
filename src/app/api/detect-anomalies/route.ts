@@ -121,6 +121,21 @@ export async function POST(req: Request) {
   const key = (o: string, ancre: string, ref: string, type: string) => `${o}|${ancre}|${normalizeRef(ref)}|${type}`;
   const nouvelles: NewExc[] = [];
 
+  // Alias de réf CL → réf Colombi (codes vrac : billes/plombs saisis sous un code
+  // générique dans Centralink). On traduit la saisie vers le code du BL papier avant de
+  // comparer ; l'écart d'unité (boîte/pièce) est ensuite géré par le conditionnement
+  // (quantitesConcordent). Voir src/lib/ref-alias.ts. (Défini tôt : utilisé dès §3b.)
+  const aliasNorm = new Map(
+    Object.entries(REF_ALIAS_CL_TO_COLOMBI).map(([cl, col]) => [normalizeRef(cl), normalizeRef(col)]),
+  );
+  const aliasRef = (raw: string | null | undefined) => {
+    const k = normalizeRef(raw);
+    return aliasNorm.get(k) ?? k;
+  };
+  // Couples « commande|réf » déjà signalés comme sur-réception (§3b/§3c/§3g) → évite que
+  // l'angle mort « réception non détaillée » (§3h) ne fasse doublon sur le même écart.
+  const cmdRefSurSaisie = new Set<string>();
+
   // ── 1) RÉCEPTION → Colombi ──────────────────────────────────────────────────
   const beForRecep = lignesBe.filter((l) => !l.hors_systeme && (l.quantite_receptionnee ?? 0) > 0) as LigneBeInput[];
   const recep = controlerReceptions(beForRecep, lignesCmd as LigneCmdInput[]);
@@ -225,6 +240,7 @@ export async function POST(req: Request) {
     const dk = `${l.commande_id}|${normalizeRef(ref)}`;
     if (dblVus.has(dk)) continue;
     dblVus.add(dk);
+    cmdRefSurSaisie.add(`${cmdNum.get(l.commande_id) ?? ''}|${aliasRef(ref)}`);   // §3h ne re-signale pas le même écart
     if (seen.has(key('réception', l.commande_id, ref, 'sur-saisie log'))) continue;
     nouvelles.push({
       origine: 'réception', destinataire: 'log', type_exception: 'sur-saisie log',
@@ -251,17 +267,7 @@ export async function POST(req: Request) {
   }
   const beNumById = new Map((beR.data ?? []).map((b) => [b.id, b.numero_be]));
   const beIdByNum = new Map((beR.data ?? []).map((b) => [nbe(b.numero_be), b.id]));
-  // Alias de réf CL → réf Colombi (codes vrac : billes/plombs saisis sous un code
-  // générique dans Centralink). On traduit la saisie vers le code du BL papier
-  // avant de comparer ; l'écart d'unité (boîte/pièce) est ensuite géré par le
-  // conditionnement (quantitesConcordent). Voir src/lib/ref-alias.ts.
-  const aliasNorm = new Map(
-    Object.entries(REF_ALIAS_CL_TO_COLOMBI).map(([cl, col]) => [normalizeRef(cl), normalizeRef(col)]),
-  );
-  const aliasRef = (raw: string | null | undefined) => {
-    const k = normalizeRef(raw);
-    return aliasNorm.get(k) ?? k;
-  };
+  // (aliasNorm / aliasRef sont définis plus haut, juste après `nouvelles`.)
   const saisieByBeRef = new Map<string, number>();
   for (const s of saisies) {
     const beId = beIdByNum.get(nbe(s.numero_be));
@@ -319,6 +325,34 @@ export async function POST(req: Request) {
   // (Les cartes papier/commandé/reçu par réf de l'ancien §3e ont été retirées avec lui :
   //  le surplus se mesure désormais vs en §1, pas vs commandé.)
 
+  // ── Reçu réel (colonne Livré, AUTORITAIRE) vs détail saisi par bon ───────────
+  // Le reçu réel (quantite_receptionnee_reelle = colonne Livré de Centralink) est ce qui
+  // sera facturé. Le détail par bon (saisies_cl, section « Bon de Livraison » d'order/view)
+  // SOUS-COMPTE parfois : order/view perd une ligne de réception que la vue comptable
+  // (delivery_note) montre. On garde order/view comme source (delivery_note, lui, DUPLIQUE
+  // les commandes multi-bons → inexploitable), mais on s'appuie sur le reçu réel pour
+  // mesurer le vrai écart (§3g) et faire remonter l'angle mort (§3h).
+  const recuReelByCmdRef = new Map<string, number>();
+  for (const l of lignesCmd) {
+    const num = cmdNum.get(l.commande_id);
+    if (!num) continue;
+    const kk = `${num}|${aliasRef(l.reference_article)}`;
+    recuReelByCmdRef.set(kk, (recuReelByCmdRef.get(kk) ?? 0) + (Number(l.quantite_receptionnee_reelle) || 0));
+  }
+  const detailByCmdRef = new Map<string, number>();
+  const cmdRefsByBeRef = new Map<string, Set<string>>();
+  for (const s of saisies) {
+    if (!s.commande_ref) continue;
+    const kk = `${s.commande_ref}|${aliasRef(s.reference_article)}`;
+    detailByCmdRef.set(kk, (detailByCmdRef.get(kk) ?? 0) + (Number(s.quantite_recue) || 0));
+    const beId = beIdByNum.get(nbe(s.numero_be));
+    if (beId) {
+      const bk = beId + '|' + aliasRef(s.reference_article);
+      const set = cmdRefsByBeRef.get(bk) ?? new Set<string>();
+      set.add(s.commande_ref); cmdRefsByBeRef.set(bk, set);
+    }
+  }
+
   // ── 3g) DOUBLE SAISIE DE RÉCEPTION (lignes saisie STRICTEMENT identiques) ──────
   // Quand la log saisit la réception d'un même bon plusieurs fois dans Centralink, la même
   // ligne (n° BE + réf + qté + commande) revient à l'identique N fois → le « reçu » est gonflé.
@@ -352,15 +386,26 @@ export async function POST(req: Request) {
     if (quantitesConcordent(papierBeRef, totalSaisi, info?.desig)) continue; // concorde (dont conditionnement)
     if (totalSaisi <= papierBeRef + 0.001) continue;                         // déficit, pas une sur-saisie
     dupBeRef.add(beId + '|' + k);   // §3g prend la main UNIQUEMENT sur ce vrai cas de sur-réception
+    if (d.cmd) cmdRefSurSaisie.add(`${d.cmd}|${k}`);                          // §3h ne re-signale pas le même écart
     if (seen.has(key('pointage', beId, k, 'sur-saisie log'))) continue;      // idempotent (même type stocké que §3c)
-    const enTrop = totalSaisi - papierBeRef;
+    // Le reçu réel (colonne Livré) est autoritaire : s'il DÉPASSE le détail saisi, c'est
+    // qu'order/view a perdu des lignes → le vrai surplus vs le BL papier se mesure sur le
+    // Livré (ex. 17655 : papier 10, détail 20, mais Livré 30 → +20, pas +10).
+    const recuReel = d.cmd ? (recuReelByCmdRef.get(`${d.cmd}|${k}`) ?? 0) : 0;
+    const sousCompte = recuReel > totalSaisi + 0.001;
+    const reference = Math.max(totalSaisi, recuReel);
+    const enTrop = reference - papierBeRef;
     nouvelles.push({
       origine: 'pointage', destinataire: 'log', type_exception: 'sur-saisie log',
       be_id: beId, reference_article: k,
-      motif: `Réception saisie en double : ${k} sur ${d.numBe} (papier ${papierBeRef} / saisi ${totalSaisi}, ligne ${d.qte} répétée ${d.n}×) → ${enTrop} en trop. Pointage seulement (le stock réel n'est pas touché).`,
-      valeur_attendue: papierBeRef, valeur_obtenue: totalSaisi, ecart: enTrop,
+      motif: sousCompte
+        ? `Sur-saisie ${k} sur ${d.numBe} : BL papier ${papierBeRef}, mais Centralink compte ${reference} reçus sur ${d.cmd} (colonne Livré) → +${enTrop} en trop. Le détail par bon n'en montre que ${totalSaisi} (order/view en perd une partie, visible en comptabilité) → gonfle le reçu (risque facturation).`
+        : `Réception saisie en double : ${k} sur ${d.numBe} (papier ${papierBeRef} / saisi ${totalSaisi}, ligne ${d.qte} répétée ${d.n}×) → ${enTrop} en trop. Pointage seulement (le stock réel n'est pas touché).`,
+      valeur_attendue: papierBeRef, valeur_obtenue: reference, ecart: enTrop,
       statut_exception: 'ouverte', niveau_priorite: 'haute',
-      suggestion_action_ia: `Corriger dans Centralink : ${k} a sa réception saisie en double sur ${d.numBe} (papier ${papierBeRef}, saisi ${totalSaisi}) → supprimer la/les saisie(s) en trop. N'affecte pas le stock physique, mais gonfle le reçu (risque facturation).`,
+      suggestion_action_ia: sousCompte
+        ? `Corriger dans Centralink : réconcilier la réception de ${k} sur ${d.cmd} au BL papier (${papierBeRef}) — le Livré (${reference}) dépasse le papier de ${enTrop} → supprimer les saisies en trop (le détail visible n'en montre que ${totalSaisi}, mais le Livré fait foi).`
+        : `Corriger dans Centralink : ${k} a sa réception saisie en double sur ${d.numBe} (papier ${papierBeRef}, saisi ${totalSaisi}) → supprimer la/les saisie(s) en trop. N'affecte pas le stock physique, mais gonfle le reçu (risque facturation).`,
     });
   }
 
@@ -384,6 +429,7 @@ export async function POST(req: Request) {
       const condAction = `⚠ Conditionnement (« ${info.desig} ») : vérifier les unités (pièces vs boîtes) — ${numBe} : papier ${papier} / saisi ${saisie}.`;
       if (saisie > papier + 0.001) {
         // La log a saisi PLUS que le BL papier → sur-saisie / doublon.
+        for (const cr of (cmdRefsByBeRef.get(beId + '|' + k) ?? [])) cmdRefSurSaisie.add(`${cr}|${k}`);
         if (seen.has(key('pointage', beId, k, 'sur-saisie log'))) continue;
         const surplus = saisie - papier;
         const mult = papier > 0 && Number.isInteger(saisie / papier) ? saisie / papier : null;
@@ -656,6 +702,37 @@ export async function POST(req: Request) {
         suggestion_action_ia: `Corriger dans Centralink : le n° de BE « ${badN} » a un mois impossible (${m[2]}) → corriger la saisie du numéro de BE (faute de frappe).`,
       });
     }
+  }
+
+  // ── 3h) RÉCEPTION NON DÉTAILLÉE (Livré > détail saisi par bon) → à vérifier ───
+  // Le reçu réel (colonne Livré, autoritaire) dépasse la somme du détail saisi par bon :
+  // Centralink a compté des réceptions qu'order/view ne détaille pas dans sa section « Bon
+  // de Livraison » (lignes perdues, ou réception sans n° de bon). On le FAIT REMONTER comme
+  // angle mort de fiabilité — souvent une double-saisie qui gonfle le reçu, parfois une
+  // réception réelle non rattachée. On ne traite QUE les couples au détail PARTIEL (détail
+  // > 0) : un détail à 0 = bon jamais détaillé (sujet « BE à scanner »), pas order/view.
+  // Les couples déjà signalés ailleurs (§3b/§3c/§3g) sont exclus (cmdRefSurSaisie).
+  const cmdIdByNum = new Map((cmdR.data ?? []).map((c) => [c.numero_commande_interne, c.id]));
+  for (const [kk, recuReel] of recuReelByCmdRef) {
+    const detail = detailByCmdRef.get(kk) ?? 0;
+    if (detail <= 0) continue;                       // bon jamais détaillé → autre sujet (BE à scanner)
+    const manque = recuReel - detail;
+    if (manque < 1) continue;                        // détail complet → rien
+    if (cmdRefSurSaisie.has(kk)) continue;           // déjà signalé comme sur-réception ailleurs
+    const sep = kk.indexOf('|');
+    const numCmd = kk.slice(0, sep);
+    const k = kk.slice(sep + 1);
+    const cmdId = cmdIdByNum.get(numCmd);
+    if (!cmdId) continue;
+    if (seen.has(key('réception', cmdId, k, 'réception non détaillée'))) continue;
+    nouvelles.push({
+      origine: 'réception', destinataire: 'à vérifier', type_exception: 'réception non détaillée',
+      commande_id: cmdId, reference_article: k,
+      motif: `Réception non détaillée ${k} sur ${numCmd} : Centralink compte ${recuReel} reçus (colonne Livré) mais le détail par bon n'en montre que ${detail} → ${manque.toFixed(0)} non détaillé(s). order/view perd des lignes que la vue comptable (delivery_note) a → à vérifier (souvent double-saisie qui gonfle le reçu, parfois réception sans n° de bon).`,
+      valeur_attendue: detail, valeur_obtenue: recuReel, ecart: manque,
+      statut_exception: 'ouverte', niveau_priorite: manque >= 10 ? 'moyenne' : 'faible',
+      suggestion_action_ia: `Vérifier dans Centralink (vue comptabilité → bon de livraison) la réception de ${k} sur ${numCmd} : le Livré (${recuReel}) dépasse le détail visible (${detail}) de ${manque.toFixed(0)} → confirmer s'il s'agit d'une double-saisie à supprimer (gonfle le reçu, risque facturation) ou d'une réception réelle non rattachée.`,
+    });
   }
 
   // ── CROISEMENT STOCK (bar-code) sur les SUR-LIVRAISONS Colombi ───────────────
