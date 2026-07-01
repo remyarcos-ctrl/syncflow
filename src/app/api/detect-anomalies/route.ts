@@ -333,11 +333,13 @@ export async function POST(req: Request) {
   // les commandes multi-bons → inexploitable), mais on s'appuie sur le reçu réel pour
   // mesurer le vrai écart (§3g) et faire remonter l'angle mort (§3h).
   const recuReelByCmdRef = new Map<string, number>();
+  const surReceptionByCmdRef = new Set<string>();   // (commande|réf) où reçu réel > commandé = VRAIE sur-réception
   for (const l of lignesCmd) {
     const num = cmdNum.get(l.commande_id);
     if (!num) continue;
     const kk = `${num}|${aliasRef(l.reference_article)}`;
     recuReelByCmdRef.set(kk, (recuReelByCmdRef.get(kk) ?? 0) + (Number(l.quantite_receptionnee_reelle) || 0));
+    if ((Number(l.quantite_receptionnee_reelle) || 0) > (Number(l.quantite_commandee) || 0) + 0.001) surReceptionByCmdRef.add(kk);
   }
   const detailByCmdRef = new Map<string, number>();
   const cmdRefsByBeRef = new Map<string, Set<string>>();
@@ -428,8 +430,17 @@ export async function POST(req: Request) {
       const condMotif = `À vérifier (conditionnement « ${info.desig} ») ${k} sur ${numBe} : BL papier ${papier} / saisi ${saisie} — écart probablement dû aux unités (pièces/boîtes)`;
       const condAction = `⚠ Conditionnement (« ${info.desig} ») : vérifier les unités (pièces vs boîtes) — ${numBe} : papier ${papier} / saisi ${saisie}.`;
       if (saisie > papier + 0.001) {
-        // La log a saisi PLUS que le BL papier → sur-saisie / doublon.
-        for (const cr of (cmdRefsByBeRef.get(beId + '|' + k) ?? [])) cmdRefSurSaisie.add(`${cr}|${k}`);
+        // La log a saisi PLUS que le BL papier → sur-saisie APPARENTE.
+        // GARDE-FOU faux positif « dispatch » : une réf livrée pour PLUSIEURS commandes sur
+        // un même bon, avec un scan papier incomplet, fait saisi-du-bon > papier-du-bon SANS
+        // qu'il y ait d'erreur (reçu = commandé). On ne lève donc la sur-saisie QUE s'il y a
+        // une VRAIE sur-réception au niveau commande (reçu réel > commandé) sur une des
+        // commandes de ce (bon, réf). Les vrais doublons (lignes identiques) sont déjà pris
+        // par §3g en amont (dupBeRef) ; le vrai écart papier/reçu par réf est en §3c-bis/§3h.
+        const cmdsDuBon = cmdRefsByBeRef.get(beId + '|' + k) ?? new Set<string>();
+        const vraieSurReception = [...cmdsDuBon].some((cr) => surReceptionByCmdRef.has(`${cr}|${k}`));
+        if (!vraieSurReception) continue;   // dispatch / papier incomplet → pas une erreur
+        for (const cr of cmdsDuBon) cmdRefSurSaisie.add(`${cr}|${k}`);
         if (seen.has(key('pointage', beId, k, 'sur-saisie log'))) continue;
         const surplus = saisie - papier;
         const mult = papier > 0 && Number.isInteger(saisie / papier) ? saisie / papier : null;
