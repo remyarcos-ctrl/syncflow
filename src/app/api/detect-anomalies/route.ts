@@ -808,6 +808,18 @@ export async function POST(req: Request) {
       n.suggestion_action_ia = `⚠ ${n.reference_article} est géré au code-barres : AVANT de réduire la saisie, vérifier sur la fiche Centralink si le surplus ${S.toFixed(0)} est une vraie double-saisie de commande (→ corriger, impacte la facture) ou une entrée code-barres (→ NE PAS toucher, sinon stock négatif). Recouper avec le stock dispo / les mouvements.`;
       continue;
     }
+
+    // (c) RÉCEPTION NON DÉTAILLÉE (§3h) sur réf au code-barres : l'écart Livré > détail vient
+    // très probablement du canal CODE-BARRES (entrée en stock au scan, sans saisie de réception
+    // détaillée sous un bon), PAS d'un angle mort order/view. On requalifie en faible + on annonce
+    // le doute (comme partout : on annote, on ne gomme pas). Une réf SANS bar-code garde, elle, le
+    // motif order/view affirmatif (elle n'entre pas ici, cf. filtre has_barcode ci-dessus).
+    if (n.type_exception === 'réception non détaillée') {
+      n.niveau_priorite = 'faible';
+      n.motif += ` · 🏷 BAR-CODE : réf gérée au code-barres (stock CL ${src} ${stock}, ventes 90j ${ventes}) → le non-détaillé ${S.toFixed(0)} vient probablement d'entrées scan (canal code-barres), PAS forcément d'un angle mort order/view`;
+      n.suggestion_action_ia = `Réf au code-barres : le non-détaillé (${S.toFixed(0)}) est probablement entré en stock au scan, pas une double-saisie ni un vrai manque order/view → vérifier en comptabilité (delivery_note) seulement si l'écart paraît anormal.`;
+      continue;
+    }
   }
 
   let inserted = 0;
