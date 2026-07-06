@@ -715,14 +715,27 @@ export async function POST(req: Request) {
     }
   }
 
+  // Stock CL (bar-code) — chargé AVANT §3h : sert au filtre canal code-barres de §3h ET au
+  // post-pass bar-code plus bas.
+  const stkR = await selectAll(() =>
+    sb.from('stocks_cl').select('reference_article, stock_cl, floating, has_barcode, ventes, stock_source'));
+  const stockByRef = new Map<string, { stock_cl: number | null; floating: number | null; has_barcode: boolean | null; ventes: number | null; stock_source: string | null }>();
+  for (const s of (stkR.data ?? [])) {
+    const k = normalizeRef(s.reference_article as string);
+    if (k && !stockByRef.has(k)) stockByRef.set(k, s as never);
+  }
+
   // ── 3h) RÉCEPTION NON DÉTAILLÉE (Livré > détail saisi par bon) → à vérifier ───
   // Le reçu réel (colonne Livré, autoritaire) dépasse la somme du détail saisi par bon :
   // Centralink a compté des réceptions qu'order/view ne détaille pas dans sa section « Bon
-  // de Livraison » (lignes perdues, ou réception sans n° de bon). On le FAIT REMONTER comme
-  // angle mort de fiabilité — souvent une double-saisie qui gonfle le reçu, parfois une
-  // réception réelle non rattachée. On ne traite QUE les couples au détail PARTIEL (détail
-  // > 0) : un détail à 0 = bon jamais détaillé (sujet « BE à scanner »), pas order/view.
-  // Les couples déjà signalés ailleurs (§3b/§3c/§3g) sont exclus (cmdRefSurSaisie).
+  // de Livraison ». Deux causes possibles :
+  //   • réf au CODE-BARRES sans sur-réception (reçu ≤ commandé) → entrées scan, le
+  //     fonctionnement NORMAL (validé sur VES001/LTL006/… : reçu = commandé pile, zéro
+  //     enjeu) → on NE CRÉE PAS d'anomalie (c'était du bruit pur, 10 fausses « faible »).
+  //   • sinon → vrai signal : angle mort order/view (double-saisie qui gonfle le reçu,
+  //     réception sans n° de bon) OU bar-code AVEC sur-réception (risque réel) → remonté.
+  // On ne traite QUE les couples au détail PARTIEL (détail > 0) : un détail à 0 = bon
+  // jamais détaillé (sujet « BE à scanner »). Déjà signalés §3b/§3c/§3g exclus (cmdRefSurSaisie).
   const cmdIdByNum = new Map((cmdR.data ?? []).map((c) => [c.numero_commande_interne, c.id]));
   for (const [kk, recuReel] of recuReelByCmdRef) {
     const detail = detailByCmdRef.get(kk) ?? 0;
@@ -733,16 +746,20 @@ export async function POST(req: Request) {
     const sep = kk.indexOf('|');
     const numCmd = kk.slice(0, sep);
     const k = kk.slice(sep + 1);
+    const barcode = stockByRef.get(k)?.has_barcode === true;
+    const surRecue = surReceptionByCmdRef.has(kk);
+    if (barcode && !surRecue) continue;              // canal code-barres, reçu ≤ commandé → normal, pas une anomalie
     const cmdId = cmdIdByNum.get(numCmd);
     if (!cmdId) continue;
     if (seen.has(key('réception', cmdId, k, 'réception non détaillée'))) continue;
+    const bcMention = barcode ? ` ⚠ Réf au code-barres MAIS en sur-réception (reçu > commandé) → le scan n'explique pas tout.` : '';
     nouvelles.push({
       origine: 'réception', destinataire: 'à vérifier', type_exception: 'réception non détaillée',
       commande_id: cmdId, reference_article: k,
-      motif: `Réception non détaillée ${k} sur ${numCmd} : Centralink compte ${recuReel} reçus (colonne Livré) mais le détail par bon n'en montre que ${detail} → ${manque.toFixed(0)} non détaillé(s). order/view perd des lignes que la vue comptable (delivery_note) a → à vérifier (souvent double-saisie qui gonfle le reçu, parfois réception sans n° de bon).`,
+      motif: `Réception non détaillée ${k} sur ${numCmd} : Centralink compte ${recuReel} reçus (colonne Livré) mais le détail par bon n'en montre que ${detail} → ${manque.toFixed(0)} non détaillé(s). order/view perd des lignes que la vue comptable (delivery_note) a → à vérifier (souvent double-saisie qui gonfle le reçu, parfois réception sans n° de bon).${bcMention}`,
       valeur_attendue: detail, valeur_obtenue: recuReel, ecart: manque,
       statut_exception: 'ouverte', niveau_priorite: manque >= 10 ? 'moyenne' : 'faible',
-      suggestion_action_ia: `Vérifier dans Centralink (vue comptabilité → bon de livraison) la réception de ${k} sur ${numCmd} : le Livré (${recuReel}) dépasse le détail visible (${detail}) de ${manque.toFixed(0)} → confirmer s'il s'agit d'une double-saisie à supprimer (gonfle le reçu, risque facturation) ou d'une réception réelle non rattachée.`,
+      suggestion_action_ia: `Vérifier dans Centralink (vue comptabilité → bon de livraison) la réception de ${k} sur ${numCmd} : le Livré (${recuReel}) dépasse le détail visible (${detail}) de ${manque.toFixed(0)} → confirmer s'il s'agit d'une double-saisie à supprimer (gonfle le reçu, risque facturation) ou d'une réception réelle non rattachée.${bcMention}`,
     });
   }
 
@@ -760,13 +777,7 @@ export async function POST(req: Request) {
   //   • NE COUVRE PAS → le bar-code n'explique pas tout → on GARDE l'anomalie « à vérifier »
   //                 (vraie sur-livraison Colombi ou erreur de saisie) → elle reste remontée.
   // Rien n'est gommé en silence : on requalifie + on justifie. (cf écran Stock Centralink)
-  const stkR = await selectAll(() =>
-    sb.from('stocks_cl').select('reference_article, stock_cl, floating, has_barcode, ventes, stock_source'));
-  const stockByRef = new Map<string, { stock_cl: number | null; floating: number | null; has_barcode: boolean | null; ventes: number | null; stock_source: string | null }>();
-  for (const s of (stkR.data ?? [])) {
-    const k = normalizeRef(s.reference_article as string);
-    if (k && !stockByRef.has(k)) stockByRef.set(k, s as never);
-  }
+  // (stockByRef est chargé plus haut, avant §3h.)
   for (const n of nouvelles) {
     const st = stockByRef.get(normalizeRef(n.reference_article));
     if (!st || st.has_barcode !== true) continue;            // pas de bar-code connu → inchangé
@@ -809,17 +820,8 @@ export async function POST(req: Request) {
       continue;
     }
 
-    // (c) RÉCEPTION NON DÉTAILLÉE (§3h) sur réf au code-barres : l'écart Livré > détail vient
-    // très probablement du canal CODE-BARRES (entrée en stock au scan, sans saisie de réception
-    // détaillée sous un bon), PAS d'un angle mort order/view. On requalifie en faible + on annonce
-    // le doute (comme partout : on annote, on ne gomme pas). Une réf SANS bar-code garde, elle, le
-    // motif order/view affirmatif (elle n'entre pas ici, cf. filtre has_barcode ci-dessus).
-    if (n.type_exception === 'réception non détaillée') {
-      n.niveau_priorite = 'faible';
-      n.motif += ` · 🏷 BAR-CODE : réf gérée au code-barres (stock CL ${src} ${stock}, ventes 90j ${ventes}) → le non-détaillé ${S.toFixed(0)} vient probablement d'entrées scan (canal code-barres), PAS forcément d'un angle mort order/view`;
-      n.suggestion_action_ia = `Réf au code-barres : le non-détaillé (${S.toFixed(0)}) est probablement entré en stock au scan, pas une double-saisie ni un vrai manque order/view → vérifier en comptabilité (delivery_note) seulement si l'écart paraît anormal.`;
-      continue;
-    }
+    // (Les « réception non détaillée » bar-code sans sur-réception ne sont plus CRÉÉES (§3h
+    //  filtre à la source) ; celles qui restent portent leur mention dès la création.)
   }
 
   let inserted = 0;
