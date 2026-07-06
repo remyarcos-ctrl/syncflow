@@ -20,10 +20,12 @@ const aliasNorm = new Map(
   Object.entries(REF_ALIAS_CL_TO_COLOMBI).map(([cl, col]) => [normalizeRef(cl), normalizeRef(col)]),
 );
 export const aliasRef = (raw: string | null | undefined): string => {
-  // Réf préfixée du n° de commande (coquille fournisseur : « 1404/16928A » = 16928A) —
-  // on coupe le préfixe numérique avant de normaliser, sinon deux réfs distinctes.
+  // Réf préfixée du n° de commande (coquille fournisseur : « 1404/16928A » = 16928A,
+  // « 700104/PR009 » = PR009) — on coupe le préfixe NUMÉRIQUE (≥3 chiffres, réels en base :
+  // 4 à 6 chiffres) avant de normaliser, sinon deux réfs distinctes. Un « 9/16 » (taille,
+  // préfixe court) n'est PAS coupé.
   const brut = String(raw ?? '');
-  const m = brut.match(/^\s*\d{3,5}\s*\/\s*(.+)$/);
+  const m = brut.match(/^\s*\d{3,}\s*\/\s*(.+)$/);
   const k = normalizeRef(m ? m[1] : brut);
   return aliasNorm.get(k) ?? k;
 };

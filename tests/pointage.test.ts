@@ -167,6 +167,8 @@ test('②>③ sans reliquat → hors_commande', () =>
 
 console.log('══ E2. fixes du balayage réel (06/07) ══');
 test('slash-préfixe : 1404/16928A = 16928A', () => assert.equal(aliasRef('1404/16928A'), aliasRef('16928A')));
+test('slash-préfixe 6 chiffres : 700104/PR009 = PR009 (cas réel en base)', () => assert.equal(aliasRef('700104/PR009'), 'PR009'));
+test('slash-préfixe 5 chiffres : 90213/16929 = 16929 (cas réel en base)', () => assert.equal(aliasRef('90213/16929'), '16929'));
 test('slash : petit nombre 9/16 NON coupé (pas un préfixe commande)', () => assert.equal(aliasRef('9/16'), normalizeRef('916')));
 test('alias appliqué au PAPIER : papier LTLPK03 fusionne avec saisie LTL014', () => {
   const rows = comparerPointage(

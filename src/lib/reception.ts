@@ -2,31 +2,22 @@
 // Répond à : « Colombi a-t-il livré ce qu'on a commandé, en quantité ? »
 // Utilisable dès l'import du BE, avant que la log saisisse.
 
-import { REF_ALIAS_CL_TO_COLOMBI } from './ref-alias';
+import { aliasRef } from './pointage';
 
 export const normalizeRef = (s: string | null | undefined): string => {
-  // Certaines commandes Centralink préfixent le code article par un n° de
-  // commande : « 1404/16928A ». Le vrai code article (celui du BE papier) est
-  // le segment après le dernier « / ». On s'aligne dessus pour le rapprochement.
+  // Certaines réfs Centralink sont préfixées d'un n° de commande : « 1404/16928A »,
+  // « 700104/PR009 ». Le vrai code article = segment après le préfixe NUMÉRIQUE
+  // (≥3 chiffres — un « 9/16 » n'est pas coupé). MÊME RÈGLE que lib/pointage :
+  // une seule normalisation dans toute l'appli, sinon les clés divergent entre moteurs.
   const raw = String(s ?? '');
-  const seg = raw.includes('/') ? raw.slice(raw.lastIndexOf('/') + 1) : raw;
-  return seg.toUpperCase().replace(/O/g, '0').replace(/[^A-Z0-9]/g, '');
+  const m = raw.match(/^\s*\d{3,}\s*\/\s*(.+)$/);
+  return (m ? m[1] : raw).toUpperCase().replace(/O/g, '0').replace(/[^A-Z0-9]/g, '');
 };
 
-// Alias code Centralink → code Colombi (billes/plombs vrac, LTL…). Le BL papier (②)
-// utilise le code Colombi, les commandes (①, scrapées de CL) le code Centralink :
-// sans traduction, un produit au double codage remonte en faux « hors commande ».
-// On normalise tout vers le code Colombi avant de rapprocher.
-const ALIAS_NORM = new Map(
-  Object.entries(REF_ALIAS_CL_TO_COLOMBI).map(([cl, col]) => [
-    String(cl).toUpperCase().replace(/O/g, '0').replace(/[^A-Z0-9]/g, ''),
-    String(col).toUpperCase().replace(/O/g, '0').replace(/[^A-Z0-9]/g, ''),
-  ]),
-);
-export const aliasKey = (s: string | null | undefined): string => {
-  const k = normalizeRef(s);
-  return ALIAS_NORM.get(k) ?? k;
-};
+// Alias code Centralink ↔ Colombi : DÉFINITION UNIQUE = lib/pointage.aliasRef
+// (normalisation + coupe préfixe + REF_ALIAS_CL_TO_COLOMBI). Ré-exporté sous son
+// nom historique pour les appelants du contrôle réception.
+export const aliasKey = aliasRef;
 
 export type VerdictReception = 'conforme' | 'sur_livraison' | 'hors_commande';
 
