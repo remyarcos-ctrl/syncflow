@@ -9,7 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { formatDate, cn } from '@/utils';
 import { RefreshCw, AlertTriangle, CheckCircle2, ChevronRight, Download } from 'lucide-react';
-import { comparerPointage, aEcart, verdictPointage, causeEcart, normalizeRef, type ResolutionRow, type CauseCode } from '@/lib/pointage';
+import { comparerPointage, aEcart, verdictPointage, causeEcart, aliasRef, type ResolutionRow, type CauseCode } from '@/lib/pointage';
 import type { BEReception, LigneBE, SaisieCL } from '@/types';
 
 const STATUTS_RESOLUS = new Set(['vérifié', 'corrigé', 'accepté', 'ignoré']);
@@ -37,7 +37,7 @@ export default function RapprochementPointagePage() {
   const { data: saisies = [] } = useQuery<SaisieCL[]>({
     queryKey: ['rp_saisies'],
     queryFn: async () => {
-      return await selectAll<SaisieCL>(() => supabase.from('saisies_cl').select('numero_be, reference_article, quantite_recue'));
+      return await selectAll<SaisieCL>(() => supabase.from('saisies_cl').select('numero_be, reference_article, quantite_recue, commande_ref'));
     },
     refetchInterval: 10000,
   });
@@ -53,13 +53,24 @@ export default function RapprochementPointagePage() {
   });
 
   // Réfs ayant une commande avec reliquat à recevoir → distingue oubli log / hors-commande
-  const { data: refsCmd = [] } = useQuery<{ reference_article: string | null; quantite_restante_a_recevoir: number | null; quantite_receptionnee_reelle: number | null }[]>({
+  const { data: refsCmd = [] } = useQuery<{ reference_article: string | null; quantite_restante_a_recevoir: number | null; quantite_receptionnee_reelle: number | null; quantite_commandee: number | null }[]>({
     queryKey: ['rp_refs_cmd'],
     queryFn: async () => {
-      return await selectAll<{ reference_article: string | null; quantite_restante_a_recevoir: number | null; quantite_receptionnee_reelle: number | null }>(
-        () => supabase.from('lignes_commande').select('reference_article, quantite_restante_a_recevoir, quantite_receptionnee_reelle'));
+      return await selectAll<{ reference_article: string | null; quantite_restante_a_recevoir: number | null; quantite_receptionnee_reelle: number | null; quantite_commandee: number | null }>(
+        () => supabase.from('lignes_commande').select('reference_article, quantite_restante_a_recevoir, quantite_receptionnee_reelle, quantite_commandee'));
     },
     refetchInterval: 30000,
+  });
+
+  // Réfs gérées au code-barres (stocks_cl) : un ③>② sur ces réfs peut être une entrée scan.
+  const { data: refsBarcode = new Set<string>() } = useQuery<Set<string>>({
+    queryKey: ['rp_barcode'],
+    queryFn: async () => {
+      const rows = await selectAll<{ reference_article: string | null; has_barcode: boolean | null }>(
+        () => supabase.from('stocks_cl').select('reference_article, has_barcode'));
+      return new Set(rows.filter(r => r.has_barcode === true).map(r => aliasRef(r.reference_article)).filter(Boolean));
+    },
+    staleTime: 300_000,
   });
 
   // Calcul des écarts par BE
@@ -80,28 +91,48 @@ export default function RapprochementPointagePage() {
       arr.push({ reference_article: r.reference_article, statut: r.statut, note: r.note });
       resByBe.set(r.numero_be, arr);
     }
+    // Contextes par réf (clés normalisées-ALIASÉES, cohérentes avec le moteur) :
     const refsReliquat = new Set(
       refsCmd.filter(r => (r.quantite_restante_a_recevoir ?? 0) > 0.001)
-        .map(r => normalizeRef(r.reference_article)).filter(Boolean),
+        .map(r => aliasRef(r.reference_article)).filter(Boolean),
     );
     const recuParRef = new Map<string, number>();
+    // VRAIE sur-réception = reçu > commandé sur au moins une ligne de commande (commandé > 0
+    // pour écarter les retours/avoirs négatifs) — le juge de paix de l'audit du 01/07.
+    const refsSurRecues = new Set<string>();
     for (const r of refsCmd) {
-      const k = normalizeRef(r.reference_article);
-      recuParRef.set(k, (recuParRef.get(k) ?? 0) + (Number(r.quantite_receptionnee_reelle) || 0));
+      const k = aliasRef(r.reference_article);
+      const recu = Number(r.quantite_receptionnee_reelle) || 0;
+      const cmd = Number(r.quantite_commandee) || 0;
+      recuParRef.set(k, (recuParRef.get(k) ?? 0) + recu);
+      if (cmd > 0 && recu > cmd + 0.001) refsSurRecues.add(k);
     }
     const refsRecues = new Set([...recuParRef].filter(([, v]) => v > 0).map(([k]) => k));
+    // Part du Livré ABSENTE du détail par bon (order/view perd des lignes — cf 17655) :
+    // si elle couvre un manque ②>③, ce n'est pas un oubli mais un détail incomplet.
+    const saisiTotalParRef = new Map<string, number>();
+    for (const s of saisies) {
+      const k = aliasRef(s.reference_article);
+      saisiTotalParRef.set(k, (saisiTotalParRef.get(k) ?? 0) + (Number(s.quantite_recue) || 0));
+    }
+    const nonDetailleByRef = new Map<string, number>();
+    for (const [k, recu] of recuParRef) {
+      const nd = recu - (saisiTotalParRef.get(k) ?? 0);
+      if (nd > 0.001) nonDetailleByRef.set(k, nd);
+    }
 
     return bes
       .map(be => {
         const sa = saisiesByBe.get(be.numero_be) ?? [];
         if (!sa.length) return null; // pas de saisie CL → pas rapprochable
-        const rows = comparerPointage(lignesByBe.get(be.id) ?? [], sa, resByBe.get(be.numero_be) ?? [], refsReliquat, refsRecues);
+        const rows = comparerPointage(lignesByBe.get(be.id) ?? [], sa, resByBe.get(be.numero_be) ?? [],
+          { refsReliquat, refsRecues, recuTotalByRef: recuParRef, refsSurRecues, refsBarcode, nonDetailleByRef });
         const ecarts = rows.filter(aEcart);
         const aAnalyser = ecarts.filter(e => !STATUTS_RESOLUS.has(e.statut));
         return { be, nbRefs: rows.length, nbEcarts: ecarts.length, nbAAnalyser: aAnalyser.length, ecarts };
       })
       .filter((x): x is NonNullable<typeof x> => x !== null);
-  }, [bes, lignes, saisies, resolutions, refsCmd]);
+  }, [bes, lignes, saisies, resolutions, refsCmd, refsBarcode]);
 
   const avecEcarts = parBe.filter(b => b.nbEcarts > 0);
   const liste = (filtre === 'a_analyser' ? avecEcarts.filter(b => b.nbAAnalyser > 0) : avecEcarts)
@@ -110,8 +141,9 @@ export default function RapprochementPointagePage() {
   const kpiBesRapprochables = parBe.length;
   const kpiEcartsAAnalyser = avecEcarts.reduce((s, b) => s + b.nbAAnalyser, 0);
 
-  const causeCounts: Record<CauseCode, number> = { conforme: 0, oubli_log: 0, sur_saisie: 0, hors_commande: 0 };
+  const causeCounts: Record<CauseCode, number> = { conforme: 0, oubli_log: 0, sur_saisie: 0, hors_commande: 0, dispatch: 0, detail_incomplet: 0 };
   for (const b of avecEcarts) for (const e of b.ecarts) if (aEcart(e)) causeCounts[causeEcart(e).code]++;
+  const kpiFauxEcarts = causeCounts.dispatch + causeCounts.detail_incomplet;
 
   const exportCsv = () => {
     const head = ['BE', 'Référence', '② BL papier', '③ saisie CL', 'Écart', 'Cause', 'Verdict', 'Statut', 'Note'];
@@ -140,7 +172,7 @@ export default function RapprochementPointagePage() {
       </div>
 
       {/* KPIs */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-6 gap-4">
         <Card><CardContent className="p-4">
           <div className="text-xs text-gray-500">BE rapprochables</div>
           <div className="text-2xl font-bold text-gray-900">{kpiBesRapprochables}</div>
@@ -165,6 +197,11 @@ export default function RapprochementPointagePage() {
           <div className="text-xs text-gray-500">Hors commande</div>
           <div className={cn('text-2xl font-bold', causeCounts.hors_commande ? 'text-orange-600' : 'text-gray-400')}>{causeCounts.hors_commande}</div>
           <div className="text-xs text-gray-400">à investiguer (Colombi)</div>
+        </CardContent></Card>
+        <Card><CardContent className="p-4">
+          <div className="text-xs text-gray-500">Faux écarts probables</div>
+          <div className="text-2xl font-bold text-gray-400">{kpiFauxEcarts}</div>
+          <div className="text-xs text-gray-400">dispatch multi-cmd / détail incomplet</div>
         </CardContent></Card>
       </div>
 

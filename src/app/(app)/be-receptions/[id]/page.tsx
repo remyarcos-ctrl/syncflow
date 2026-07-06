@@ -4,7 +4,8 @@ import { useState, useEffect, useMemo } from 'react';
 import { useParams } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
-import { comparerPointage, aEcart } from '@/lib/pointage';
+import { selectAll } from '@/lib/select-all';
+import { comparerPointage, aEcart, aliasRef } from '@/lib/pointage';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -169,15 +170,26 @@ export default function BEDetailPage() {
     enabled: !!be?.numero_be, refetchInterval: 5000,
   });
 
-  // Réfs reçues quelque part dans Centralink (GLOBAL) → détecte « saisi sous un autre BE ».
-  const { data: refsRecues = new Set<string>() } = useQuery<Set<string>>({
-    queryKey: ['refs-recues'],
+  // Contexte commandes GLOBAL (⚠ paginé : .limit(9999) est écrêté à 1000 par PostgREST) :
+  // réfs reçues quelque part (→ « saisi sous un autre BE »), réfs en VRAIE sur-réception
+  // (reçu > commandé → seule base pour accuser une sur-saisie, cf audit 01/07), Livré par réf.
+  const { data: ctxCmd = { refsRecues: new Set<string>(), refsSurRecues: new Set<string>(), recuTotalByRef: new Map<string, number>() } } = useQuery({
+    queryKey: ['refs-recues-ctx'],
     queryFn: async () => {
-      const { data } = await supabase.from('lignes_commande').select('reference_article, quantite_receptionnee_reelle').limit(9999);
-      const norm = (s: string | null) => String(s ?? '').toUpperCase().replace(/O/g, '0').replace(/[^A-Z0-9]/g, '');
-      const set = new Set<string>();
-      for (const l of data ?? []) { if ((Number(l.quantite_receptionnee_reelle) || 0) > 0) set.add(norm(l.reference_article)); }
-      return set;
+      const rows = await selectAll<{ reference_article: string | null; quantite_receptionnee_reelle: number | null; quantite_commandee: number | null }>(
+        () => supabase.from('lignes_commande').select('reference_article, quantite_receptionnee_reelle, quantite_commandee'));
+      const refsRecues = new Set<string>();
+      const refsSurRecues = new Set<string>();
+      const recuTotalByRef = new Map<string, number>();
+      for (const l of rows) {
+        const k = aliasRef(l.reference_article);
+        if (!k) continue;
+        const recu = Number(l.quantite_receptionnee_reelle) || 0;
+        const cmd = Number(l.quantite_commandee) || 0;
+        if (recu > 0) { refsRecues.add(k); recuTotalByRef.set(k, (recuTotalByRef.get(k) ?? 0) + recu); }
+        if (cmd > 0 && recu > cmd + 0.001) refsSurRecues.add(k);
+      }
+      return { refsRecues, refsSurRecues, recuTotalByRef };
     },
     staleTime: 30000,
   });
@@ -296,9 +308,10 @@ export default function BEDetailPage() {
 
   // Rapprochement ② BE papier ↔ ③ saisie CL (logique partagée @/lib/pointage)
   const rappCl = useMemo(() => {
-    const rows = comparerPointage(lignes, saisiesCl, pointageResolutions, undefined, refsRecues);
+    const rows = comparerPointage(lignes, saisiesCl, pointageResolutions,
+      { refsRecues: ctxCmd.refsRecues, refsSurRecues: ctxCmd.refsSurRecues, recuTotalByRef: ctxCmd.recuTotalByRef });
     return { rows, nbEcarts: rows.filter(aEcart).length, hasCl: saisiesCl.length > 0 };
-  }, [lignes, saisiesCl, pointageResolutions, refsRecues]);
+  }, [lignes, saisiesCl, pointageResolutions, ctxCmd]);
 
   const saveResolution = useMutation({
     mutationFn: async (p: { reference_article: string; statut?: string; note?: string | null }) => {

@@ -4,10 +4,22 @@
 // Principe : ③ fait foi par défaut, un écart est remonté pour décision.
 // ============================================================
 import type { LigneBE, SaisieCL } from '@/types';
-import { quantitesConcordent, facteurConditionnement } from './conditionnement';
+import { facteurConditionnement } from './conditionnement';
+import { REF_ALIAS_CL_TO_COLOMBI } from './ref-alias';
 
 export const normalizeRef = (s: string | null | undefined) =>
   String(s ?? '').toUpperCase().replace(/O/g, '0').replace(/[^A-Z0-9]/g, '');
+
+// Alias CL → Colombi : la saisie Centralink utilise parfois un autre code que le BL papier
+// (ex. LTLPK03 saisi ↔ LTL014 au papier). Sans traduction, le pointage voit DEUX réfs
+// distinctes → faux « oubli » + fausse « sur-saisie ». Même mécanique que detect-anomalies.
+const aliasNorm = new Map(
+  Object.entries(REF_ALIAS_CL_TO_COLOMBI).map(([cl, col]) => [normalizeRef(cl), normalizeRef(col)]),
+);
+export const aliasRef = (raw: string | null | undefined): string => {
+  const k = normalizeRef(raw);
+  return aliasNorm.get(k) ?? k;
+};
 
 export type StatutResolution = 'à analyser' | 'vérifié' | 'corrigé' | 'accepté' | 'ignoré';
 
@@ -26,24 +38,39 @@ export interface EcartPointage {
   facteur: number;             // facteur de conditionnement utilisé pour réconcilier (1 si aucun)
   saisiAilleurs: boolean;      // absent de la saisie de CE BE, mais reçu ailleurs dans Centralink
   commandeEnAttente: boolean;  // existe-t-il une commande avec du reliquat à recevoir pour cette réf ?
+  doublonStrict: boolean;      // ③ contient N lignes STRICTEMENT identiques (réf+qté+commande) → vraie double saisie (cf 17655)
+  surRecue: boolean | null;    // vraie sur-réception au niveau commande (reçu > commandé) — null = info non fournie (rester prudent)
+  barcode: boolean;            // réf gérée au code-barres → un ③>② peut être une entrée scan, pas un doublon
+  nonDetaille: number;         // part du Livré absente du détail par bon (order/view perd des lignes) — couvre un ②>③ sans que ce soit un oubli
   statut: StatutResolution;
   note: string | null;
 }
 
 type LigneBeLite = Pick<LigneBE, 'reference_article' | 'quantite_receptionnee'> &
   Partial<Pick<LigneBE, 'statut_retour' | 'hors_systeme' | 'designation'>>;
-type SaisieLite = Pick<SaisieCL, 'reference_article' | 'quantite_recue'>;
+type SaisieLite = Pick<SaisieCL, 'reference_article' | 'quantite_recue'> &
+  Partial<Pick<SaisieCL, 'commande_ref'>>;
 
 export const aEcart = (e: { ecart: number }) => Math.abs(e.ecart) > 0.001;
+
+// Options de contexte (tous par réf NORMALISÉE-ALIASÉE) — chaque écran passe ce qu'il a ;
+// sans l'info, le verdict reste conservateur (on n'invente ni n'efface d'accusation).
+export interface PointageOpts {
+  refsReliquat?: Set<string>;            // réfs avec commande en reliquat à recevoir
+  refsRecues?: Set<string>;              // réfs reçues quelque part dans Centralink (reçu > 0)
+  recuTotalByRef?: Map<string, number>;  // réf → « Livré » total Centralink
+  refsSurRecues?: Set<string>;           // réfs avec VRAIE sur-réception (reçu > commandé sur une commande)
+  refsBarcode?: Set<string>;             // réfs gérées au code-barres (stocks_cl.has_barcode)
+  nonDetailleByRef?: Map<string, number>; // réf → Livré − Σ saisies détaillées (part non détaillée par bon)
+}
 
 export function comparerPointage(
   lignesBe: LigneBeLite[],
   saisies: SaisieLite[],
   resolutions: ResolutionRow[] = [],
-  refsReliquat?: Set<string>, // réfs normalisées ayant une commande avec reliquat à recevoir
-  refsRecues?: Set<string>,   // réfs reçues quelque part dans Centralink (reçu > 0) → saisies ailleurs
-  recuTotalByRef?: Map<string, number>, // réf normalisée → « Livré » total Centralink (reçu toutes commandes)
+  opts: PointageOpts = {},
 ): EcartPointage[] {
+  const { refsReliquat, refsRecues, recuTotalByRef, refsSurRecues, refsBarcode, nonDetailleByRef } = opts;
   const papier = new Map<string, number>();
   const label = new Map<string, string>();
   const desig = new Map<string, string>();
@@ -58,14 +85,25 @@ export function comparerPointage(
     if (!desig.has(k) && l.designation) desig.set(k, l.designation);
   }
   const cl = new Map<string, number>();
+  // Doublon STRICT = N lignes de saisie identiques (réf + qté + commande) sur ce bon
+  // → signature d'une double saisie de réception (cf 17655 : 2×10 sur #4721), le seul
+  // signal fiable indépendamment du niveau commande.
+  const dupCount = new Map<string, number>();
+  const doublons = new Set<string>();
   for (const s of saisies) {
-    const k = normalizeRef(s.reference_article);
+    const k = aliasRef(s.reference_article); // traduire le code CL vers le code du BL papier
     if (!k) continue;
     cl.set(k, (cl.get(k) ?? 0) + (s.quantite_recue ?? 0));
     if (!label.has(k)) label.set(k, s.reference_article ?? k);
+    if ((s.quantite_recue ?? 0) > 0) {
+      const dk = `${k}|${s.quantite_recue}|${s.commande_ref ?? ''}`;
+      const n = (dupCount.get(dk) ?? 0) + 1;
+      dupCount.set(dk, n);
+      if (n >= 2) doublons.add(k);
+    }
   }
   const res = new Map<string, { statut: string; note: string | null }>();
-  for (const r of resolutions) res.set(normalizeRef(r.reference_article), { statut: r.statut, note: r.note });
+  for (const r of resolutions) res.set(aliasRef(r.reference_article), { statut: r.statut, note: r.note });
 
   const keys = new Set<string>([...papier.keys(), ...cl.keys()]);
   return [...keys]
@@ -90,6 +128,10 @@ export function comparerPointage(
         facteur: concordFacteur ? n : 1,
         saisiAilleurs,
         commandeEnAttente: refsReliquat ? refsReliquat.has(k) : false,
+        doublonStrict: doublons.has(k),
+        surRecue: refsSurRecues ? refsSurRecues.has(k) : null,
+        barcode: refsBarcode?.has(k) ?? false,
+        nonDetaille: nonDetailleByRef?.get(k) ?? 0,
         statut: (r?.statut as StatutResolution) ?? 'à analyser',
         note: r?.note ?? null,
       };
@@ -97,16 +139,38 @@ export function comparerPointage(
     .sort((a, b) => Math.abs(b.ecart) - Math.abs(a.ecart) || a.ref.localeCompare(b.ref));
 }
 
-export type CauseCode = 'conforme' | 'oubli_log' | 'sur_saisie' | 'hors_commande';
+export type CauseCode =
+  | 'conforme'
+  | 'oubli_log'
+  | 'sur_saisie'
+  | 'hors_commande'
+  | 'dispatch'          // ③ > ② mais reçu = commandé partout → réf répartie multi-commandes, papier incomplet — pas d'erreur log probable
+  | 'detail_incomplet'; // ② > ③ mais le Livré non détaillé couvre le manque → order/view perd des lignes, pas un oubli
 
-// Cause structurée d'un écart (modèle directionnel).
-// Centralink (③) ne booke que le commandé ; le BL papier (②) contient tout le reçu.
-//  - ③ > ②            → la log a saisi plus que le papier → sur-saisie (erreur log)
-//  - ② > ③ + reliquat → du commandé attendu n'a pas été saisi → oubli log (erreur log)
-//  - ② > ③ sans reliquat → reçu hors-commande / sur-livraison → à investiguer (Colombi)
+// Cause structurée d'un écart — mêmes garde-fous que la détection du Centre (§3c/§3g) :
+//  ③ > ② :
+//   1. lignes de saisie STRICTEMENT identiques répétées → vraie double saisie (17655) — accusation ferme
+//   2. sinon, vraie sur-réception au niveau commande (reçu > commandé) → sur-saisie log
+//   3. sinon (reçu = commandé partout) → « dispatch » : réf servie pour plusieurs commandes,
+//      notre scan papier incomplet — PAS une erreur log (cf faux positifs SN0006/PR004/REM007)
+//   NB : sans l'info surRecue (écran qui ne la charge pas), on reste sur l'accusation prudente (2).
+//  ② > ③ :
+//   4. la part du Livré non détaillée par bon couvre le manque → « détail incomplet » (order/view
+//      perd des lignes — prouvé sur 17655 : 2 visibles / 3 réelles) — pas un oubli
+//   5. sinon reliquat commande → oubli log ; sinon → hors commande (Colombi)
+//  Bar-code : un ③>② sur réf scannée peut être une entrée scan → mention, on ne conclut pas seul.
 export function causeEcart(e: EcartPointage): { code: CauseCode; label: string } {
   if (!aEcart(e)) return { code: 'conforme', label: 'Conforme' };
-  if (e.ecart < 0) return { code: 'sur_saisie', label: 'Sur-saisie log (③ > ②)' };
+  const bc = e.barcode ? ' · 🏷 bar-code : peut être une entrée scan, vérifier le canal' : '';
+  if (e.ecart < 0) {
+    if (e.doublonStrict) return { code: 'sur_saisie', label: `Double saisie (ligne répétée à l'identique)${bc}` };
+    // dispatch UNIQUEMENT si on SAIT qu'aucune commande n'est sur-reçue (surRecue === false) ;
+    // info absente (null) → on garde l'accusation prudente, on ne blanchit pas à l'aveugle.
+    if (e.surRecue === false) return { code: 'dispatch', label: 'Réparti multi-commandes (reçu = commandé) — papier incomplet probable, pas une erreur log' };
+    return { code: 'sur_saisie', label: `Sur-saisie log (③ > ②)${bc}` };
+  }
+  if (e.nonDetaille >= e.ecart - 0.001 && e.nonDetaille > 0)
+    return { code: 'detail_incomplet', label: 'Couvert par le Livré Centralink — détail par bon incomplet (vue comptabilité), pas un oubli' };
   return e.commandeEnAttente
     ? { code: 'oubli_log', label: 'Oubli log (commande en attente)' }
     : { code: 'hors_commande', label: 'Hors commande — à investiguer' };
