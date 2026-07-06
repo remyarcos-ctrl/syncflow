@@ -3,6 +3,7 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
+import { selectAll } from '@/lib/select-all';
 import Link from 'next/link';
 import PageHeader from '@/components/shared/PageHeader';
 import EmptyState from '@/components/shared/EmptyState';
@@ -206,9 +207,11 @@ export default function ExceptionsPage() {
   const { data: refsAttente = new Set<string>() } = useQuery<Set<string>>({
     queryKey: ['refs-en-attente'],
     queryFn: async () => {
-      const { data } = await supabase.from('lignes_commande').select('reference_article, quantite_restante_a_recevoir').limit(9999);
+      // ⚠ .limit(9999) est écrêté au max-rows serveur (1000) → paginer via selectAll.
+      const data = await selectAll<{ reference_article: string | null; quantite_restante_a_recevoir: number | null }>(
+        () => supabase.from('lignes_commande').select('reference_article, quantite_restante_a_recevoir'));
       const norm = (s: string | null) => String(s ?? '').toUpperCase().replace(/O/g, '0').replace(/[^A-Z0-9]/g, '');
-      return new Set((data ?? []).filter(l => (l.quantite_restante_a_recevoir ?? 0) > 0.001).map(l => norm(l.reference_article)).filter(Boolean));
+      return new Set(data.filter(l => (l.quantite_restante_a_recevoir ?? 0) > 0.001).map(l => norm(l.reference_article)).filter(Boolean));
     },
     staleTime: 30000,
   });

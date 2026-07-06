@@ -3,6 +3,7 @@
 import { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
+import { selectAll } from '@/lib/select-all';
 import { formatEur, formatDate, cn } from '@/utils';
 import PageHeader from '@/components/shared/PageHeader';
 import StatusBadge from '@/components/shared/StatusBadge';
@@ -65,10 +66,8 @@ export default function RapprochementsParFournisseurPage() {
   const { data: lignesCmd = [] } = useQuery({
     queryKey: ['rp-lignes-commande'],
     queryFn: async () => {
-      const { data } = await supabase
-        .from('lignes_commande')
-        .select('commande_id,pu_commande,quantite_commandee');
-      return (data ?? []) as { commande_id: string; pu_commande: number | null; quantite_commandee: number | null }[];
+      return await selectAll<{ commande_id: string; pu_commande: number | null; quantite_commandee: number | null }>(
+        () => supabase.from('lignes_commande').select('commande_id,pu_commande,quantite_commandee'));
     },
     staleTime: 60_000,
   });

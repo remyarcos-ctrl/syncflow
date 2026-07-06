@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
+import { selectAll } from '@/lib/select-all';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { formatDate, cn } from '@/utils';
@@ -28,8 +29,7 @@ export default function RapprochementPointagePage() {
   const { data: lignes = [] } = useQuery<LigneBE[]>({
     queryKey: ['rp_lignes_be'],
     queryFn: async () => {
-      const { data } = await supabase.from('lignes_be').select('be_id, reference_article, designation, quantite_receptionnee, statut_retour, hors_systeme');
-      return (data as LigneBE[]) ?? [];
+      return await selectAll<LigneBE>(() => supabase.from('lignes_be').select('be_id, reference_article, designation, quantite_receptionnee, statut_retour, hors_systeme'));
     },
     refetchInterval: 10000,
   });
@@ -37,8 +37,7 @@ export default function RapprochementPointagePage() {
   const { data: saisies = [] } = useQuery<SaisieCL[]>({
     queryKey: ['rp_saisies'],
     queryFn: async () => {
-      const { data } = await supabase.from('saisies_cl').select('numero_be, reference_article, quantite_recue');
-      return (data as SaisieCL[]) ?? [];
+      return await selectAll<SaisieCL>(() => supabase.from('saisies_cl').select('numero_be, reference_article, quantite_recue'));
     },
     refetchInterval: 10000,
   });
@@ -57,8 +56,8 @@ export default function RapprochementPointagePage() {
   const { data: refsCmd = [] } = useQuery<{ reference_article: string | null; quantite_restante_a_recevoir: number | null; quantite_receptionnee_reelle: number | null }[]>({
     queryKey: ['rp_refs_cmd'],
     queryFn: async () => {
-      const { data } = await supabase.from('lignes_commande').select('reference_article, quantite_restante_a_recevoir, quantite_receptionnee_reelle');
-      return data ?? [];
+      return await selectAll<{ reference_article: string | null; quantite_restante_a_recevoir: number | null; quantite_receptionnee_reelle: number | null }>(
+        () => supabase.from('lignes_commande').select('reference_article, quantite_restante_a_recevoir, quantite_receptionnee_reelle'));
     },
     refetchInterval: 30000,
   });
