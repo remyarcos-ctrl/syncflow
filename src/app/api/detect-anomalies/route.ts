@@ -714,7 +714,9 @@ export async function POST(req: Request) {
     sb.from('stocks_cl').select('reference_article, stock_cl, floating, has_barcode, ventes, stock_source'));
   const stockByRef = new Map<string, { stock_cl: number | null; floating: number | null; has_barcode: boolean | null; ventes: number | null; stock_source: string | null }>();
   for (const s of (stkR.data ?? [])) {
-    const k = normalizeRef(s.reference_article as string);
+    // clé ALIASÉE : le stock CL porte le code CL (ex. LTLPK03) alors que les anomalies
+    // portent le code Colombi (LTL014) — sans alias, le croisement bar-code est aveugle.
+    const k = aliasRef(s.reference_article as string);
     if (k && !stockByRef.has(k)) stockByRef.set(k, s as never);
   }
 
@@ -772,7 +774,7 @@ export async function POST(req: Request) {
   // Rien n'est gommé en silence : on requalifie + on justifie. (cf écran Stock Centralink)
   // (stockByRef est chargé plus haut, avant §3h.)
   for (const n of nouvelles) {
-    const st = stockByRef.get(normalizeRef(n.reference_article));
+    const st = stockByRef.get(aliasRef(n.reference_article));
     if (!st || st.has_barcode !== true) continue;            // pas de bar-code connu → inchangé
     const S = Math.abs(Number(n.ecart) || 0);                // ampleur de l'écart
     const stock = Number(st.stock_cl) || 0;
