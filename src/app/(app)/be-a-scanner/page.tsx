@@ -15,6 +15,16 @@ import { ScanLine, CheckCircle2, Layers, AlertTriangle, Printer } from 'lucide-r
 const ACTIFS = new Set(['ouverte', 'partiellement réceptionnée', 'en anomalie']);
 const normBe = (s: string | null | undefined) => String(s ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 const moisInvalide = (raw: string) => { const m = raw.toUpperCase().match(/BE-?\d{2}-?(\d{2})/); return m ? +m[1] < 1 || +m[1] > 12 : false; };
+// L'outil a été lancé EN COURS DE ROUTE : le scan systématique du papier démarre en
+// décembre 2025 (mesuré : 0 % scanné avant, ~100 % depuis). On ne RÉCLAME donc que les
+// bons du FLUX (≥ déc 2025) ; l'historique d'avant n'est pas requis — il ne sert qu'à
+// trancher ponctuellement une vieille anomalie. (Mois 13 = typo de déc → flux.)
+const estFlux = (raw: string) => {
+  const m = raw.toUpperCase().match(/BE-?(\d{2})-?(\d{2})/);
+  if (!m) return true; // n° illisible → on le montre plutôt que de le cacher
+  const an = +m[1], mo = +m[2];
+  return an >= 26 || (an === 25 && mo >= 12);
+};
 // Période d'un BE depuis son numéro (BE-YY-MM-…) → { an:'2026', mo:'03' }.
 const bePeriode = (raw: string) => { const m = raw.toUpperCase().match(/BE-?(\d{2})-?(\d{2})/); return m ? { an: `20${m[1]}`, mo: m[2] } : { an: '', mo: '' }; };
 
@@ -56,7 +66,7 @@ export default function BeAScannerPage() {
   const [annee, setAnnee] = useState('');
   const [mois, setMois] = useState('');
 
-  const { aImporter, nScannesActifs, nTotalActifs } = useMemo(() => {
+  const { aImporter, historique, nScannesActifs, nTotalActifs } = useMemo(() => {
     const statutDe = new Map(commandes.map((c) => [c.numero_commande_interne, c.statut_commande]));
     const scanned = new Set(scannedBes.map((b) => normBe(b.numero_be)));
     // Par BE : les commandes ACTIVES qu'il sert (lien BE↔commande = saisies_cl, comme CL).
@@ -75,15 +85,21 @@ export default function BeAScannerPage() {
       if (mois && p.mo !== mois) return false;
       return true;
     });
-    const aImporter = tousActifs
+    const nonScannes = tousActifs
       .filter((b) => !scanned.has(normBe(b.raw)))
       .map((b) => ({ raw: b.raw, cmds: [...b.cmds].sort(), invalide: moisInvalide(b.raw) }))
       // priorité : un BE qui débloque le PLUS de commandes actives en premier
       .sort((a, b) => b.cmds.length - a.cmds.length || (a.raw < b.raw ? 1 : -1));
+    // Outil lancé en cours de route : seul le FLUX (≥ déc 2025) est réclamé ;
+    // l'historique est montré à part, replié, jamais compté dans la couverture.
+    const aImporter = nonScannes.filter((b) => estFlux(b.raw));
+    const historique = nonScannes.filter((b) => !estFlux(b.raw));
+    const fluxActifs = tousActifs.filter((b) => estFlux(b.raw));
     return {
       aImporter,
-      nScannesActifs: tousActifs.filter((b) => scanned.has(normBe(b.raw))).length,
-      nTotalActifs: tousActifs.length,
+      historique,
+      nScannesActifs: fluxActifs.filter((b) => scanned.has(normBe(b.raw))).length,
+      nTotalActifs: fluxActifs.length,
     };
   }, [commandes, scannedBes, saisies, annee, mois]);
 
@@ -147,7 +163,7 @@ export default function BeAScannerPage() {
       <Card>
         <CardContent className="py-4">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-sm font-medium text-gray-700">Couverture des commandes actives</span>
+            <span className="text-sm font-medium text-gray-700">Couverture du flux (depuis le lancement, déc. 2025)</span>
             <span className="text-sm font-semibold text-gray-900">{nScannesActifs} / {nTotalActifs} BE importés</span>
           </div>
           <div className="h-2.5 w-full rounded-full bg-gray-100 overflow-hidden">
@@ -216,9 +232,27 @@ export default function BeAScannerPage() {
         </CardContent>
       </Card>
 
+      {/* Historique d'avant le lancement : jamais réclamé, juste consultable */}
+      {historique.length > 0 && (
+        <details className="rounded-lg border border-gray-200 bg-gray-50/60 px-4 py-3">
+          <summary className="text-sm text-gray-500 cursor-pointer select-none">
+            Historique d&apos;avant le lancement (janv.–nov. 2025) : <strong>{historique.length}</strong> bons non scannés —
+            <span className="text-gray-400"> non requis (l&apos;outil est parti en cours de route), à scanner uniquement pour trancher une vieille anomalie</span>
+          </summary>
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            {historique.map((b) => (
+              <span key={b.raw} className="px-2 py-0.5 rounded bg-white border border-gray-200 font-mono text-xs text-gray-500" title={`sert : ${b.cmds.join(', ')}`}>
+                {b.raw} <span className="text-gray-300">·</span> {b.cmds.length} cmd
+              </span>
+            ))}
+          </div>
+        </details>
+      )}
+
       <p className="text-xs text-gray-400 max-w-3xl">
-        Périmètre : uniquement les BE servant une commande <strong>active</strong> (ouverte / partielle / en anomalie) —
-        un BE qui ne sert que des commandes soldées n&apos;est pas demandé. Le lien BE↔commande vient de Centralink
+        Périmètre : uniquement les BE du <strong>flux</strong> (≥ déc. 2025, date de lancement du scan) servant une commande
+        <strong> active</strong> (ouverte / partielle / en anomalie) — un BE qui ne sert que des commandes soldées, ou
+        antérieur au lancement, n&apos;est pas demandé. Le lien BE↔commande vient de Centralink
         (section <em>Bon de Livraison</em>), donc on reflète exactement CL.
       </p>
     </div>
