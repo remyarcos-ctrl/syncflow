@@ -4,11 +4,12 @@
 
 export function facteurConditionnement(designation: string | null | undefined): number {
   const d = String(designation ?? '').toUpperCase();
-  // ⚠ Ne PAS confondre une spec d'optique « <grossissement>X<objectif> » (4X32, 3-9X40,
-  // 1X22 d'une lunette/point rouge) avec un conditionnement vrac (« C50 X50 », « X500 »).
-  // On exige donc que le X ne soit PAS précédé d'un chiffre (le grossissement de l'optique) :
-  // « 4X32 » → ignoré (lunette) ; « C50 X50 », « X500 » → lus (X précédé d'un espace/lettre).
-  const m = d.match(/(?<!\d)[X×*]\s*(\d{2,})|PAR\s+(\d+)|LOT\s+DE\s+(\d+)|BO[IÎ]TE\s+DE\s+(\d+)/);
+  // ⚠ Ne PAS confondre avec un conditionnement vrac (« C50 X50 », « X500 ») :
+  //  - une spec d'optique « <grossissement>X<objectif> » (4X32, 3-9X40) → X précédé d'un CHIFFRE ;
+  //  - un NOM DE MODÈLE contenant X+nombre (carabine « RX20 », « CFX30 ») → X précédé d'une LETTRE
+  //    (sinon « CARA RX20 » serait lu ×20 et masquerait un vrai écart via une fausse réconciliation).
+  // Le X d'un conditionnement est donc précédé d'un espace ou en début (« X500 », « C50 X50 » ✅).
+  const m = d.match(/(?<![A-Z0-9])[X×*]\s*(\d{2,})|PAR\s+(\d+)|LOT\s+DE\s+(\d+)|BO[IÎ]TE\s+DE\s+(\d+)/);
   if (!m) return 1;
   const n = parseInt(m[1] ?? m[2] ?? m[3] ?? m[4] ?? '1', 10);
   return n > 1 && n <= 100000 ? n : 1;

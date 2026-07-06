@@ -11,13 +11,20 @@ export const normalizeRef = (s: string | null | undefined) =>
   String(s ?? '').toUpperCase().replace(/O/g, '0').replace(/[^A-Z0-9]/g, '');
 
 // Alias CL → Colombi : la saisie Centralink utilise parfois un autre code que le BL papier
-// (ex. LTLPK03 saisi ↔ LTL014 au papier). Sans traduction, le pointage voit DEUX réfs
-// distinctes → faux « oubli » + fausse « sur-saisie ». Même mécanique que detect-anomalies.
+// (ex. LTLPK03 saisi ↔ LTL014 au papier)… et l'INVERSE aussi (les codes se mélangent sur
+// les papiers : LTLPK03 imprimé sur certains BL, 490041 au papier vs 490042 commandé).
+// L'alias s'applique donc aux DEUX côtés (papier ET saisie), sinon la même marchandise
+// devient deux fantômes symétriques : « hors commande ②500/③— » + « dispatch ②—/③492 »
+// (vu au balayage réel sur LTLPK03 et 490041×5 bons).
 const aliasNorm = new Map(
   Object.entries(REF_ALIAS_CL_TO_COLOMBI).map(([cl, col]) => [normalizeRef(cl), normalizeRef(col)]),
 );
 export const aliasRef = (raw: string | null | undefined): string => {
-  const k = normalizeRef(raw);
+  // Réf préfixée du n° de commande (coquille fournisseur : « 1404/16928A » = 16928A) —
+  // on coupe le préfixe numérique avant de normaliser, sinon deux réfs distinctes.
+  const brut = String(raw ?? '');
+  const m = brut.match(/^\s*\d{3,5}\s*\/\s*(.+)$/);
+  const k = normalizeRef(m ? m[1] : brut);
   return aliasNorm.get(k) ?? k;
 };
 
@@ -76,9 +83,14 @@ export function comparerPointage(
   const desig = new Map<string, string>();
   for (const l of lignesBe) {
     // Pointage = comparer le BL papier (②) à ce que la log a saisi (③).
-    // On compte TOUTES les lignes du BL — y compris hors_systeme et retours —
-    // car la saisie log les inclut aussi (elles ont bien été reçues sur ce BL).
-    const k = normalizeRef(l.reference_article);
+    // Les lignes SAV (hors_systeme) sont EXCLUES : le SAV ne doit JAMAIS être saisi sous
+    // une commande (règle métier — si la log le saisit quand même, le Centre le remonte
+    // en « SAV saisi sous commande », priorité haute). Les compter au papier créait de
+    // faux « oublis » (SN0004 : 1000 livrés + 3 SAV → faux oubli de 3) et de faux « hors
+    // commande » (réf 70 « SAV SOUS GARANTIE »). Les retours restent comptés (reçus puis
+    // retournés : la saisie log initiale les inclut).
+    if (l.hors_systeme) continue;
+    const k = aliasRef(l.reference_article); // alias appliqué au papier AUSSI (codes mélangés)
     if (!k) continue;
     papier.set(k, (papier.get(k) ?? 0) + (l.quantite_receptionnee ?? 0));
     if (!label.has(k)) label.set(k, l.reference_article ?? k);
@@ -166,14 +178,24 @@ export function causeEcart(e: EcartPointage): { code: CauseCode; label: string }
     if (e.doublonStrict) return { code: 'sur_saisie', label: `Double saisie (ligne répétée à l'identique)${bc}` };
     // dispatch UNIQUEMENT si on SAIT qu'aucune commande n'est sur-reçue (surRecue === false) ;
     // info absente (null) → on garde l'accusation prudente, on ne blanchit pas à l'aveugle.
-    if (e.surRecue === false) return { code: 'dispatch', label: 'Réparti multi-commandes (reçu = commandé) — papier incomplet probable, pas une erreur log' };
+    // NB : « dispatch » couvre aussi le n° de bon erroné (marchandise d'un autre bon saisie
+    // ici, cf KI0001 : manque sur 1094, excédent sur 1125) → recouper avec les manques.
+    if (e.surRecue === false) return { code: 'dispatch', label: 'Saisi sous ce bon sans papier correspondant (reçu = commandé partout) — bon partagé au papier incomplet, ou n° de bon erroné : recouper avec les manques des autres bons' };
     return { code: 'sur_saisie', label: `Sur-saisie log (③ > ②)${bc}` };
   }
+  // ⚠ formulation prudente : le Livré GLOBAL de la réf dépasse le détail de TOUS les bons
+  // (part bookée sans bon détaillé — réception directe, bon non capté, ou ligne perdue par
+  // order/view). Le manque de CE bon s'y explique probablement, mais on ne prétend PAS que
+  // la compta de ce bon montre plus (vérifié sur BE-26-04-1130 : compta = saisies, la part
+  // non détaillée était ailleurs).
   if (e.nonDetaille >= e.ecart - 0.001 && e.nonDetaille > 0)
-    return { code: 'detail_incomplet', label: 'Couvert par le Livré Centralink — détail par bon incomplet (vue comptabilité), pas un oubli' };
-  return e.commandeEnAttente
-    ? { code: 'oubli_log', label: 'Oubli log (commande en attente)' }
-    : { code: 'hors_commande', label: 'Hors commande — à investiguer' };
+    return { code: 'detail_incomplet', label: `Couvert par le Livré global (${e.nonDetaille.toFixed(0)} bookés sans bon détaillé quelque part) — pas un oubli ferme, vérifier en comptabilité` };
+  if (e.commandeEnAttente) return { code: 'oubli_log', label: 'Oubli log (commande en attente)' };
+  // Réf reçue/commandée quelque part (commandes soldées) → pas « hors commande » : c'est un
+  // écart papier > saisie sur du soldé = surplus à investiguer (le contrôle réception le route).
+  if ((e.recuTotal ?? 0) > 0)
+    return { code: 'hors_commande', label: 'Surplus vs saisie (commandes soldées) — à investiguer côté Colombi (voir Contrôle réception)' };
+  return { code: 'hors_commande', label: 'Hors commande (réf jamais commandée) — à investiguer' };
 }
 
 // Verdict lisible (réutilise la cause).
