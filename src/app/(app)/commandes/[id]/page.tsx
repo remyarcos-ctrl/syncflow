@@ -135,19 +135,32 @@ export default function CommandeDetailPage() {
     enabled: servingBeNums.length > 0, staleTime: 30000,
   });
 
-  const { papierParRef, refsPartagees } = useMemo(() => {
+  const { papierParRef, refsPartagees, saisieScanParRef, saisieHorsScanParRef } = useMemo(() => {
     const normRef = (s: string | null) => String(s ?? '').toUpperCase().replace(/O/g, '0').replace(/[^A-Z0-9]/g, '');
     const normBe = (s: string | null) => String(s ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
     const numByBeId = new Map(beImportes.map(b => [b.id, b.numero_be]));
     const myNum = commande?.numero_commande_interne;
+    // Bons de cette commande DÉJÀ scannés (M2M + outil lancé en cours de route : une commande
+    // peut être servie en partie par un bon historique jamais scanné → le papier ② ne peut
+    // être comparé qu'à la saisie DES BONS SCANNÉS, sinon faux ⚠ mécanique).
+    const scannedNums = new Set(besRecus.filter(b => b.beId).map(b => normBe(b.numero_be)));
     // Par (BE, réf) : saisie TOTALE (toutes commandes) et part de CETTE commande.
     const totalPair = new Map<string, number>();
     const thisPair = new Map<string, number>();
+    // Saisie de CETTE commande, par réf, séparée bons scannés / non scannés (même périmètre que ②).
+    const scanParRef = new Map<string, number>();
+    const horsScanParRef = new Map<string, number>();
     for (const s of saisiesServing) {
       if (!s.numero_be || !s.reference_article) continue;
-      const pk = normBe(s.numero_be) + '|' + normRef(s.reference_article);
+      const nb = normBe(s.numero_be);
+      const pk = nb + '|' + normRef(s.reference_article);
       totalPair.set(pk, (totalPair.get(pk) ?? 0) + (s.quantite_recue ?? 0));
-      if (s.commande_ref === myNum) thisPair.set(pk, (thisPair.get(pk) ?? 0) + (s.quantite_recue ?? 0));
+      if (s.commande_ref === myNum) {
+        thisPair.set(pk, (thisPair.get(pk) ?? 0) + (s.quantite_recue ?? 0));
+        const rk = normRef(s.reference_article);
+        const cible = scannedNums.has(nb) ? scanParRef : horsScanParRef;
+        cible.set(rk, (cible.get(rk) ?? 0) + (s.quantite_recue ?? 0));
+      }
     }
     const m = new Map<string, number>();
     const partagees = new Set<string>();
@@ -163,8 +176,8 @@ export default function CommandeDetailPage() {
       if (part < 0.999) partagees.add(rk);              // (BE, réf) partagé avec une autre commande
     }
     for (const [k, v] of m) m.set(k, Math.round(v));
-    return { papierParRef: m, refsPartagees: partagees };
-  }, [lignesBeServing, saisiesServing, beImportes, commande]);
+    return { papierParRef: m, refsPartagees: partagees, saisieScanParRef: scanParRef, saisieHorsScanParRef: horsScanParRef };
+  }, [lignesBeServing, saisiesServing, beImportes, commande, besRecus]);
 
   const { data: liaisonsFacture = [] } = useQuery<LiaisonFactureCommande[]>({
     queryKey: ['liaisons_facture_cmd', id],
@@ -839,18 +852,25 @@ export default function CommandeDetailPage() {
                         const rk = normRef(l.reference_article);
                         const pap = papierParRef.get(rk);
                         if (pap === undefined) return <span className="text-gray-300">—</span>;
-                        const recu = l.quantite_receptionnee_reelle ?? 0;
-                        const diff = Math.abs(pap - recu) > 0.001;
+                        // MÊME PÉRIMÈTRE : le papier ② (bons scannés) se compare à la saisie CL
+                        // de cette commande SUR CES MÊMES BONS — pas au Livré total, qui peut
+                        // inclure des bons jamais scannés (M2M + outil lancé en cours de route).
+                        const saisieScan = saisieScanParRef.get(rk) ?? 0;
+                        const horsScan = saisieHorsScanParRef.get(rk) ?? 0;
+                        const diff = Math.abs(pap - saisieScan) > 0.001;
                         const partage = refsPartagees.has(rk);
                         return (
                           <span
                             className={cn(diff ? 'text-amber-600 font-semibold' : 'text-gray-400')}
                             title={
                               (partage ? `≈ BE partagé entre plusieurs commandes : papier réparti au prorata de la saisie. ` : '') +
-                              (diff ? `BL papier ${pap} ≠ saisie CL ${recu} → la log n'a pas saisi conformément au papier sur cette commande` : `BL papier ${pap} = saisie CL`)
+                              (diff
+                                ? `BL papier ${pap} ≠ saisie CL ${saisieScan} (sur les bons scannés) → la log n'a pas saisi conformément au papier sur cette commande`
+                                : `BL papier ${pap} = saisie CL (sur les bons scannés)`) +
+                              (horsScan > 0 ? ` · + ${horsScan} reçu(s) via bon(s) non scanné(s) — hors périmètre papier, pas un écart` : '')
                             }
                           >
-                            {partage ? '≈' : ''}{pap}{diff ? ' ⚠' : ''}
+                            {partage ? '≈' : ''}{pap}{diff ? ' ⚠' : ''}{horsScan > 0 ? <span className="text-gray-400 font-normal"> (+{horsScan}*)</span> : ''}
                           </span>
                         );
                       })()}

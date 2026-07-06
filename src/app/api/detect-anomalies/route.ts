@@ -140,6 +140,14 @@ export async function POST(req: Request) {
     if (!k) continue;
     totalBeParRef.set(k, (totalBeParRef.get(k) ?? 0) + (Number(l.quantite_receptionnee) || 0));
   }
+  // M2M + outil lancé en cours de route : une réf peut avoir des saisies sur des bons
+  // JAMAIS scannés (historiques). Son papier ② est alors STRUCTURELLEMENT incomplet →
+  // « le papier ne montre pas ce surplus » ne prouve plus une sur-saisie de la log.
+  const scannedBeNums = new Set((beR.data ?? []).map((b) => nbe(b.numero_be)));
+  const refsPapierPartiel = new Set<string>();
+  for (const s of saisies) {
+    if (!scannedBeNums.has(nbe(s.numero_be))) refsPapierPartiel.add(aliasRef(s.reference_article));
+  }
   const TYPE_R: Record<string, string> = { sur_livraison: 'sur-livraison', hors_commande: 'hors-commande' };
   const recepVus = new Set<string>(); // dédoublonnage : 1 anomalie par référence (pas par BE)
   for (const c of recep) {
@@ -159,10 +167,13 @@ export async function POST(req: Request) {
     // tranche : si le papier confirme le surplus → Colombi a vraiment sur-livré ; si le
     // papier ne le montre pas → l'acheteuse a sur-saisi → log. Sans papier importé pour
     // la réf, on ne peut pas conclure → on reste prudent (Colombi) et on signale à vérifier.
-    const bePapierRef = c.verdict === 'sur_livraison' ? (totalBeParRef.get(normalizeRef(c.ref)) ?? 0) : 0;
+    const bePapierRef = c.verdict === 'sur_livraison' ? (totalBeParRef.get(aliasRef(c.ref)) ?? 0) : 0;
     const papierConfirme = bePapierRef > (c.totalCommande ?? 0) + 0.001;
     const papierContredit = c.verdict === 'sur_livraison' && bePapierRef > 0.001 && !papierConfirme;
-    const versLog = papierContredit;
+    // Papier incomplet (saisies sur des bons non scannés) → le silence du papier ne prouve
+    // RIEN : on n'accuse pas la log, on reste « Colombi / à vérifier » avec mention.
+    const papierPartiel = refsPapierPartiel.has(aliasRef(c.ref));
+    const versLog = papierContredit && !papierPartiel;
     const destinataire = c.verdict === 'sur_livraison'
       ? (versLog ? 'log' : 'Colombi')
       : (estSav ? 'SAV' : 'Colombi');
@@ -176,7 +187,9 @@ export async function POST(req: Request) {
         ? versLog
           ? `Sur-saisie probable ${c.ref} : reçu ${c.totalRecu} > commandé ${c.totalCommande} (Attendu négatif) mais le BE papier (${bePapierRef}) ne montre pas ce surplus — à corriger dans Centralink`
           : bePapierRef > 0.001
-            ? `Sur-livraison ${c.ref} : commandé ${c.totalCommande} / reçu ${c.totalRecu} → +${ecart}, confirmée par le BE papier (${bePapierRef})`
+            ? papierContredit && papierPartiel
+              ? `Sur-livraison ${c.ref} : commandé ${c.totalCommande} / reçu ${c.totalRecu} → +${ecart} — à vérifier : le papier scanné (${bePapierRef}) ne le confirme pas, MAIS la réf a des réceptions sur des bons non scannés (papier incomplet, outil lancé en cours de route) → impossible de trancher par le BL`
+              : `Sur-livraison ${c.ref} : commandé ${c.totalCommande} / reçu ${c.totalRecu} → +${ecart}, confirmée par le BE papier (${bePapierRef})`
             : `Sur-livraison ${c.ref} : commandé ${c.totalCommande} / reçu ${c.totalRecu} → +${ecart} — à vérifier (BE papier non importé pour cette réf)`
         : estSav
           ? `Pièce détachée SAV ${c.ref} : reçu ${c.qteBe}, livrée hors commande (hors Centralink)`
@@ -188,7 +201,9 @@ export async function POST(req: Request) {
       suggestion_action_ia: c.verdict === 'sur_livraison'
         ? versLog
           ? `Corriger dans Centralink : la saisie ${c.ref} (${c.totalRecu}) dépasse le commandé (${c.totalCommande}) sans que le BE papier (${bePapierRef}) le confirme → ramener le reçu au réel (${bePapierRef || c.totalCommande}).`
-          : `Réclamation Colombi : sur-livraison ${c.ref} de +${ecart} (commandé ${c.totalCommande} / reçu ${c.totalRecu})${bePapierRef > 0.001 ? `, confirmée par le BE papier (${bePapierRef})` : ' — vérifier le BL papier'} → réclamer avoir ou passer commande de régularisation.`
+          : papierContredit && papierPartiel
+            ? `À vérifier ${c.ref} : reçu ${c.totalRecu} > commandé ${c.totalCommande}, papier scanné (${bePapierRef}) insuffisant pour trancher (réceptions sur bons non scannés) → contrôler physiquement, ou scanner les bons manquants de la réf, AVANT de réclamer ou de corriger la saisie.`
+            : `Réclamation Colombi : sur-livraison ${c.ref} de +${ecart} (commandé ${c.totalCommande} / reçu ${c.totalRecu})${papierConfirme ? `, confirmée par le BE papier (${bePapierRef})` : ' — vérifier le BL papier'} → réclamer avoir ou passer commande de régularisation.`
         : estSav
           ? `Info SAV : pièce détachée ${c.ref} (${c.qteBe}) livrée hors commande — aucune action Centralink, rattacher au dossier SAV.`
           : `Réclamation Colombi : ${c.ref} (${c.qteBe}) jamais commandé → vérifier le BL et réclamer (livraison non commandée).`,
