@@ -6,7 +6,7 @@ import {
   type LigneFactureInput, type LigneCommandeInput, type CommandeInput, type SaisieInput,
 } from '@/lib/facturation';
 import { quantitesConcordent, facteurConditionnement } from '@/lib/conditionnement';
-import { REF_ALIAS_CL_TO_COLOMBI } from '@/lib/ref-alias';
+import { aliasRef } from '@/lib/pointage';
 
 export const maxDuration = 60; // détection lourde (beaucoup de données) → éviter le timeout serverless
 export const dynamic = 'force-dynamic';
@@ -121,17 +121,10 @@ export async function POST(req: Request) {
   const key = (o: string, ancre: string, ref: string, type: string) => `${o}|${ancre}|${normalizeRef(ref)}|${type}`;
   const nouvelles: NewExc[] = [];
 
-  // Alias de réf CL → réf Colombi (codes vrac : billes/plombs saisis sous un code
-  // générique dans Centralink). On traduit la saisie vers le code du BL papier avant de
-  // comparer ; l'écart d'unité (boîte/pièce) est ensuite géré par le conditionnement
-  // (quantitesConcordent). Voir src/lib/ref-alias.ts. (Défini tôt : utilisé dès §3b.)
-  const aliasNorm = new Map(
-    Object.entries(REF_ALIAS_CL_TO_COLOMBI).map(([cl, col]) => [normalizeRef(cl), normalizeRef(col)]),
-  );
-  const aliasRef = (raw: string | null | undefined) => {
-    const k = normalizeRef(raw);
-    return aliasNorm.get(k) ?? k;
-  };
+  // Alias de réf CL ↔ Colombi + préfixe n° de commande (« 1404/16928A » = 16928A) :
+  // DÉFINITION UNIQUE partagée avec le moteur écran (lib/pointage.aliasRef) pour que le
+  // Centre et les écrans jugent avec la même clé. S'applique aux saisies ET au papier
+  // (les codes se mélangent sur les BL : LTLPK03/490041 imprimés côté papier aussi).
   // Couples « commande|réf » déjà signalés comme sur-réception (§3b/§3c/§3g) → évite que
   // l'angle mort « réception non détaillée » (§3h) ne fasse doublon sur le même écart.
   const cmdRefSurSaisie = new Set<string>();
@@ -143,7 +136,7 @@ export async function POST(req: Request) {
   // (le papier est le contrôle physique indépendant de la saisie Centralink).
   const totalBeParRef = new Map<string, number>();
   for (const l of beForRecep) {
-    const k = normalizeRef(l.reference_article);
+    const k = aliasRef(l.reference_article); // papier aliasé aussi (codes mélangés sur les BL)
     if (!k) continue;
     totalBeParRef.set(k, (totalBeParRef.get(k) ?? 0) + (Number(l.quantite_receptionnee) || 0));
   }
@@ -259,7 +252,7 @@ export async function POST(req: Request) {
   for (const l of lignesBe) {
     if (l.hors_systeme) continue;
     const m = lbByBe.get(l.be_id) ?? new Map<string, { qte: number; desig: string | null }>();
-    const k = normalizeRef(l.reference_article);
+    const k = aliasRef(l.reference_article); // même clé que les saisies (alias + préfixe coupé)
     const cur = m.get(k) ?? { qte: 0, desig: l.designation ?? null };
     cur.qte += Number(l.quantite_receptionnee) || 0;
     if (!cur.desig && l.designation) cur.desig = l.designation;
@@ -596,12 +589,12 @@ export async function POST(req: Request) {
   // §3f croit que toute la saisie est du SAV.
   const normalBeRef = new Set<string>();
   for (const l of lignesBe) {
-    if (!l.hors_systeme) normalBeRef.add(l.be_id + '|' + normalizeRef(l.reference_article));
+    if (!l.hors_systeme) normalBeRef.add(l.be_id + '|' + aliasRef(l.reference_article));
   }
   const horsSysByBeRef = new Set<string>();
   for (const l of lignesBe) {
     if (!l.hors_systeme) continue;
-    const kk = l.be_id + '|' + normalizeRef(l.reference_article);
+    const kk = l.be_id + '|' + aliasRef(l.reference_article);
     if (normalBeRef.has(kk)) continue; // réf aussi livrée normalement sur ce BE → pas une ligne SAV pure
     horsSysByBeRef.add(kk);
   }
