@@ -363,6 +363,39 @@ export async function POST(req: Request) {
     }
   }
 
+  // ── Contexte par réf pour §3c — MÊMES garde-fous que le moteur écran (lib/pointage) ──
+  // reste à recevoir (commande en attente = corrobore un oubli de saisie), reçu total
+  // (saisi sous un autre bon) et part du Livré non détaillée par bon (détail incomplet, §3h).
+  const resteParRef = new Map<string, number>();
+  const recuTotalParRef = new Map<string, number>();
+  for (const l of lignesCmd) {
+    const k = aliasRef(l.reference_article);
+    resteParRef.set(k, (resteParRef.get(k) ?? 0) + Math.max(0, Number(l.quantite_restante_a_recevoir) || 0));
+    recuTotalParRef.set(k, (recuTotalParRef.get(k) ?? 0) + (Number(l.quantite_receptionnee_reelle) || 0));
+  }
+  const saisiTotalParRef = new Map<string, number>();
+  for (const s of saisies) {
+    const k = aliasRef(s.reference_article);
+    saisiTotalParRef.set(k, (saisiTotalParRef.get(k) ?? 0) + (Number(s.quantite_recue) || 0));
+  }
+  const nonDetailleParRef = new Map<string, number>();
+  for (const [k, recu] of recuTotalParRef) {
+    const nd = recu - (saisiTotalParRef.get(k) ?? 0);
+    if (nd > 0.001) nonDetailleParRef.set(k, nd);
+  }
+  const oubliLogRefs = new Set<string>();   // réfs portées en « oubli log » par BE → §3c-bis ne double pas
+
+  // Stock CL (bar-code) — chargé tôt : mention canal scan sur les oublis (§3c), filtre §3h,
+  // post-pass bar-code. Clé ALIASÉE : le stock CL porte le code CL (ex. LTLPK03) alors que
+  // les anomalies portent le code Colombi (LTL014) — sans alias, le croisement est aveugle.
+  const stkR = await selectAll(() =>
+    sb.from('stocks_cl').select('reference_article, stock_cl, floating, has_barcode, ventes, stock_source'));
+  const stockByRef = new Map<string, { stock_cl: number | null; floating: number | null; has_barcode: boolean | null; ventes: number | null; stock_source: string | null }>();
+  for (const s of (stkR.data ?? [])) {
+    const k = aliasRef(s.reference_article as string);
+    if (k && !stockByRef.has(k)) stockByRef.set(k, s as never);
+  }
+
   // ── 3g) DOUBLE SAISIE DE RÉCEPTION (lignes saisie STRICTEMENT identiques) ──────
   // Quand la log saisit la réception d'un même bon plusieurs fois dans Centralink, la même
   // ligne (n° BE + réf + qté + commande) revient à l'identique N fois → le « reçu » est gonflé.
@@ -463,13 +496,13 @@ export async function POST(req: Request) {
             : `Corriger dans Centralink : sur ${numBe}, la log a saisi ${saisie} ${k} alors que le BL papier en montre ${papier} → réduire de ${surplus.toFixed(0)}${mult ? ` (doublon ×${mult})` : ''}.`,
         });
       } else {
-        // Le BL papier montre PLUS que la saisie sous ce BE = SURPLUS COLOMBI.
-        // Colombi sur-livre en routine ; la log ne saisit que ce qui a une commande ouverte,
-        // l'excédent reste non saisi sous ce BE → il remonte ici. Ce n'est PAS un oubli log :
-        // c'est à arbitrer côté achat (garder → commande de régule AVEC le n° de BE dans la
-        // colonne Bon de Livraison → la saisie se rangera sous ce BE et le manque se fermera
-        // tout seul au prochain sync ; retour → avoir ; ou ajout au stock). Le rare vrai oubli =
-        // le cas où il n'y a PAS de surplus (à la revue), donc on reste prudent : destinataire Colombi.
+        // Le BL papier montre PLUS que la saisie sous ce BE (② > ③). Deux vraies causes,
+        // départagées comme au moteur écran (causeEcart) :
+        //  • la COMMANDE ATTEND ENCORE du reliquat → la réception n'a pas été saisie =
+        //    OUBLI LOG (cf 2227 : papier 40, saisi 4, #4842 attend 36 — la marchandise est
+        //    là, CL croit toujours l'attendre) → destinataire log, action « saisir » ;
+        //  • commandes SOLDÉES → l'excédent est un SURPLUS COLOMBI à arbitrer côté achat
+        //    (régule / retour / stock) → jugé PAR RÉFÉRENCE en §3c-bis, destinataire Colombi.
         const manque = papier - saisie;
         // CAS LOG (cas 1/2) : réf en manque MAIS saisie sous un n° de BE INVALIDE (mois > 12)
         // → erreur de n° de BE de la log (la marchandise est saisie, juste mal numérotée),
@@ -512,10 +545,36 @@ export async function POST(req: Request) {
           });
           continue;
         }
-        // Sinon : l'écart papier > saisie PAR BE est trop bruité — la marchandise peut
-        // être saisie sous un AUTRE n° de BL (mauvais n° de BE). On ne tranche donc PAS par
-        // BE : le vrai écart déclaration/comptage est jugé PAR RÉFÉRENCE (total vs total)
-        // en §3c-bis, où la saisie sous d'autres BL est prise en compte.
+        // Saisi ailleurs (même garde-fou que l'écran) : RIEN saisi sous CE bon mais la réf
+        // est reçue ailleurs dans Centralink → saisie sous un autre n° de bon, pas un oubli.
+        if (saisie <= 0.001 && (recuTotalParRef.get(k) ?? 0) > 0.001) continue;
+        // Détail incomplet (§3h) : la part du Livré global non détaillée par bon couvre le
+        // manque → order/view perd des lignes, la marchandise EST comptée — pas un oubli.
+        if ((nonDetailleParRef.get(k) ?? 0) >= manque - 0.001) continue;
+        // OUBLI LOG : le BL papier déclare livré, la saisie sous ce bon est en dessous ET la
+        // commande attend encore du reliquat → la réception n'a pas été saisie. Le reliquat
+        // est le signal qui corrobore le papier : si la marchandise était saisie sous un
+        // autre bon, la commande serait servie. Conséquences si on ne corrige pas : commande
+        // jamais soldée, reçu ③ faux (base du contrôle factures ④), risque de re-commander.
+        const reste = resteParRef.get(k) ?? 0;
+        if (reste > 0.001) {
+          oubliLogRefs.add(k);   // avant le seen : §3c-bis ne double pas, même si l'anomalie existe déjà
+          if (seen.has(key('pointage', beId, k, 'oubli log'))) continue;
+          const bc = stockByRef.get(k)?.has_barcode
+            ? ' 🏷 Réf au code-barres : le stock physique est probablement déjà entré par scan — la saisie sous le bon reste à faire pour solder la commande (le pointage ne touche pas le stock).'
+            : '';
+          nouvelles.push({
+            origine: 'pointage', destinataire: 'log', type_exception: 'oubli log',
+            be_id: beId, reference_article: k,
+            motif: `Oubli de saisie ${k} sur ${numBe} : BL papier ${papier} / saisi ${saisie} → ${manque.toFixed(0)} non saisi(s), commande(s) encore en attente (${reste.toFixed(0)} à recevoir)`,
+            valeur_attendue: papier, valeur_obtenue: saisie, ecart: -manque,
+            statut_exception: 'ouverte', niveau_priorite: 'moyenne',
+            suggestion_action_ia: `Corriger dans Centralink : saisir ${manque.toFixed(0)} ${k} sous ${numBe} (BL papier ${papier}, saisi ${saisie}) — la commande en attente se soldera.${bc}`,
+          });
+          continue;
+        }
+        // Sinon (commandes soldées) : le vrai écart déclaration/comptage est jugé PAR
+        // RÉFÉRENCE (total vs total) en §3c-bis, où avoirs et régules sont pris en compte.
       }
     }
   }
@@ -556,17 +615,17 @@ export async function POST(req: Request) {
   );
   const avoirParRef = new Map<string, number>();
   const reguleParRef = new Map<string, number>();
-  const resteParRef = new Map<string, number>();
   for (const l of lignesCmd) {
     const k = aliasRef(l.reference_article);
     const r = Number(l.quantite_receptionnee_reelle) || 0;
     if (r < 0) avoirParRef.set(k, (avoirParRef.get(k) ?? 0) + (-r));                          // refusé/rendu
     if (reguleCmdIds.has(l.commande_id)) reguleParRef.set(k, (reguleParRef.get(k) ?? 0) + Math.max(0, r)); // gardé
-    resteParRef.set(k, (resteParRef.get(k) ?? 0) + Math.max(0, Number(l.quantite_restante_a_recevoir) || 0));
   }
+  // (resteParRef est calculé plus haut, avant §3c — partagé avec la détection d'oubli log.)
   for (const [k, info] of papierTotParRef) {
     if (!refsCommandees.has(k)) continue;                  // hors-commande/SAV → traité ailleurs
     if (facteurConditionnement(info.desig) > 1) continue;  // conditionnement → géré par BE (unités)
+    if (oubliLogRefs.has(k)) continue;                     // déjà porté en « oubli log » par BE (reliquat) → pas de doublon
     const pap = info.qte;
     const saisi = saisieScanParRef.get(k) ?? 0;            // saisi sur NOS bons
     const avoir = avoirParRef.get(k) ?? 0;                 // refusé/rendu
@@ -723,17 +782,7 @@ export async function POST(req: Request) {
     }
   }
 
-  // Stock CL (bar-code) — chargé AVANT §3h : sert au filtre canal code-barres de §3h ET au
-  // post-pass bar-code plus bas.
-  const stkR = await selectAll(() =>
-    sb.from('stocks_cl').select('reference_article, stock_cl, floating, has_barcode, ventes, stock_source'));
-  const stockByRef = new Map<string, { stock_cl: number | null; floating: number | null; has_barcode: boolean | null; ventes: number | null; stock_source: string | null }>();
-  for (const s of (stkR.data ?? [])) {
-    // clé ALIASÉE : le stock CL porte le code CL (ex. LTLPK03) alors que les anomalies
-    // portent le code Colombi (LTL014) — sans alias, le croisement bar-code est aveugle.
-    const k = aliasRef(s.reference_article as string);
-    if (k && !stockByRef.has(k)) stockByRef.set(k, s as never);
-  }
+  // (stockByRef est chargé plus haut, avant §3c — sert aussi à la mention bar-code des oublis.)
 
   // ── 3h) RÉCEPTION NON DÉTAILLÉE (Livré > détail saisi par bon) → à vérifier ───
   // Le reçu réel (colonne Livré, autoritaire) dépasse la somme du détail saisi par bon :
