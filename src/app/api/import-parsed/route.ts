@@ -168,6 +168,7 @@ export async function POST(req: NextRequest) {
             quantite_facturee: 0,
             quantite_restante_a_facturer: l.hors_systeme ? 0 : l.quantite_receptionnee,
             hors_systeme: l.hors_systeme ?? false,
+            ref_cde_client: l.ref_cde_client ?? null,
           })),
         );
       }

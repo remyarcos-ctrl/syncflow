@@ -73,7 +73,7 @@ export async function POST(req: Request) {
   }
 
   const [lbeR, lcR, saisR, beR, lfR, factR, cmdR, exR, savR, resR] = await Promise.all([
-    selectAll(() => sb.from('lignes_be').select('be_id, reference_article, designation, quantite_receptionnee, hors_systeme, statut_retour')),
+    selectAll(() => sb.from('lignes_be').select('be_id, reference_article, designation, quantite_receptionnee, hors_systeme, statut_retour, ref_cde_client')),
     selectAll(() => sb.from('lignes_commande').select('commande_id, reference_article, quantite_commandee, pu_commande, quantite_receptionnee_reelle, quantite_restante_a_recevoir')),
     selectAll(() => sb.from('saisies_cl').select('numero_be, reference_article, quantite_recue, commande_ref')),
     selectAll(() => sb.from('be_receptions').select('id, numero_be')),
@@ -342,12 +342,32 @@ export async function POST(req: Request) {
   // mesurer le vrai écart (§3g) et faire remonter l'angle mort (§3h).
   const recuReelByCmdRef = new Map<string, number>();
   const surReceptionByCmdRef = new Set<string>();   // (commande|réf) où reçu réel > commandé = VRAIE sur-réception
+  // Reçu réel + reliquat par (n° commande NORMALISÉ | réf) : sert au SCOPE par commande via la
+  // colonne « Référence cde client » du BE (ex. « 5567 » ↔ commande #5567) → on compare le papier
+  // au reçu/reliquat de LA commande que sert le bon, jamais au total (fin du piège M2M).
+  const nnum = (s: string | null | undefined) => String(s ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const livreByNormCmdRef = new Map<string, number>();
+  const resteByNormCmdRef = new Map<string, number>();
   for (const l of lignesCmd) {
     const num = cmdNum.get(l.commande_id);
     if (!num) continue;
     const kk = `${num}|${aliasRef(l.reference_article)}`;
     recuReelByCmdRef.set(kk, (recuReelByCmdRef.get(kk) ?? 0) + (Number(l.quantite_receptionnee_reelle) || 0));
     if ((Number(l.quantite_receptionnee_reelle) || 0) > (Number(l.quantite_commandee) || 0) + 0.001) surReceptionByCmdRef.add(kk);
+    const nk = `${nnum(num)}|${aliasRef(l.reference_article)}`;
+    livreByNormCmdRef.set(nk, (livreByNormCmdRef.get(nk) ?? 0) + (Number(l.quantite_receptionnee_reelle) || 0));
+    resteByNormCmdRef.set(nk, (resteByNormCmdRef.get(nk) ?? 0) + Math.max(0, Number(l.quantite_restante_a_recevoir) || 0));
+  }
+  // Commandes que sert chaque réf de NOS bons scannés, d'après la colonne « Référence cde client »
+  // du papier (ref_cde_client, ex. « 5567 » ou « 5567,5570 »). Clé = réf aliasée → set de n° normalisés.
+  const cdeClientsByRef = new Map<string, Set<string>>();
+  for (const l of lignesBe) {
+    const cdes = String(l.ref_cde_client ?? '').split(',').map((x) => nnum(x)).filter((x) => x.length >= 3);
+    if (!cdes.length) continue;
+    const k = aliasRef(l.reference_article);
+    const set = cdeClientsByRef.get(k) ?? new Set<string>();
+    for (const c of cdes) set.add(c);
+    cdeClientsByRef.set(k, set);
   }
   const detailByCmdRef = new Map<string, number>();
   const cmdRefsByBeRef = new Map<string, Set<string>>();
@@ -638,6 +658,33 @@ export async function POST(req: Request) {
     const reste = resteParRef.get(k) ?? 0;                 // reliquat CL (autoritaire : commande non soldée)
     const recuReel = recuTotalParRef.get(k) ?? 0;          // Livré total (reçu réel)
     const detail = `papier ${pap}, saisi ${saisi}${avoir > 0 ? `, avoir ${avoir}` : ''}${regule > 0 ? `, régule ${regule}` : ''}`;
+    // SCOPE PAR COMMANDE (colonne « Référence cde client » du BE) : quand on SAIT quelle(s)
+    // commande(s) ce bon sert pour cette réf, on juge sur CELLE-là, pas sur le total. Si toutes
+    // sont soldées (reliquat scopé = 0) ET leur Livré couvre le papier → reçu mais pas ventilé
+    // (RO00033 : bon → #5567, soldée, Livré 3 ≥ papier 3). Précis, sans piège M2M. Ne s'applique
+    // qu'aux bons importés AVEC la cde client ; sinon on retombe sur la logique reliquat-total ci-dessous.
+    const cdes = cdeClientsByRef.get(k);
+    if (cdes && cdes.size) {
+      let resteScope = 0, livreScope = 0;
+      for (const c of cdes) {
+        resteScope += resteByNormCmdRef.get(`${c}|${k}`) ?? 0;
+        livreScope += livreByNormCmdRef.get(`${c}|${k}`) ?? 0;
+      }
+      if (resteScope < 0.001 && livreScope >= pap - 0.001) {
+        if (seen.has(key('pointage', info.beId, k, 'réception non détaillée'))) continue;
+        nouvelles.push({
+          origine: 'pointage', destinataire: 'à vérifier', type_exception: 'réception non détaillée',
+          be_id: info.beId, reference_article: k,
+          motif: `Réception non détaillée ${k} : commande(s) ${[...cdes].map((c) => '#' + c).join(', ')} soldée(s) et Livré (${livreScope.toFixed(0)}) couvre le papier (${pap}) — reçu mais pas ventilé sous ce bon (saisi ${saisi}) → PAS un manque.`,
+          valeur_attendue: pap, valeur_obtenue: saisi, ecart: -surplus,
+          statut_exception: 'ouverte', niveau_priorite: 'faible',
+          suggestion_action_ia: `Info ${k} : réception bien enregistrée sur ${[...cdes].map((c) => '#' + c).join(', ')} (Livré ${livreScope.toFixed(0)}, soldée) mais non ventilée sous ce bon → rien à réclamer ; au besoin ventiler la saisie sous le bon pour un détail propre.`,
+        });
+        continue;
+      }
+      // scope connu mais reliquat > 0 OU Livré < papier → vrai écart sur CETTE commande → on ne
+      // l'exonère pas ; il tombe dans la logique ci-dessous (réception incomplète / surplus).
+    }
     // Le RELIQUAT CL est le seul juge fiable de « reste-t-il quelque chose à recevoir ? » (CL
     // le calcule commande par commande). On NE compare JAMAIS le papier (périmètre partiel, nos
     // bons scannés) au Livré TOTAL (toutes commandes/périodes) pour exonérer : ce serait le piège

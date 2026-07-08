@@ -56,6 +56,7 @@ export interface ParsedLigneBE {
   remise_r2?: number | null;       // % colonne R2 (0 si vide)
   remise_r3?: number | null;       // % colonne R3 (0 si vide)
   montant_ht?: number | null;      // Total HT de la ligne — sert à l'auto-vérif
+  ref_cde_client?: string | null;  // colonne « Référence cde client » = n° de commande SD (ex. 5567) — scope papier↔commande
   hors_systeme?: boolean;
 }
 
@@ -97,6 +98,20 @@ export const normalizeRef = (s: string | null | undefined): string =>
 
 const isPositionCode = (s: string) => /^[A-Z]{4}$/.test(s.trim());
 const isEanBarcode = (s: string) => /^\d{8,}$/.test(s.trim());
+
+// Fusionne les n° de commande client (« Référence cde client ») d'une réf agrégée : liste
+// distincte, séparée par des virgules (ex. « 5567 » ou « 5567,5570 »). Les non-numériques
+// (« CC26... » parasites) sont écartés — seul le n° de commande SD compte.
+function mergeCdeClient(existant: string | null | undefined, ajout: string | null | undefined): string | null {
+  const set = new Set<string>();
+  for (const src of [existant, ajout]) {
+    for (const part of String(src ?? '').split(/[,;/]/)) {
+      const n = part.replace(/[^0-9]/g, '');
+      if (n.length >= 3) set.add(n);
+    }
+  }
+  return set.size ? [...set].join(',') : null;
+}
 
 // ── Appel Claude API ──────────────────────────────────────────────────────────
 
@@ -295,9 +310,11 @@ export function processBERaw(raw: Record<string, unknown>): ParsedDocument {
     const isSav = !!(l as ParsedLigneBE & { hors_systeme?: boolean }).hors_systeme;
     const key = `${normalizeRef(l.reference_article)}|${isSav ? '1' : '0'}`;
     if (aggregated.has(key)) {
-      aggregated.get(key)!.quantite_receptionnee += l.quantite_receptionnee;
+      const cur = aggregated.get(key)!;
+      cur.quantite_receptionnee += l.quantite_receptionnee;
+      cur.ref_cde_client = mergeCdeClient(cur.ref_cde_client, l.ref_cde_client); // une réf peut servir 2 commandes sur le même bon
     } else {
-      aggregated.set(key, { ...l, hors_systeme: isSav });
+      aggregated.set(key, { ...l, hors_systeme: isSav, ref_cde_client: mergeCdeClient(null, l.ref_cde_client) });
     }
   }
 
@@ -373,6 +390,7 @@ Retourne un tableau JSON (même si un seul document) :
         "remise_r2": pourcentage de la colonne R2 (nombre, 0 si vide),
         "remise_r3": pourcentage de la colonne R3 (nombre, ex: 20 ; 0 si vide),
         "montant_ht": valeur de la colonne « Total HT » (dernière colonne) lue telle quelle (ex: 959.88) ou null,
+        "ref_cde_client": contenu de la colonne « Référence cde client » = le numéro de commande du client (ex: "5567"). Prends UNIQUEMENT le nombre de la COLONNE (pas les « (cde CC... du .../.../...) » qui sont dans la désignation). null si vide.,
         "hors_systeme": true si la ligne concerne le SAV/Service Après-Vente, false sinon
       }
     ]
@@ -518,7 +536,8 @@ function fusionnerDocs(listes: ParsedDocument[][]): ParsedDocument[] {
       if (e) {
         e.quantite_receptionnee += Number(l.quantite_receptionnee) || 0;
         if (l.montant_ht != null) e.montant_ht = (Number(e.montant_ht) || 0) + Number(l.montant_ht);
-      } else agg.set(key, { ...l });
+        e.ref_cde_client = mergeCdeClient(e.ref_cde_client, l.ref_cde_client);
+      } else agg.set(key, { ...l, ref_cde_client: mergeCdeClient(null, l.ref_cde_client) });
     }
     out.push({ type: 'be', data: { ...data, numero_be: String(data.numero_be ?? '').split('/')[0], lignes: [...agg.values()] } });
   }
