@@ -551,25 +551,28 @@ export async function POST(req: Request) {
         // Détail incomplet (§3h) : la part du Livré global non détaillée par bon couvre le
         // manque → order/view perd des lignes, la marchandise EST comptée — pas un oubli.
         if ((nonDetailleParRef.get(k) ?? 0) >= manque - 0.001) continue;
-        // OUBLI LOG : le BL papier déclare livré, la saisie sous ce bon est en dessous ET la
-        // commande attend encore du reliquat → la réception n'a pas été saisie. Le reliquat
-        // est le signal qui corrobore le papier : si la marchandise était saisie sous un
-        // autre bon, la commande serait servie. Conséquences si on ne corrige pas : commande
-        // jamais soldée, reçu ③ faux (base du contrôle factures ④), risque de re-commander.
+        // ÉCART RÉCEPTION (BL papier > reçu CL, commande encore en attente) : le BL déclare
+        // PLUS que ce que CL a reçu. On NE PRÉSUME PAS le coupable — impossible depuis le seul
+        // papier : soit Colombi a livré court (manquant → réclamer / reliquat à attendre), soit
+        // la log a oublié de saisir (marchandise en stock → à saisir). SEUL UN CONTRÔLE PHYSIQUE
+        // tranche (doctrine Rémy : on est le contrôle, on ne lit pas les annotations manuscrites,
+        // et la log peut même ne pas avoir vu le manquant). On corrèle avec le reliquat CL
+        // (cohérent avec un manquant Colombi) et on laisse l'humain vérifier. Type NEUTRE
+        // « réception incomplète » (libellé écran « Livraison partielle »), destinataire à vérifier.
         const reste = resteParRef.get(k) ?? 0;
         if (reste > 0.001) {
           oubliLogRefs.add(k);   // avant le seen : §3c-bis ne double pas, même si l'anomalie existe déjà
-          if (seen.has(key('pointage', beId, k, 'oubli log'))) continue;
+          if (seen.has(key('pointage', beId, k, 'réception incomplète'))) continue;
           const bc = stockByRef.get(k)?.has_barcode
-            ? ' 🏷 Réf au code-barres : le stock physique est probablement déjà entré par scan — la saisie sous le bon reste à faire pour solder la commande (le pointage ne touche pas le stock).'
+            ? ' 🏷 Réf au code-barres : vérifier aussi une entrée scan directe en stock.'
             : '';
           nouvelles.push({
-            origine: 'pointage', destinataire: 'log', type_exception: 'oubli log',
+            origine: 'pointage', destinataire: 'à vérifier', type_exception: 'réception incomplète',
             be_id: beId, reference_article: k,
-            motif: `Oubli de saisie ${k} sur ${numBe} : BL papier ${papier} / saisi ${saisie} → ${manque.toFixed(0)} non saisi(s), commande(s) encore en attente (${reste.toFixed(0)} à recevoir)`,
+            motif: `Écart réception ${k} sur ${numBe} : le BL papier déclare ${papier}, CL n'a reçu que ${saisie} → ${manque.toFixed(0)} manquant(s), ${reste.toFixed(0)} en reliquat sur commande → à contrôler physiquement (livraison courte Colombi OU oubli de saisie).`,
             valeur_attendue: papier, valeur_obtenue: saisie, ecart: -manque,
             statut_exception: 'ouverte', niveau_priorite: 'moyenne',
-            suggestion_action_ia: `Corriger dans Centralink : saisir ${manque.toFixed(0)} ${k} sous ${numBe} (BL papier ${papier}, saisi ${saisie}) — la commande en attente se soldera.${bc}`,
+            suggestion_action_ia: `Contrôler physiquement ${k} (BL ${papier} / reçu CL ${saisie}, ${reste.toFixed(0)} en reliquat) : si la marchandise est en stock → la saisir sous ${numBe} (oubli log) ; si elle est absente du colis → manquant Colombi à réclamer (avoir) ou reliquat à attendre. Seul le contrôle physique tranche.${bc}`,
           });
           continue;
         }
@@ -632,9 +635,27 @@ export async function POST(req: Request) {
     const regule = reguleParRef.get(k) ?? 0;               // gardé via régule
     const surplus = pap - saisi - avoir - regule;
     if (surplus < 0.5) continue;                           // tout saisi / rendu / régularisé → rien
-    if (seen.has(key('pointage', info.beId, k, 'sur-livraison'))) continue;
     const reste = resteParRef.get(k) ?? 0;                 // commande encore ouverte ?
     const detail = `papier ${pap}, saisi ${saisi}${avoir > 0 ? `, avoir ${avoir}` : ''}${regule > 0 ? `, régule ${regule}` : ''}`;
+    // REÇU MAIS PAS DÉTAILLÉ : le reçu réel (colonne Livré, autoritaire) couvre déjà tout le
+    // papier déclaré → la marchandise EST bien reçue, CL ne l'a simplement pas ventilée sous ce
+    // bon dans le détail order/view. PAS un surplus Colombi (cf RO00033 : papier 3, saisi 0 sur
+    // le bon, mais Livré 3 sur #5567). On le classe « réception non détaillée » (faible) au lieu
+    // d'un faux « surplus » — surfacé mais sans fausse alarme.
+    const recuReel = recuTotalParRef.get(k) ?? 0;
+    if (recuReel >= pap - 0.001) {
+      if (seen.has(key('pointage', info.beId, k, 'réception non détaillée'))) continue;
+      nouvelles.push({
+        origine: 'pointage', destinataire: 'à vérifier', type_exception: 'réception non détaillée',
+        be_id: info.beId, reference_article: k,
+        motif: `Réception non détaillée ${k} : le BL papier montre ${pap} sur le bon mais CL ne l'a pas ventilé dans le détail (saisi ${saisi}) — le reçu réel (Livré ${recuReel.toFixed(0)}) couvre le papier → reçu mais non détaillé sur le bon, PAS un surplus.`,
+        valeur_attendue: pap, valeur_obtenue: saisi, ecart: -surplus,
+        statut_exception: 'ouverte', niveau_priorite: 'faible',
+        suggestion_action_ia: `Info ${k} : la réception est bien enregistrée dans CL (Livré ${recuReel.toFixed(0)}) mais pas ventilée sous ce bon dans le détail order/view → rien à réclamer à Colombi ; au besoin, ventiler la saisie sous le bon dans Centralink pour un détail propre.`,
+      });
+      continue;
+    }
+    if (seen.has(key('pointage', info.beId, k, 'sur-livraison'))) continue;
     if (reste < 0.001) {
       nouvelles.push({
         origine: 'pointage', destinataire: 'Colombi', type_exception: 'sur-livraison',

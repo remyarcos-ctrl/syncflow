@@ -22,6 +22,7 @@ const PAGE_SIZE = 50;
 const TYPE_CONFIG: Record<string, { color: string; label: string }> = {
   'surfacturation quantité':  { color: 'text-red-600 bg-red-50',    label: 'Surfacturation Qté' },
   'réception incomplète':     { color: 'text-orange-600 bg-orange-50', label: 'Livraison partielle' },
+  'réception non détaillée':  { color: 'text-slate-600 bg-slate-50',  label: 'Reçu non détaillé' },
   'écart prix':               { color: 'text-amber-600 bg-amber-50', label: 'Écart de prix' },
   'be introuvable':           { color: 'text-red-600 bg-red-50',    label: 'BE introuvable' },
   'ligne non rapprochée':     { color: 'text-gray-600 bg-gray-50',  label: 'Non rapprochée' },
@@ -74,6 +75,7 @@ const valLabels = (e: { type_exception?: string; origine?: string | null }): { a
   const t = String(e.type_exception ?? '');
   const o = e.origine ?? '';
   if (t === 'sur-saisie log') return { att: 'BL papier ②', obt: 'saisi CL ③' };
+  if (t === 'réception incomplète' || t === 'réception non détaillée') return { att: 'BL papier ②', obt: 'reçu CL ③' };
   if (t === 'sur-livraison') return o === 'réception' ? { att: 'commandé ①', obt: 'reçu ③' } : { att: 'BL papier ②', obt: 'saisi CL ③' };
   if (t === 'hors-commande') return { att: '', obt: 'reçu' };
   if (t === 'surfacturation quantité') return { att: 'reçu ③', obt: 'facturé ④' };
