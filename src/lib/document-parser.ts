@@ -50,7 +50,11 @@ export interface ParsedLigneBE {
   reference_article: string;
   designation: string | null;
   quantite_receptionnee: number;
-  prix_unitaire?: number | null;   // prix NET unitaire (après remises) — sert à l'auto-vérif
+  prix_unitaire?: number | null;   // prix NET unitaire (après remises) — calculé, sert à l'auto-vérif
+  prix_uht_brut?: number | null;   // colonne « Prix UHT » (BRUT, avant remise) — lue telle quelle
+  remise_r1?: number | null;       // % colonne R1 (0 si vide)
+  remise_r2?: number | null;       // % colonne R2 (0 si vide)
+  remise_r3?: number | null;       // % colonne R3 (0 si vide)
   montant_ht?: number | null;      // Total HT de la ligne — sert à l'auto-vérif
   hors_systeme?: boolean;
 }
@@ -240,23 +244,50 @@ Règles:
 
 // ── Helpers post-traitement ───────────────────────────────────────────────────
 
-function processBERaw(raw: Record<string, unknown>): ParsedDocument {
+// Prix net unitaire d'une ligne BE. Priorité au calcul DÉTERMINISTE brut × (1 − remises) :
+// les colonnes « Prix UHT » et « R1/R2/R3 » se lisent SANS calcul, alors que le prix net
+// demandé au modèle l'oblige à calculer (source d'erreur). Repli sur le net fourni si le brut
+// manque. Les remises se cumulent multiplicativement (vérifié sur les BL Colombi).
+export function prixNetLigneBE(l: Partial<ParsedLigneBE>): number {
+  const brut = Number(l.prix_uht_brut) || 0;
+  if (brut > 0) {
+    const f = (r: unknown) => 1 - (Number(r) || 0) / 100;
+    const net = brut * f(l.remise_r1) * f(l.remise_r2) * f(l.remise_r3);
+    if (net > 0) return net;
+  }
+  return Number(l.prix_unitaire) || 0;
+}
+
+// Corrige la quantité d'une ligne BE par recoupement à l'argent : la quantité DOIT valoir
+// Total HT ÷ prix net. Si ce ratio tombe NET sur un entier différent de la quantité lue, la
+// quantité lue est fausse (colonne « Unité » prise à la place, ligne sérialisée mal comptée,
+// chiffre inversé) → on prend l'entier calculé. Ex. 16559 : 959.88 ÷ 79.99 = 12 alors que le
+// modèle avait lu 16. Repli (prix douteux, ratio non entier) : ancien filet grossier ×1.5.
+export function verifierQuantiteBE(qte: number, net: number, montantHt: number): number {
+  if (net <= 0 || montantHt <= 0) return qte;
+  const qteCalc = montantHt / net;
+  const arrondi = Math.round(qteCalc);
+  const tolerance = Math.max(0.04, arrondi * 0.02);         // absorbe l'arrondi du Total HT
+  const estEntierNet = arrondi >= 1 && Math.abs(qteCalc - arrondi) <= tolerance;
+  if (estEntierNet) return arrondi !== qte ? arrondi : qte; // entier franc → autorité
+  const ratio = qteCalc > 0 ? qte / qteCalc : 1;            // prix imprécis → filet large
+  if (qteCalc >= 1 && (ratio > 1.5 || ratio < 0.67)) return Math.round(qteCalc);
+  return qte;
+}
+
+export function processBERaw(raw: Record<string, unknown>): ParsedDocument {
   const be = raw as unknown as ParsedBE;
   const lignes = (be.lignes ?? [])
     .filter((l) => l.reference_article && !isPositionCode(l.reference_article) && !isEanBarcode(l.reference_article))
     .map((l) => {
-      let qte = Number(l.quantite_receptionnee) || 0;
-      const pu = Number(l.prix_unitaire) || 0;
-      const mt = Number(l.montant_ht) || 0;
-      // Auto-vérif : la quantité doit valoir Total HT ÷ prix net. Si elle diverge GROSSIÈREMENT
-      // (> 50 %, ex. parseur qui lit 5000 au lieu de 54), on la recalcule depuis le montant.
-      // Seuil large pour ne jamais corriger une simple imprécision de remise/arrondi.
-      if (pu > 0 && mt > 0) {
-        const qteCalc = mt / pu;
-        const ratio = qteCalc > 0 ? qte / qteCalc : 1;
-        if (qteCalc >= 1 && (ratio > 1.5 || ratio < 0.67)) qte = Math.round(qteCalc);
-      }
-      return { ...l, quantite_receptionnee: qte, designation: l.designation ?? null };
+      const net = prixNetLigneBE(l);
+      const qte = verifierQuantiteBE(Number(l.quantite_receptionnee) || 0, net, Number(l.montant_ht) || 0);
+      return {
+        ...l,
+        quantite_receptionnee: qte,
+        prix_unitaire: net > 0 ? net : (l.prix_unitaire ?? null),
+        designation: l.designation ?? null,
+      };
     });
 
   const aggregated = new Map<string, ParsedLigneBE>();
@@ -334,11 +365,14 @@ Retourne un tableau JSON (même si un seul document) :
     "date_bl": "YYYY-MM-DD ou null",
     "lignes": [
       {
-        "reference_article": "référence (IGNORER les codes EXACTEMENT 4 lettres majuscules ex: AAAA, AAFB)",
+        "reference_article": "1er code de la colonne « Code article » (ex: 16559, CR00033). IGNORER le 2e code interne à 4 lettres majuscules qui le suit (AACP, AAFB…) et les codes EAN (chiffres seuls).",
         "designation": "désignation du produit",
-        "quantite_receptionnee": nombre,
-        "prix_unitaire": prix NET unitaire = valeur de la colonne « Prix UHT » (lue telle quelle, ex: 3.09) MOINS les remises R1/R2/R3 affichées. ⚠️ NE JAMAIS le calculer en divisant le Total HT par la Quantité (ce serait circulaire et inutile). Lis le prix dans SA colonne. null si absent.,
-        "montant_ht": valeur de la colonne « Total HT » (dernière colonne, lue telle quelle, ex: 133.38) ou null,
+        "quantite_receptionnee": nombre de la colonne « Quantité » (JAMAIS « Unité »),
+        "prix_uht": valeur BRUTE de la colonne « Prix UHT » lue TELLE QUELLE, sans retrancher les remises (ex: 99.99). null si absent.,
+        "remise_r1": pourcentage de la colonne R1 lu tel quel (nombre, ex: 15 ; 0 si la case est vide),
+        "remise_r2": pourcentage de la colonne R2 (nombre, 0 si vide),
+        "remise_r3": pourcentage de la colonne R3 (nombre, ex: 20 ; 0 si vide),
+        "montant_ht": valeur de la colonne « Total HT » (dernière colonne) lue telle quelle (ex: 959.88) ou null,
         "hors_systeme": true si la ligne concerne le SAV/Service Après-Vente, false sinon
       }
     ]
@@ -369,7 +403,7 @@ Règles BE (Colombi-sports) :
 - Ignorer les codes EAN/barcodes (chiffres uniquement, 8+ chiffres)
 - Agréger les lignes avec la même référence ET le même hors_systeme (additionner les quantités)
 - quantite_receptionnee = la valeur de la colonne « Quantité » du BL.
-  ⚠️ PIÈGE COLONNES : le BL Colombi a DEUX colonnes voisines, « Quantité » PUIS « Unité ». La colonne « Unité » vaut presque toujours 1 (= unité de vente). Il faut IMPÉRATIVEMENT prendre « Quantité », JAMAIS « Unité ». Ordre des colonnes : Code article · Désignation/EAN · N° de série · Cde client · Référence · **Quantité** · Unité · Prix UHT · R1 · R2 · R3 · Total HT. Exemple réel : ligne « 17655 … 10 1 18.24 » → la Quantité est 10 et l'Unité est 1 → quantite_receptionnee: 10 (surtout PAS 1). Autre repère : le Total HT = Quantité × Prix net ; si « quantité × prix » ne tombe pas sur le Total HT, c'est que tu as pris l'Unité au lieu de la Quantité — corrige.
+  ⚠️ PIÈGE COLONNES : le BL Colombi a DEUX colonnes voisines, « Quantité » PUIS « Unité ». La colonne « Unité » vaut presque toujours 1 (= unité de vente). Il faut IMPÉRATIVEMENT prendre « Quantité », JAMAIS « Unité ». Ordre des colonnes : Code article · Désignation/EAN · N° de série · Cde client · Référence · **Quantité** · Unité · Prix UHT · R1 · R2 · R3 · Total HT. Exemple réel : ligne « 17655 … 10 1 18.24 » → la Quantité est 10 et l'Unité est 1 → quantite_receptionnee: 10 (surtout PAS 1). Autre repère décisif : Total HT = Quantité × Prix UHT × (1 − R1) × (1 − R2) × (1 − R3). Ex. « 16559 … qté 12 … Prix UHT 99.99 … R3 20% … Total HT 959.88 » → 12 × 99.99 × 0.80 = 959.90 ✓. Si « Quantité × Prix UHT × (1 − remises) » ne tombe pas sur le Total HT, tu as mal lu la Quantité (Unité prise à la place, chiffre inversé) — corrige-la.
   NE JAMAIS multiplier par le conditionnement : « X500 », « X1000 », « PAR 100 » font partie du NOM du produit (boîte/lot de N), PAS un multiplicateur. Ex : « GOMMETTES D19 X1000 » avec quantité 50 → quantite_receptionnee: 50 (surtout pas 50000).
 - PRODUITS SÉRIALISÉS (armes) : si une référence a une colonne « Numéros de série » remplie (ex. V2IEKCAYS03-2401865), 1 unité = 1 n° de série. La quantité de la référence = le NOMBRE de numéros de série DISTINCTS, JAMAIS le nombre de lignes (un même article s'étale sur plusieurs lignes — code position AAVW/AAWB, EAN, n° de série — sans que ce soit des unités en plus). Ex : 10 n° de série distincts pour EK0003 → quantite_receptionnee: 10 (surtout pas 16).
   ⚠️ PIÈGE MULTI-PAGES : quand un article sérialisé s'étale sur PLUSIEURS pages, l'en-tête de colonne « Numéros de série / cde client » SE RÉPÈTE en haut de chaque page. Ces lignes d'en-tête ne portent NI numéro de série NI prix → ce ne sont PAS des unités, NE les compte JAMAIS. Ne compte QUE les lignes portant un vrai n° de série ET un prix/Total HT.

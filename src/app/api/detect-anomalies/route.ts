@@ -883,6 +883,79 @@ export async function POST(req: Request) {
     //  filtre à la source) ; celles qui restent portent leur mention dès la création.)
   }
 
+  // ── FUSION « RÉF MAL LUE À L'IMPORT » (qualité de scan) ──────────────────────
+  // Une mauvaise lecture du scan (P lu au lieu de F, O au lieu de 0, chiffre inséré) crée
+  // DEUX anomalies trompeuses sur le MÊME bon : la réf du papier passe « hors commande »
+  // (②P sans commande) et la vraie réf saisie par la log passe « saisi hors papier » (③C
+  // sans papier). Quand P et C sont à une lettre près, avec la MÊME quantité, sur le même
+  // bon, c'est presque sûrement une coquille de lecture → on FUSIONNE en UNE anomalie claire
+  // « corriger la réf du scan » (destinataire interne) et on retire les deux fantômes.
+  // (On ne corrige rien en silence : on remonte le vrai problème = la donnée de scan à fixer.)
+  const distance1 = (a: string, b: string): boolean => {
+    const x = normalizeRef(a), y = normalizeRef(b);          // normalizeRef fait déjà O→0 + upper
+    if (x === y) return false;                               // identiques après normalisation → pas une coquille (alias)
+    if (Math.abs(x.length - y.length) > 1) return false;
+    // Levenshtein ≤ 1 (substitution, insertion ou suppression d'un seul caractère)
+    if (x.length === y.length) {
+      let diff = 0;
+      for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) diff++;
+      return diff === 1;
+    }
+    const [court, long] = x.length < y.length ? [x, y] : [y, x];
+    for (let i = 0, j = 0, sauts = 0; j < long.length; ) {
+      if (court[i] === long[j]) { i++; j++; }
+      else { if (++sauts > 1) return false; j++; }
+    }
+    return true;
+  };
+  // Saisies CL agrégées par bon + réf BRUTE (pour retrouver la vraie réf saisie par la log).
+  const saisieBruteByBe = new Map<string, Map<string, number>>();
+  for (const s of saisies) {
+    const beId = beIdByNum.get(nbe(s.numero_be));
+    if (!beId) continue;
+    const ref = String(s.reference_article ?? '').trim();
+    if (!ref) continue;
+    const m = saisieBruteByBe.get(beId) ?? new Map<string, number>();
+    m.set(ref, (m.get(ref) ?? 0) + (Number(s.quantite_recue) || 0));
+    saisieBruteByBe.set(beId, m);
+  }
+  const aRetirer = new Set<NewExc>();
+  for (const hc of nouvelles.filter((n) => n.type_exception === 'hors-commande' && n.be_id)) {
+    const B = hc.be_id!;
+    const qP = Number(hc.valeur_obtenue) || 0;
+    // La vraie réf saisie par la log sur CE bon : même quantité, commandée, absente du papier
+    // de ce bon (sinon ce n'est pas une coquille), et à une lettre près de la réf du scan.
+    let vraie: string | null = null;
+    for (const [C, qC] of saisieBruteByBe.get(B) ?? []) {
+      if (Math.abs(qC - qP) > 0.5) continue;
+      if (!refsCommandees.has(aliasRef(C))) continue;
+      if (lbByBe.get(B)?.has(aliasRef(C))) continue;
+      if (!distance1(hc.reference_article, C)) continue;
+      vraie = C; break;
+    }
+    if (!vraie) continue;
+    aRetirer.add(hc);
+    // Retire aussi le « saisi hors papier » fantôme de la vraie réf sur ce bon, s'il existe.
+    const kVraie = aliasRef(vraie);
+    for (const n of nouvelles) {
+      if (n.be_id === B && n.type_exception === 'sur-saisie log'
+          && aliasRef(n.reference_article) === kVraie && /^Saisi hors papier/.test(n.motif)) aRetirer.add(n);
+    }
+    const numBe = beNumById.get(B) ?? '';
+    if (seen.has(key('pointage', B, hc.reference_article, 'hors-commande'))) continue;
+    nouvelles.push({
+      origine: 'pointage', destinataire: 'interne', type_exception: 'hors-commande',
+      be_id: B, reference_article: hc.reference_article,
+      motif: `Réf probablement MAL LUE au scan sur ${numBe} : le bon importé indique « ${hc.reference_article} » (qté ${qP}, jamais commandée) alors que la log a saisi « ${vraie} » (même qté, réf commandée) → coquille de lecture du scan, PAS une vraie anomalie.`,
+      valeur_attendue: qP, valeur_obtenue: qP, ecart: 0,
+      statut_exception: 'ouverte', niveau_priorite: 'faible',
+      suggestion_action_ia: `Vérifier le BL papier de ${numBe} et corriger la référence du scan : « ${hc.reference_article} » → « ${vraie} » (bouton « Re-scanner le BL » ou correction manuelle). L'anomalie disparaîtra ensuite.`,
+    });
+  }
+  if (aRetirer.size) {
+    for (let i = nouvelles.length - 1; i >= 0; i--) if (aRetirer.has(nouvelles[i])) nouvelles.splice(i, 1);
+  }
+
   let inserted = 0;
   if (nouvelles.length > 0) {
     const { error, count } = await sb.from('exceptions').insert(nouvelles, { count: 'exact' });
