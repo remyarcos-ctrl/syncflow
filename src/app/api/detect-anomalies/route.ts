@@ -635,46 +635,53 @@ export async function POST(req: Request) {
     const regule = reguleParRef.get(k) ?? 0;               // gardé via régule
     const surplus = pap - saisi - avoir - regule;
     if (surplus < 0.5) continue;                           // tout saisi / rendu / régularisé → rien
-    const reste = resteParRef.get(k) ?? 0;                 // commande encore ouverte ?
+    const reste = resteParRef.get(k) ?? 0;                 // reliquat CL (autoritaire : commande non soldée)
+    const recuReel = recuTotalParRef.get(k) ?? 0;          // Livré total (reçu réel)
     const detail = `papier ${pap}, saisi ${saisi}${avoir > 0 ? `, avoir ${avoir}` : ''}${regule > 0 ? `, régule ${regule}` : ''}`;
-    // REÇU MAIS PAS DÉTAILLÉ : le reçu réel (colonne Livré, autoritaire) couvre déjà tout le
-    // papier déclaré → la marchandise EST bien reçue, CL ne l'a simplement pas ventilée sous ce
-    // bon dans le détail order/view. PAS un surplus Colombi (cf RO00033 : papier 3, saisi 0 sur
-    // le bon, mais Livré 3 sur #5567). On le classe « réception non détaillée » (faible) au lieu
-    // d'un faux « surplus » — surfacé mais sans fausse alarme.
-    const recuReel = recuTotalParRef.get(k) ?? 0;
+    // Le RELIQUAT CL est le seul juge fiable de « reste-t-il quelque chose à recevoir ? » (CL
+    // le calcule commande par commande). On NE compare JAMAIS le papier (périmètre partiel, nos
+    // bons scannés) au Livré TOTAL (toutes commandes/périodes) pour exonérer : ce serait le piège
+    // M2M (un Livré historique élevé masquerait un manque réel sur une commande en cours).
+    if (reste > 0.001) {
+      // Commande encore en attente → l'écart papier > reçu peut être un MANQUE réel (livraison
+      // courte Colombi) ou une saisie sous un autre bon. On ne présume rien → à contrôler.
+      if (seen.has(key('pointage', info.beId, k, 'réception incomplète'))) continue;
+      nouvelles.push({
+        origine: 'pointage', destinataire: 'à vérifier', type_exception: 'réception incomplète',
+        be_id: info.beId, reference_article: k,
+        motif: `Écart réception ${k} : le BL papier déclare ${pap} sur nos bons, CL n'en a détaillé que ${saisi} (${detail}) et il reste ${reste.toFixed(0)} à recevoir sur commande → à contrôler physiquement (livraison courte Colombi, saisie sous un autre bon, ou reliquat en cours).`,
+        valeur_attendue: pap, valeur_obtenue: saisi, ecart: -surplus,
+        statut_exception: 'ouverte', niveau_priorite: 'moyenne',
+        suggestion_action_ia: `Contrôler physiquement ${k} (${detail}, ${reste.toFixed(0)} en reliquat CL) : si la marchandise est là mais saisie ailleurs / non ventilée → OK ; si elle manque au colis → manquant Colombi à réclamer, ou reliquat à attendre. Ne rien réclamer avant le contrôle.`,
+      });
+      continue;
+    }
+    // reste = 0 : CL confirme que TOUT le commandé est reçu (aucun manque possible). L'écart
+    // papier > saisi est donc soit du reçu non ventilé sous ce bon, soit une vraie sur-livraison.
     if (recuReel >= pap - 0.001) {
+      // Le reçu réel (Livré) couvre le papier → reçu mais pas ventilé sur le bon (RO00033-like).
       if (seen.has(key('pointage', info.beId, k, 'réception non détaillée'))) continue;
       nouvelles.push({
         origine: 'pointage', destinataire: 'à vérifier', type_exception: 'réception non détaillée',
         be_id: info.beId, reference_article: k,
-        motif: `Réception non détaillée ${k} : le BL papier montre ${pap} sur le bon mais CL ne l'a pas ventilé dans le détail (saisi ${saisi}) — le reçu réel (Livré ${recuReel.toFixed(0)}) couvre le papier → reçu mais non détaillé sur le bon, PAS un surplus.`,
+        motif: `Réception non détaillée ${k} : le BL papier montre ${pap} mais CL ne l'a pas ventilé sous ce bon (saisi ${saisi}) — commande soldée et reçu réel (Livré ${recuReel.toFixed(0)}) couvre le papier → reçu mais non détaillé, PAS un surplus.`,
         valeur_attendue: pap, valeur_obtenue: saisi, ecart: -surplus,
         statut_exception: 'ouverte', niveau_priorite: 'faible',
-        suggestion_action_ia: `Info ${k} : la réception est bien enregistrée dans CL (Livré ${recuReel.toFixed(0)}) mais pas ventilée sous ce bon dans le détail order/view → rien à réclamer à Colombi ; au besoin, ventiler la saisie sous le bon dans Centralink pour un détail propre.`,
+        suggestion_action_ia: `Info ${k} : réception bien enregistrée dans CL (Livré ${recuReel.toFixed(0)}, commande soldée) mais pas ventilée sous ce bon → rien à réclamer ; au besoin ventiler la saisie sous le bon pour un détail propre.`,
       });
       continue;
     }
+    // reste = 0 ET Livré < papier déclaré → le BL déclare plus que ce que CL a jamais reçu,
+    // commandes soldées → vraie SUR-LIVRAISON Colombi (déclaré non encaissé) → à régulariser.
     if (seen.has(key('pointage', info.beId, k, 'sur-livraison'))) continue;
-    if (reste < 0.001) {
-      nouvelles.push({
-        origine: 'pointage', destinataire: 'Colombi', type_exception: 'sur-livraison',
-        be_id: info.beId, reference_article: k,
-        motif: `Surplus Colombi ${k} : ${surplus.toFixed(0)} livré(s) en plus, ni saisi(s) ni rendu(s) ni régularisé(s) (${detail}, commandes soldées) → à régulariser`,
-        valeur_attendue: pap, valeur_obtenue: saisi, ecart: -surplus,
-        statut_exception: 'ouverte', niveau_priorite: 'moyenne',
-        suggestion_action_ia: `Surplus Colombi à régulariser : ${k} → ${surplus.toFixed(0)} en trop (${detail}), commandes déjà soldées. Action : commande de régule (avec le n° de BL) pour les encaisser, ou réclamer/retourner à Colombi.`,
-      });
-    } else {
-      nouvelles.push({
-        origine: 'pointage', destinataire: 'à vérifier', type_exception: 'sur-livraison',
-        be_id: info.beId, reference_article: k,
-        motif: `Écart papier vs saisi ${k} : ${surplus.toFixed(0)} d'écart (${detail}), commande encore ouverte → à vérifier (saisie en cours, bon non scanné, ou sur-déclaration)`,
-        valeur_attendue: pap, valeur_obtenue: saisi, ecart: -surplus,
-        statut_exception: 'ouverte', niveau_priorite: 'moyenne',
-        suggestion_action_ia: `À vérifier ${k} : ${detail}, commande encore ouverte. Soit la log n'a pas fini de saisir, soit la marchandise est saisie sous un bon qu'on n'a pas scanné, soit Colombi a sur-déclaré → vérifier.`,
-      });
-    }
+    nouvelles.push({
+      origine: 'pointage', destinataire: 'Colombi', type_exception: 'sur-livraison',
+      be_id: info.beId, reference_article: k,
+      motif: `Surplus Colombi ${k} : ${surplus.toFixed(0)} livré(s) en plus, ni saisi(s) ni rendu(s) ni régularisé(s) (${detail}, commandes soldées, Livré ${recuReel.toFixed(0)} < papier) → à régulariser`,
+      valeur_attendue: pap, valeur_obtenue: saisi, ecart: -surplus,
+      statut_exception: 'ouverte', niveau_priorite: 'moyenne',
+      suggestion_action_ia: `Surplus Colombi à régulariser : ${k} → ${surplus.toFixed(0)} en trop (${detail}), commandes déjà soldées. Action : commande de régule (avec le n° de BL) pour les encaisser, ou réclamer/retourner à Colombi.`,
+    });
   }
 
   // Lignes marquées SAV au papier (hors_systeme) + la commande sous laquelle CL les a saisies.
