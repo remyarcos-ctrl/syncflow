@@ -711,7 +711,7 @@ export async function POST(req: Request) {
       nouvelles.push({
         origine: 'pointage', destinataire: 'à vérifier', type_exception: 'réception non détaillée',
         be_id: info.beId, reference_article: k,
-        motif: `Réception non détaillée ${k} : le BL papier montre ${pap} mais CL ne l'a pas ventilé sous ce bon (saisi ${saisi}) — commande soldée et reçu réel (Livré ${recuReel.toFixed(0)}) couvre le papier → reçu mais non détaillé, PAS un surplus.`,
+        motif: `Réception non détaillée ${k} : ${pap} au papier (nos bons scannés) vs ${saisi} détaillé(s) dans CL — commande soldée et reçu réel (Livré ${recuReel.toFixed(0)}) couvre le papier → reçu mais non ventilé dans le détail, PAS un surplus.`,
         valeur_attendue: pap, valeur_obtenue: saisi, ecart: -surplus,
         statut_exception: 'ouverte', niveau_priorite: 'faible',
         suggestion_action_ia: `Info ${k} : réception bien enregistrée dans CL (Livré ${recuReel.toFixed(0)}, commande soldée) mais pas ventilée sous ce bon → rien à réclamer ; au besoin ventiler la saisie sous le bon pour un détail propre.`,
@@ -994,38 +994,57 @@ export async function POST(req: Request) {
     m.set(ref, (m.get(ref) ?? 0) + (Number(s.quantite_recue) || 0));
     saisieBruteByBe.set(beId, m);
   }
+  // On travaille PAR BON, directement sur les données (pas seulement sur les anomalies déjà
+  // créées) : pour chaque réf du PAPIER non saisie sous ce bon, on cherche une réf PROCHE (à un
+  // caractère près) saisie sous ce bon mais ABSENTE du papier, avec la MÊME quantité. Ça attrape
+  // aussi le cas où la réf du papier est un VRAI produit commandé ailleurs (16553 Steyr au papier
+  // vs 16533 CZ saisi = coquille FOURNISSEUR), que l'ancienne version (réf jamais commandée) ratait.
   const aRetirer = new Set<NewExc>();
-  for (const hc of nouvelles.filter((n) => n.type_exception === 'hors-commande' && n.be_id)) {
-    const B = hc.be_id!;
-    const qP = Number(hc.valeur_obtenue) || 0;
-    // La vraie réf saisie par la log sur CE bon : même quantité, commandée, absente du papier
-    // de ce bon (sinon ce n'est pas une coquille), et à une lettre près de la réf du scan.
-    let vraie: string | null = null;
-    for (const [C, qC] of saisieBruteByBe.get(B) ?? []) {
-      if (Math.abs(qC - qP) > 0.5) continue;
-      if (!refsCommandees.has(aliasRef(C))) continue;
-      if (lbByBe.get(B)?.has(aliasRef(C))) continue;
-      if (!distance1(hc.reference_article, C)) continue;
-      vraie = C; break;
-    }
-    if (!vraie) continue;
-    aRetirer.add(hc);
-    // Retire aussi le « saisi hors papier » fantôme de la vraie réf sur ce bon, s'il existe.
-    const kVraie = aliasRef(vraie);
-    for (const n of nouvelles) {
-      if (n.be_id === B && n.type_exception === 'sur-saisie log'
-          && aliasRef(n.reference_article) === kVraie && /^Saisi hors papier/.test(n.motif)) aRetirer.add(n);
-    }
+  const vusPair = new Set<string>();
+  for (const [B, refsP] of lbByBe) {
     const numBe = beNumById.get(B) ?? '';
-    if (seen.has(key('pointage', B, hc.reference_article, 'hors-commande'))) continue;
-    nouvelles.push({
-      origine: 'pointage', destinataire: 'interne', type_exception: 'hors-commande',
-      be_id: B, reference_article: hc.reference_article,
-      motif: `Réf probablement MAL LUE au scan sur ${numBe} : le bon importé indique « ${hc.reference_article} » (qté ${qP}, jamais commandée) alors que la log a saisi « ${vraie} » (même qté, réf commandée) → coquille de lecture du scan, PAS une vraie anomalie.`,
-      valeur_attendue: qP, valeur_obtenue: qP, ecart: 0,
-      statut_exception: 'ouverte', niveau_priorite: 'faible',
-      suggestion_action_ia: `Vérifier le BL papier de ${numBe} et corriger la référence du scan : « ${hc.reference_article} » → « ${vraie} » (bouton « Re-scanner le BL » ou correction manuelle). L'anomalie disparaîtra ensuite.`,
-    });
+    const saisiesB = saisieBruteByBe.get(B);
+    if (!saisiesB) continue;
+    for (const [P, infoP] of refsP) {
+      if (infoP.qte <= 0) continue;
+      if ((saisieByBeRef.get(B + '|' + P) ?? 0) > 0.001) continue; // la réf du papier EST saisie ici → vraie ligne
+      let C: string | null = null, qtyC = 0;
+      for (const [rawC, qC] of saisiesB) {
+        const kC = aliasRef(rawC);
+        if (kC === P || qC <= 0.001 || refsP.has(kC)) continue;      // C sur le papier → vraie ligne, pas un mélange
+        if (Math.abs(qC - infoP.qte) > 0.5) continue;
+        if (!distance1(P, kC)) continue;
+        C = kC; qtyC = qC; break;
+      }
+      if (!C) continue;
+      const dedup = `${B}|${P}|${C}`;
+      if (vusPair.has(dedup)) continue;
+      vusPair.add(dedup);
+      // Retire les fantômes des DEUX réfs sur CE bon → une seule anomalie claire à la place.
+      for (const n of nouvelles) {
+        if (n.be_id !== B) continue;
+        const kn = aliasRef(n.reference_article);
+        if (kn === P && ['hors-commande', 'réception non détaillée', 'réception incomplète'].includes(n.type_exception)) aRetirer.add(n);
+        if (kn === C && n.type_exception === 'sur-saisie log' && /^Saisi hors papier/.test(n.motif)) aRetirer.add(n);
+      }
+      if (seen.has(key('pointage', B, P, 'hors-commande'))) continue;
+      // Papier JAMAIS commandé + CL commandé même qté = coquille de LECTURE (verdict ferme, ex.
+      // FR004→PR004). Papier commandé aussi = deux vrais produits → NE PAS conclure (coquille
+      // fournisseur, mauvaise saisie, ou scan) → « à vérifier ».
+      const misread = !refsCommandees.has(P) && refsCommandees.has(C);
+      nouvelles.push({
+        origine: 'pointage', destinataire: misread ? 'interne' : 'à vérifier', type_exception: 'hors-commande',
+        be_id: B, reference_article: P,
+        motif: misread
+          ? `Réf probablement MAL LUE au scan sur ${numBe} : le bon indique « ${P} » (qté ${infoP.qte}, jamais commandée) alors que la log a saisi « ${C} » (même qté, réf commandée) → coquille de lecture, PAS une vraie anomalie.`
+          : `Référence à vérifier sur ${numBe} : le papier indique « ${P} » (qté ${infoP.qte}, non saisie sous ce bon) mais CL a saisi « ${C} » (même qté ${qtyC}, réf commandée) — deux réfs à un caractère près → coquille fournisseur, mauvaise saisie, ou scan à vérifier.`,
+        valeur_attendue: infoP.qte, valeur_obtenue: qtyC, ecart: 0,
+        statut_exception: 'ouverte', niveau_priorite: 'faible',
+        suggestion_action_ia: misread
+          ? `Corriger la référence du scan de ${numBe} : « ${P} » → « ${C} » (bouton « Re-scanner le BL » ou correction manuelle). L'anomalie disparaîtra ensuite.`
+          : `Vérifier le produit physique et le BL de ${numBe} : « ${P} » vs « ${C} » (même quantité). Si le BL Colombi porte la mauvaise réf → corriger la ligne du scan vers la réf réellement reçue ; si la log a saisi la mauvaise réf → corriger dans Centralink.`,
+      });
+    }
   }
   if (aRetirer.size) {
     for (let i = nouvelles.length - 1; i >= 0; i--) if (aRetirer.has(nouvelles[i])) nouvelles.splice(i, 1);
