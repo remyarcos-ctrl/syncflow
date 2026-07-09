@@ -630,6 +630,16 @@ export async function POST(req: Request) {
     if (bons.length <= 1) return '';
     return ` · réparti sur ${bons.length} bons : ${bons.map((b) => `${b.numBe} (${b.qte})`).join(', ')}`;
   };
+  // SANITÉ TEMPORELLE de l'exonération « Bien reçu » : le « Livré couvre » ne vaut que si la
+  // réception est du BON moment. Si le papier est sur un bon PLUS RÉCENT que toute réception
+  // saisie de la réf (ex. KI0010 : bon 02/2026 mais dernière saisie/commande = 2025), le
+  // « couvert par le Livré » compare à des réceptions PÉRIMÉES → suspect (probable entrée
+  // bar-code / hors commande, pas un « bien reçu »). AAMM extrait du n° de bon (BE-AA-MM-…).
+  const beYYMM = (n: string | null | undefined): number => { const m = String(n ?? '').match(/BE-?(\d{2})-?(\d{2})/i); return m ? (+m[1]) * 100 + (+m[2]) : 0; };
+  const dernSaisieYYMM = new Map<string, number>();
+  for (const s of saisies) { const k = aliasRef(s.reference_article); const ym = beYYMM(s.numero_be); if (ym > (dernSaisieYYMM.get(k) ?? 0)) dernSaisieYYMM.set(k, ym); }
+  const dernPapierYYMM = new Map<string, number>();
+  for (const [beId, refs] of lbByBe) { const ym = beYYMM(beNumById.get(beId)); for (const kk of refs.keys()) if (ym > (dernPapierYYMM.get(kk) ?? 0)) dernPapierYYMM.set(kk, ym); }
   // Saisi sur les bons SCANNÉS, par réf (saisieByBeRef est déjà restreint à nos BE).
   const saisieScanParRef = new Map<string, number>();
   for (const [kk, v] of saisieByBeRef) {
@@ -718,8 +728,25 @@ export async function POST(req: Request) {
     // reste = 0 : CL confirme que TOUT le commandé est reçu (aucun manque possible). L'écart
     // papier > saisi est donc soit du reçu non ventilé sous ce bon, soit une vraie sur-livraison.
     if (recuReel >= pap - 0.001) {
-      // Le reçu réel (Livré) couvre le papier → reçu mais pas ventilé sur le bon (RO00033-like).
       if (seen.has(key('pointage', info.beId, k, 'réception non détaillée'))) continue;
+      // GARDE-FOU TEMPOREL : le papier est-il plus récent que toute réception saisie de la réf ?
+      // Si oui, le « Livré couvre » compare à des réceptions périmées → PAS un « bien reçu » sûr :
+      // c'est un bon récent sans commande ni saisie correspondante (probable entrée bar-code /
+      // hors commande, cf KI0010 : bon 02/2026, dernières réceptions 2025). → à confirmer.
+      const suspectTemporel = (dernPapierYYMM.get(k) ?? 0) > (dernSaisieYYMM.get(k) ?? 0) + 0.5;
+      if (suspectTemporel) {
+        const bc = stockByRef.get(k)?.has_barcode ? ' Réf gérée au code-barres → probable entrée au scan sans commande.' : '';
+        nouvelles.push({
+          origine: 'pointage', destinataire: 'à vérifier', type_exception: 'réception non détaillée',
+          be_id: info.beId, reference_article: k,
+          motif: `⚠ À CONFIRMER ${k} : le bon est PLUS RÉCENT que toute réception enregistrée (dernières commandes/saisies périmées) — le « Livré ${recuReel.toFixed(0)} » ne prouve donc PAS que les ${surplus.toFixed(0)} de ce bon sont reçus. Aucune commande ne les couvre.${bc}${repartBons(k)}`,
+          valeur_attendue: pap, valeur_obtenue: saisi, ecart: -surplus,
+          statut_exception: 'ouverte', niveau_priorite: 'moyenne',
+          suggestion_action_ia: `Vérifier sur la fiche Centralink de ${k} (table des mouvements) : y a-t-il ~${surplus.toFixed(0)} entrées « Barcode » autour de la date du bon ? Si oui → bien reçu au scan (classer résolu) ; sinon → vrai manque à réclamer à Colombi. NE PAS se fier au Livré (il date d'anciennes commandes).`,
+        });
+        continue;
+      }
+      // Sinon : le reçu réel (Livré) couvre le papier et il est du bon moment → bien reçu (RO00033-like).
       nouvelles.push({
         origine: 'pointage', destinataire: 'interne', type_exception: 'réception non détaillée',
         be_id: info.beId, reference_article: k,
