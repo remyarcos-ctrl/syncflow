@@ -939,6 +939,14 @@ export default function ExceptionsPage() {
               if ((exc.type_exception as string) === 'sur-livraison' && exc.destinataire === 'à vérifier') {
                 tc = { color: 'text-amber-700 bg-amber-50', label: 'Écart papier/saisi à vérifier' };
               }
+              // « réception non détaillée » : faible = bien reçu mais pas ventilé sous le bon
+              // (rien à faire, positif) → badge vert « Bien reçu ✓ » ; moyenne (§3h, Livré >
+              // détail) = à contrôler → badge ambre. On parle clair, pas de jargon.
+              if ((exc.type_exception as string) === 'réception non détaillée') {
+                tc = exc.niveau_priorite === 'faible'
+                  ? { color: 'text-emerald-700 bg-emerald-50', label: 'Bien reçu ✓' }
+                  : { color: 'text-amber-700 bg-amber-50', label: 'Reçu — détail à vérifier' };
+              }
               return (
                 <tr key={exc.id} className={cn('even:bg-gray-50/60 hover:bg-indigo-50/40 transition-colors', ['haute', 'critique'].includes(exc.niveau_priorite) ? 'border-l-4 border-l-red-400' : exc.niveau_priorite === 'moyenne' ? 'border-l-4 border-l-orange-300' : 'border-l-4 border-l-transparent')}>
                   <td className="px-4 py-3">

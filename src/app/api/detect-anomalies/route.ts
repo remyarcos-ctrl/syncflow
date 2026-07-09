@@ -685,12 +685,12 @@ export async function POST(req: Request) {
       if (resteScope < 0.001 && livreScope >= pap - 0.001) {
         if (seen.has(key('pointage', info.beId, k, 'réception non détaillée'))) continue;
         nouvelles.push({
-          origine: 'pointage', destinataire: 'à vérifier', type_exception: 'réception non détaillée',
+          origine: 'pointage', destinataire: 'interne', type_exception: 'réception non détaillée',
           be_id: info.beId, reference_article: k,
-          motif: `Réception non détaillée ${k} : commande(s) ${[...cdes].map((c) => '#' + c).join(', ')} soldée(s) et Livré (${livreScope.toFixed(0)}) couvre le papier (${pap}) — reçu mais pas ventilé sous ce bon (saisi ${saisi}) → PAS un manque.${repartBons(k)}`,
+          motif: `✅ Bien reçu — RIEN À FAIRE. ${k} : la marchandise est bien reçue (commande(s) ${[...cdes].map((c) => '#' + c).join(', ')} soldée(s), reçu réel Livré ${livreScope.toFixed(0)} ≥ papier ${pap}). Les ${surplus.toFixed(0)} de ce bon ne sont PAS un manque — juste une réception que CL n'a pas ventilée sous ce n° de bon (saisi ${saisi} ici).${repartBons(k)}`,
           valeur_attendue: pap, valeur_obtenue: saisi, ecart: -surplus,
           statut_exception: 'ouverte', niveau_priorite: 'faible',
-          suggestion_action_ia: `Info ${k} : réception bien enregistrée sur ${[...cdes].map((c) => '#' + c).join(', ')} (Livré ${livreScope.toFixed(0)}, soldée) mais non ventilée sous ce bon → rien à réclamer ; au besoin ventiler la saisie sous le bon pour un détail propre.`,
+          suggestion_action_ia: `Rien à réclamer : ${k} est bien reçu (Livré ${livreScope.toFixed(0)}, commande soldée), juste pas ventilé sous ce bon dans CL. Tu peux classer « résolu ». Au besoin, la log peut ventiler la saisie pour un détail propre — mais ça n'impacte ni le stock ni la facture.`,
         });
         continue;
       }
@@ -721,12 +721,12 @@ export async function POST(req: Request) {
       // Le reçu réel (Livré) couvre le papier → reçu mais pas ventilé sur le bon (RO00033-like).
       if (seen.has(key('pointage', info.beId, k, 'réception non détaillée'))) continue;
       nouvelles.push({
-        origine: 'pointage', destinataire: 'à vérifier', type_exception: 'réception non détaillée',
+        origine: 'pointage', destinataire: 'interne', type_exception: 'réception non détaillée',
         be_id: info.beId, reference_article: k,
-        motif: `Réception non détaillée ${k} : ${pap} au papier (nos bons scannés) vs ${saisi} détaillé(s) dans CL — commande soldée et reçu réel (Livré ${recuReel.toFixed(0)}) couvre le papier → reçu mais non ventilé dans le détail, PAS un surplus.${repartBons(k)}`,
+        motif: `✅ Bien reçu — RIEN À FAIRE. ${k} : la marchandise est bien reçue (commande soldée, reçu réel Livré ${recuReel.toFixed(0)} ≥ papier ${pap}). L'écart de ${surplus.toFixed(0)} n'est PAS un manque — juste ${surplus.toFixed(0)} que CL n'a pas ventilés sous le(s) bon(s) (papier ${pap}, détaillé ${saisi}).${repartBons(k)}`,
         valeur_attendue: pap, valeur_obtenue: saisi, ecart: -surplus,
         statut_exception: 'ouverte', niveau_priorite: 'faible',
-        suggestion_action_ia: `Info ${k} : réception bien enregistrée dans CL (Livré ${recuReel.toFixed(0)}, commande soldée) mais pas ventilée sous ce bon → rien à réclamer ; au besoin ventiler la saisie sous le bon pour un détail propre.`,
+        suggestion_action_ia: `Rien à réclamer : ${k} est bien reçu (Livré ${recuReel.toFixed(0)}, commande soldée), juste pas ventilé sous ce bon dans CL. Tu peux classer « résolu ». Ça n'impacte ni le stock ni la facture.`,
       });
       continue;
     }
