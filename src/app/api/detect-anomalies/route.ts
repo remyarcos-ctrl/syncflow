@@ -438,9 +438,9 @@ export async function POST(req: Request) {
       : [];
     if (hit.length) {
       const parts = hit.map((mv) => `+${Number(mv.delta).toFixed(0)} le ${mv.date}`).join(', ');
-      return ` 🏷 PISTE BAR-CODE concrète : la fiche ${k} porte un mouvement douchette (${parts}) dans le MÊME MOIS que le bon → très probablement entré au scan au lieu d'être saisi sous le bon (rien à réclamer si le compte colle ; à confirmer d'un œil sur la fiche).`;
+      return ` 🏷 PISTE BAR-CODE : la fiche ${k} porte un mouvement douchette (${parts}) dans le MÊME MOIS que le bon → probablement entré au scan au lieu d'être saisi sous le bon. ⚠ Indice, PAS une preuve : RECOMPTAGE PHYSIQUE conseillé avant de solder — si le compte colle → rien à réclamer, sinon → manquant Colombi à réclamer.`;
     }
-    return ` 🏷 Réf gérée au code-barres : la fiche porte des mouvements « Barcode » (entrées au scan / corrections de stock, NON rattachées à un bon) mais aucun ne colle nettement au manque ce mois-là. Une entrée au scan reste possible — regarder les mouvements « Barcode » de la fiche ${k}, sinon le comptage physique tranche.`;
+    return ` 🏷 Réf gérée au code-barres : la fiche porte des mouvements « Barcode » (entrées au scan / corrections de stock, NON rattachées à un bon) mais aucun ne colle nettement au manque ce mois-là. Une entrée au scan reste possible — regarder les mouvements « Barcode » de la fiche ${k} ; en cas de doute, RECOMPTAGE PHYSIQUE conseillé (seul juge).`;
   };
 
   // ── 3g) DOUBLE SAISIE DE RÉCEPTION (lignes saisie STRICTEMENT identiques) ──────
