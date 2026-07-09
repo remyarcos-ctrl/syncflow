@@ -746,14 +746,19 @@ export async function POST(req: Request) {
         });
         continue;
       }
-      // Sinon : le reçu réel (Livré) couvre le papier et il est du bon moment → bien reçu (RO00033-like).
+      // Sinon (pas de scope commande via cde_client) : le Livré TOTAL couvre le papier, mais c'est
+      // un TOTAL toutes commandes/bons — il ne prouve PAS que les X de CE bon sont saisis. Ils
+      // peuvent être (a) rattachés à un autre bon dans CL (mal numéroté → rien à faire) ou (b)
+      // GÉNUINEMENT non saisis = oubli, stock CL court (cf RGA4412 : 5 physiques sur le 0712,
+      // 2 dans CL, les 3 manquent vraiment). On NE tranche PAS sans le comptage physique par bon
+      // → « à vérifier », destinataire log-ou-vérif, pas un « Bien reçu » vert trompeur.
       nouvelles.push({
-        origine: 'pointage', destinataire: 'interne', type_exception: 'réception non détaillée',
+        origine: 'pointage', destinataire: 'à vérifier', type_exception: 'réception non détaillée',
         be_id: info.beId, reference_article: k,
-        motif: `✅ Bien reçu — RIEN À FAIRE. ${k} : la marchandise est bien reçue (commande soldée, reçu réel Livré ${recuReel.toFixed(0)} ≥ papier ${pap}). L'écart de ${surplus.toFixed(0)} n'est PAS un manque — juste ${surplus.toFixed(0)} que CL n'a pas ventilés sous le(s) bon(s) (papier ${pap}, détaillé ${saisi}).${repartBons(k)}`,
+        motif: `Reçu au total (Livré ${recuReel.toFixed(0)} ≥ papier ${pap}, commandes soldées) MAIS ${surplus.toFixed(0)} non saisis sur ce(s) bon(s) (détaillé ${saisi}) — à contrôler : soit rattachés à un AUTRE bon dans CL (mal numéroté → rien à faire), soit un OUBLI de saisie (la log doit entrer les ${surplus.toFixed(0)}, stock CL court). Le total ne prouve pas le détail par bon.${repartBons(k)}`,
         valeur_attendue: pap, valeur_obtenue: saisi, ecart: -surplus,
-        statut_exception: 'ouverte', niveau_priorite: 'faible',
-        suggestion_action_ia: `Rien à réclamer : ${k} est bien reçu (Livré ${recuReel.toFixed(0)}, commande soldée), juste pas ventilé sous ce bon dans CL. Tu peux classer « résolu ». Ça n'impacte ni le stock ni la facture.`,
+        statut_exception: 'ouverte', niveau_priorite: 'moyenne',
+        suggestion_action_ia: `Contrôler physiquement ${k} sur le bon vs Centralink : si les ${surplus.toFixed(0)} sont saisis sous un AUTRE n° de bon → mal numéroté, la log re-rattache (rien de perdu) ; si physiquement présents mais ABSENTS de CL → oubli, la log les saisit sous le bon. NE PAS se fier au Livré total (il agrège d'autres bons).`,
       });
       continue;
     }
