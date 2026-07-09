@@ -409,22 +409,32 @@ export async function POST(req: Request) {
   // post-pass bar-code. Clé ALIASÉE : le stock CL porte le code CL (ex. LTLPK03) alors que
   // les anomalies portent le code Colombi (LTL014) — sans alias, le croisement est aveugle.
   const stkR = await selectAll(() =>
-    sb.from('stocks_cl').select('reference_article, stock_cl, floating, has_barcode, ventes, stock_source, entrees_barcode'));
-  const stockByRef = new Map<string, { stock_cl: number | null; floating: number | null; has_barcode: boolean | null; ventes: number | null; stock_source: string | null; entrees_barcode: number | null }>();
+    sb.from('stocks_cl').select('reference_article, stock_cl, floating, has_barcode, ventes, stock_source, entrees_barcode, mvts_barcode'));
+  const stockByRef = new Map<string, { stock_cl: number | null; floating: number | null; has_barcode: boolean | null; ventes: number | null; stock_source: string | null; entrees_barcode: number | null; mvts_barcode: { date: string; delta: number }[] | null }>();
   for (const s of (stkR.data ?? [])) {
     const k = aliasRef(s.reference_article as string);
     if (k && !stockByRef.has(k)) stockByRef.set(k, s as never);
   }
-  // Indice BAR-CODE (QUALITATIF). ATTENTION : la fiche ne journalise PAS de « quantité reçue au
-  // scan » par bon. Sa table des mouvements = ajustements manuels de stock, chacun tagué par
-  // l'outil employé (Barcode = douchette / Centralink = web) — pas des réceptions rattachées à
-  // un bon. `entrees_barcode` (Σ des sauts de stock sur lignes Barcode) est donc du BRUIT pour
-  // notre question (reconstitue_ok souvent faux) : on NE l'affiche PAS comme un nombre reçu, ça
-  // ferait de la fausse réassurance. On signale seulement que la réf passe par le scan → à voir
-  // sur la fiche (date d'un mouvement Barcode proche du bon ?), sinon le comptage physique tranche.
-  const bcHint = (k: string): string => {
-    if (!stockByRef.get(k)?.has_barcode) return '';
-    return ` 🏷 Réf gérée au code-barres : la fiche porte des mouvements « Barcode » (entrées au scan / corrections de stock, NON rattachées à un bon). Une entrée au scan est donc possible — mais ça ne se chiffre pas d'ici. Regarder les mouvements « Barcode » de la fiche ${k} (un daté près du bon ?), sinon le comptage physique tranche.`;
+  // Mois (YYMM) d'un n° de bon « BE-26-01-0712 » → 2601. Défini tôt : utilisé dès §3c et par bcHint.
+  const beYYMM = (n: string | null | undefined): number => { const m = String(n ?? '').match(/BE-?(\d{2})-?(\d{2})/i); return m ? (+m[1]) * 100 + (+m[2]) : 0; };
+  // Mois (YYMM) d'une date de mouvement fiche « 19/01/26 à 14:56 » → 2601.
+  const moveYM = (dstr: string): number => { const m = String(dstr).match(/(\d{2})\/(\d{2})\/(\d{2})/); return m ? (+m[3]) * 100 + (+m[2]) : 0; };
+  // Indice BAR-CODE. `has_barcode` (présence) = FIABLE. Le TOTAL `entrees_barcode` = BRUIT (Σ de
+  // corrections d'inventaire taguées par outil, jamais rattachées à un bon, reconstitue_ok souvent
+  // faux) → on ne le chiffre JAMAIS (fausse réassurance). MAIS un mouvement Barcode DATÉ
+  // (`mvts_barcode`, lu sur la fiche) tombant dans le MÊME MOIS que le bon est une donnée réelle et
+  // vérifiable → on la remonte comme PISTE concrète (à confirmer, jamais un « bien reçu » auto).
+  const bcHint = (k: string, moisBon?: number[]): string => {
+    const st = stockByRef.get(k);
+    if (!st?.has_barcode) return '';
+    const moves = Array.isArray(st.mvts_barcode) ? st.mvts_barcode : [];
+    const mois = new Set((moisBon ?? []).filter(Boolean));
+    const hit = mois.size ? moves.filter((mv) => Number(mv.delta) > 0 && mois.has(moveYM(mv.date))).sort((a, b) => Number(b.delta) - Number(a.delta)) : [];
+    if (hit.length) {
+      const parts = hit.map((mv) => `+${Number(mv.delta).toFixed(0)} le ${mv.date}`).join(', ');
+      return ` 🏷 PISTE BAR-CODE concrète : la fiche ${k} porte un mouvement douchette (${parts}) dans le MÊME MOIS que le bon → très probablement entré au scan au lieu d'être saisi sous le bon (rien à réclamer si le compte colle ; à confirmer d'un œil sur la fiche).`;
+    }
+    return ` 🏷 Réf gérée au code-barres : la fiche porte des mouvements « Barcode » (entrées au scan / corrections de stock, NON rattachées à un bon) mais aucun daté dans le mois du bon. Une entrée au scan reste possible — regarder les mouvements « Barcode » de la fiche ${k}, sinon le comptage physique tranche.`;
   };
 
   // ── 3g) DOUBLE SAISIE DE RÉCEPTION (lignes saisie STRICTEMENT identiques) ──────
@@ -597,7 +607,7 @@ export async function POST(req: Request) {
           nouvelles.push({
             origine: 'pointage', destinataire: 'à vérifier', type_exception: 'réception incomplète',
             be_id: beId, reference_article: k,
-            motif: `Écart réception ${k} sur ${numBe} : le BL papier déclare ${papier}, CL n'a reçu que ${saisie} → ${manque.toFixed(0)} manquant(s), ${reste.toFixed(0)} en reliquat sur commande → à contrôler physiquement (livraison courte Colombi OU oubli de saisie).${bcHint(k)}`,
+            motif: `Écart réception ${k} sur ${numBe} : le BL papier déclare ${papier}, CL n'a reçu que ${saisie} → ${manque.toFixed(0)} manquant(s), ${reste.toFixed(0)} en reliquat sur commande → à contrôler physiquement (livraison courte Colombi OU oubli de saisie).${bcHint(k, [beYYMM(numBe)])}`,
             valeur_attendue: papier, valeur_obtenue: saisie, ecart: -manque,
             statut_exception: 'ouverte', niveau_priorite: 'moyenne',
             suggestion_action_ia: `Contrôler physiquement ${k} (BL ${papier} / reçu CL ${saisie}, ${reste.toFixed(0)} en reliquat) : si la marchandise est en stock → la saisir sous ${numBe} (oubli log) ; si elle est absente du colis → manquant Colombi à réclamer (avoir) ou reliquat à attendre. Seul le contrôle physique tranche.`,
@@ -656,8 +666,7 @@ export async function POST(req: Request) {
   // réception est du BON moment. Si le papier est sur un bon PLUS RÉCENT que toute réception
   // saisie de la réf (ex. KI0010 : bon 02/2026 mais dernière saisie/commande = 2025), le
   // « couvert par le Livré » compare à des réceptions PÉRIMÉES → suspect (probable entrée
-  // bar-code / hors commande, pas un « bien reçu »). AAMM extrait du n° de bon (BE-AA-MM-…).
-  const beYYMM = (n: string | null | undefined): number => { const m = String(n ?? '').match(/BE-?(\d{2})-?(\d{2})/i); return m ? (+m[1]) * 100 + (+m[2]) : 0; };
+  // bar-code / hors commande, pas un « bien reçu »). AAMM extrait du n° de bon (beYYMM, défini plus haut).
   const dernSaisieYYMM = new Map<string, number>();
   for (const s of saisies) { const k = aliasRef(s.reference_article); const ym = beYYMM(s.numero_be); if (ym > (dernSaisieYYMM.get(k) ?? 0)) dernSaisieYYMM.set(k, ym); }
   const dernPapierYYMM = new Map<string, number>();
@@ -740,7 +749,7 @@ export async function POST(req: Request) {
       nouvelles.push({
         origine: 'pointage', destinataire: 'à vérifier', type_exception: 'réception incomplète',
         be_id: info.beId, reference_article: k,
-        motif: `⚠ Il manque ${surplus.toFixed(0)} ${k} dans Centralink → sur ${manqueTexte(k)}. Et il reste ${reste.toFixed(0)} à recevoir sur une commande ouverte. À CONTRÔLER : reliquat qui arrive ; saisi sous un autre bon ; oubli de saisie ; ou Colombi a livré court. Regarder le colis avant de réclamer.${bcHint(k)}`,
+        motif: `⚠ Il manque ${surplus.toFixed(0)} ${k} dans Centralink → sur ${manqueTexte(k)}. Et il reste ${reste.toFixed(0)} à recevoir sur une commande ouverte. À CONTRÔLER : reliquat qui arrive ; saisi sous un autre bon ; oubli de saisie ; ou Colombi a livré court. Regarder le colis avant de réclamer.${bcHint(k, manqueParBon(k).map((b) => beYYMM(b.numBe)))}`,
         valeur_attendue: pap, valeur_obtenue: saisi, ecart: -surplus,
         statut_exception: 'ouverte', niveau_priorite: 'moyenne',
         suggestion_action_ia: `Regarde ${k} en rayon : si présent mais saisi sous un autre bon → rien à faire ; si présent mais absent de Centralink → la log saisit ; s'il manque vraiment → c'est le reliquat qui arrive (attendre) ou un manquant Colombi à réclamer. Ne rien réclamer avant d'avoir regardé.`,
@@ -760,7 +769,7 @@ export async function POST(req: Request) {
         nouvelles.push({
           origine: 'pointage', destinataire: 'à vérifier', type_exception: 'réception non détaillée',
           be_id: info.beId, reference_article: k,
-          motif: `⚠ À CONFIRMER ${k} : le bon est PLUS RÉCENT que toute réception enregistrée (dernières commandes/saisies périmées) — le « Livré ${recuReel.toFixed(0)} » ne prouve donc PAS que les ${surplus.toFixed(0)} de ce bon sont reçus. Aucune commande ne les couvre.${bcHint(k)}${repartBons(k)}`,
+          motif: `⚠ À CONFIRMER ${k} : le bon est PLUS RÉCENT que toute réception enregistrée (dernières commandes/saisies périmées) — le « Livré ${recuReel.toFixed(0)} » ne prouve donc PAS que les ${surplus.toFixed(0)} de ce bon sont reçus. Aucune commande ne les couvre.${bcHint(k, manqueParBon(k).map((b) => beYYMM(b.numBe)))}${repartBons(k)}`,
           valeur_attendue: pap, valeur_obtenue: saisi, ecart: -surplus,
           statut_exception: 'ouverte', niveau_priorite: 'moyenne',
           suggestion_action_ia: `Vérifier sur la fiche Centralink de ${k} (table des mouvements) : y a-t-il ~${surplus.toFixed(0)} entrées « Barcode » autour de la date du bon ? Si oui → bien reçu au scan (classer résolu) ; sinon → vrai manque à réclamer à Colombi. NE PAS se fier au Livré (il date d'anciennes commandes).`,
@@ -776,7 +785,7 @@ export async function POST(req: Request) {
       nouvelles.push({
         origine: 'pointage', destinataire: 'à vérifier', type_exception: 'réception non détaillée',
         be_id: info.beId, reference_article: k,
-        motif: `⚠ Il manque ${surplus.toFixed(0)} ${k} dans Centralink → sur ${manqueTexte(k)}. À CONTRÔLER, quelle est l'explication : soit saisis sous un AUTRE n° de bon (mal rangé → rien à faire) ; soit un oubli de saisie (la log les saisit) ; soit une sur-livraison Colombi / un manquant. Le comptage physique du bon tranche.${bcHint(k)}`,
+        motif: `⚠ Il manque ${surplus.toFixed(0)} ${k} dans Centralink → sur ${manqueTexte(k)}. À CONTRÔLER, quelle est l'explication : soit saisis sous un AUTRE n° de bon (mal rangé → rien à faire) ; soit un oubli de saisie (la log les saisit) ; soit une sur-livraison Colombi / un manquant. Le comptage physique du bon tranche.${bcHint(k, manqueParBon(k).map((b) => beYYMM(b.numBe)))}`,
         valeur_attendue: pap, valeur_obtenue: saisi, ecart: -surplus,
         statut_exception: 'ouverte', niveau_priorite: 'moyenne',
         suggestion_action_ia: `Regarde le bon en rayon + la fiche Centralink de ${k} : ${stockByRef.get(k)?.has_barcode ? 'd\'abord les mouvements « Barcode » (réf gérée au code-barres → souvent entrée au scan sans commande, rien à faire) ; ' : ''}si présents et saisis sous un autre bon → mal rangé, rien à faire ; si présents mais absents de Centralink → la log saisit (oubli / sur-livraison à régulariser) ; si absents du rayon → réclamer Colombi.`,
