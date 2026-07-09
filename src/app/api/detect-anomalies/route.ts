@@ -630,6 +630,20 @@ export async function POST(req: Request) {
     if (bons.length <= 1) return '';
     return ` · réparti sur ${bons.length} bons : ${bons.map((b) => `${b.numBe} (${b.qte})`).join(', ')}`;
   };
+  // Détail CONCRET du manque : sur quel(s) bon(s) le papier > la saisie CL, et de combien.
+  // Bien plus parlant qu'un total agrégé (« sur le bon X : papier 5, CL 2 → 3 manquent »).
+  const manqueParBon = (k: string): { numBe: string; papier: number; cl: number; manque: number }[] => {
+    const out: { numBe: string; papier: number; cl: number; manque: number }[] = [];
+    for (const [beId, refs] of lbByBe) {
+      const info = refs.get(k);
+      if (!info || info.qte <= 0) continue;
+      const s = saisieByBeRef.get(beId + '|' + k) ?? 0;
+      if (info.qte > s + 0.001) out.push({ numBe: beNumById.get(beId) ?? '', papier: info.qte, cl: s, manque: info.qte - s });
+    }
+    return out;
+  };
+  const manqueTexte = (k: string): string =>
+    manqueParBon(k).map((b) => `${b.numBe} (papier ${b.papier}, CL ${b.cl} → ${b.manque.toFixed(0)} manquant${b.manque > 1 ? 's' : ''})`).join(', ');
   // SANITÉ TEMPORELLE de l'exonération « Bien reçu » : le « Livré couvre » ne vaut que si la
   // réception est du BON moment. Si le papier est sur un bon PLUS RÉCENT que toute réception
   // saisie de la réf (ex. KI0010 : bon 02/2026 mais dernière saisie/commande = 2025), le
@@ -697,10 +711,10 @@ export async function POST(req: Request) {
         nouvelles.push({
           origine: 'pointage', destinataire: 'interne', type_exception: 'réception non détaillée',
           be_id: info.beId, reference_article: k,
-          motif: `✅ Bien reçu — RIEN À FAIRE. ${k} : la marchandise est bien reçue (commande(s) ${[...cdes].map((c) => '#' + c).join(', ')} soldée(s), reçu réel Livré ${livreScope.toFixed(0)} ≥ papier ${pap}). Les ${surplus.toFixed(0)} de ce bon ne sont PAS un manque — juste une réception que CL n'a pas ventilée sous ce n° de bon (saisi ${saisi} ici).${repartBons(k)}`,
+          motif: `✅ Bien reçu — RIEN À FAIRE. ${k} : la commande ${[...cdes].map((c) => '#' + c).join(', ')} est soldée, tout est reçu. Les ${surplus.toFixed(0)} de ce bon sont juste saisis sous un autre n° de bon dans Centralink — aucun impact sur le stock ni la facture.`,
           valeur_attendue: pap, valeur_obtenue: saisi, ecart: -surplus,
           statut_exception: 'ouverte', niveau_priorite: 'faible',
-          suggestion_action_ia: `Rien à réclamer : ${k} est bien reçu (Livré ${livreScope.toFixed(0)}, commande soldée), juste pas ventilé sous ce bon dans CL. Tu peux classer « résolu ». Au besoin, la log peut ventiler la saisie pour un détail propre — mais ça n'impacte ni le stock ni la facture.`,
+          suggestion_action_ia: `Rien à faire : ${k} est bien reçu, commande ${[...cdes].map((c) => '#' + c).join(', ')} soldée. Les ${surplus.toFixed(0)} sont juste rangés sous un autre n° de bon dans Centralink. Tu peux classer « résolu ».`,
         });
         continue;
       }
@@ -718,10 +732,10 @@ export async function POST(req: Request) {
       nouvelles.push({
         origine: 'pointage', destinataire: 'à vérifier', type_exception: 'réception incomplète',
         be_id: info.beId, reference_article: k,
-        motif: `Écart réception ${k} : le BL papier déclare ${pap} sur nos bons, CL n'en a détaillé que ${saisi} (${detail}) et il reste ${reste.toFixed(0)} à recevoir sur commande → à contrôler physiquement (livraison courte Colombi, saisie sous un autre bon, ou reliquat en cours).${repartBons(k)}`,
+        motif: `⚠ Il manque ${surplus.toFixed(0)} ${k} dans Centralink → sur ${manqueTexte(k)}. Et il reste encore ${reste.toFixed(0)} à recevoir sur une commande ouverte. À CONTRÔLER : soit c'est un reliquat (ça va arriver), soit c'est saisi sous un autre bon, soit Colombi a livré court. Regarder le colis avant de réclamer.`,
         valeur_attendue: pap, valeur_obtenue: saisi, ecart: -surplus,
         statut_exception: 'ouverte', niveau_priorite: 'moyenne',
-        suggestion_action_ia: `Contrôler physiquement ${k} (${detail}, ${reste.toFixed(0)} en reliquat CL) : si la marchandise est là mais saisie ailleurs / non ventilée → OK ; si elle manque au colis → manquant Colombi à réclamer, ou reliquat à attendre. Ne rien réclamer avant le contrôle.`,
+        suggestion_action_ia: `Regarde ${k} en rayon : si présent mais saisi sous un autre bon → rien à faire ; si présent mais absent de Centralink → la log saisit ; s'il manque vraiment → c'est le reliquat qui arrive (attendre) ou un manquant Colombi à réclamer. Ne rien réclamer avant d'avoir regardé.`,
       });
       continue;
     }
@@ -755,10 +769,10 @@ export async function POST(req: Request) {
       nouvelles.push({
         origine: 'pointage', destinataire: 'à vérifier', type_exception: 'réception non détaillée',
         be_id: info.beId, reference_article: k,
-        motif: `Reçu au total (Livré ${recuReel.toFixed(0)} ≥ papier ${pap}, commandes soldées) MAIS ${surplus.toFixed(0)} non saisis sur ce(s) bon(s) (détaillé ${saisi}) — à contrôler : soit rattachés à un AUTRE bon dans CL (mal numéroté → rien à faire), soit un OUBLI de saisie (la log doit entrer les ${surplus.toFixed(0)}, stock CL court). Le total ne prouve pas le détail par bon.${repartBons(k)}`,
+        motif: `⚠ Il manque ${surplus.toFixed(0)} ${k} dans Centralink → sur ${manqueTexte(k)}. À CONTRÔLER : soit ces ${surplus.toFixed(0)} sont saisis sous un AUTRE n° de bon (juste mal rangé → rien à faire), soit la log a oublié de les saisir ou Colombi a sur-livré (à corriger dans Centralink). Le comptage physique du bon tranche.`,
         valeur_attendue: pap, valeur_obtenue: saisi, ecart: -surplus,
         statut_exception: 'ouverte', niveau_priorite: 'moyenne',
-        suggestion_action_ia: `Contrôler physiquement ${k} sur le bon vs Centralink : si les ${surplus.toFixed(0)} sont saisis sous un AUTRE n° de bon → mal numéroté, la log re-rattache (rien de perdu) ; si physiquement présents mais ABSENTS de CL → oubli, la log les saisit sous le bon. NE PAS se fier au Livré total (il agrège d'autres bons).`,
+        suggestion_action_ia: `Regarde le bon en rayon vs Centralink : si les ${surplus.toFixed(0)} ${k} sont physiquement là ET déjà saisis sous un autre n° de bon → juste mal rangé, rien à faire (ou la log re-rattache pour un détail propre). Si physiquement là mais ABSENTS de Centralink → la log doit les saisir (oubli, ou sur-livraison Colombi à régulariser). Si pas là du tout → réclamer à Colombi.`,
       });
       continue;
     }
