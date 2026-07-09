@@ -729,10 +729,11 @@ export async function POST(req: Request) {
       // Commande encore en attente → l'écart papier > reçu peut être un MANQUE réel (livraison
       // courte Colombi) ou une saisie sous un autre bon. On ne présume rien → à contrôler.
       if (seen.has(key('pointage', info.beId, k, 'réception incomplète'))) continue;
+      const bcRI = stockByRef.get(k)?.has_barcode ? ' entrés au BAR-CODE (scan direct en stock — regarder les mouvements de la fiche) ;' : '';
       nouvelles.push({
         origine: 'pointage', destinataire: 'à vérifier', type_exception: 'réception incomplète',
         be_id: info.beId, reference_article: k,
-        motif: `⚠ Il manque ${surplus.toFixed(0)} ${k} dans Centralink → sur ${manqueTexte(k)}. Et il reste encore ${reste.toFixed(0)} à recevoir sur une commande ouverte. À CONTRÔLER : soit c'est un reliquat (ça va arriver), soit c'est saisi sous un autre bon, soit Colombi a livré court. Regarder le colis avant de réclamer.`,
+        motif: `⚠ Il manque ${surplus.toFixed(0)} ${k} dans Centralink → sur ${manqueTexte(k)}. Et il reste ${reste.toFixed(0)} à recevoir sur une commande ouverte. À CONTRÔLER :${bcRI} reliquat qui arrive ; saisi sous un autre bon ; oubli de saisie ; ou Colombi a livré court. Regarder le colis avant de réclamer.`,
         valeur_attendue: pap, valeur_obtenue: saisi, ecart: -surplus,
         statut_exception: 'ouverte', niveau_priorite: 'moyenne',
         suggestion_action_ia: `Regarde ${k} en rayon : si présent mais saisi sous un autre bon → rien à faire ; si présent mais absent de Centralink → la log saisit ; s'il manque vraiment → c'est le reliquat qui arrive (attendre) ou un manquant Colombi à réclamer. Ne rien réclamer avant d'avoir regardé.`,
@@ -766,13 +767,14 @@ export async function POST(req: Request) {
       // GÉNUINEMENT non saisis = oubli, stock CL court (cf RGA4412 : 5 physiques sur le 0712,
       // 2 dans CL, les 3 manquent vraiment). On NE tranche PAS sans le comptage physique par bon
       // → « à vérifier », destinataire log-ou-vérif, pas un « Bien reçu » vert trompeur.
+      const bcND = stockByRef.get(k)?.has_barcode ? ` soit entrés au BAR-CODE (scan direct en stock, sans commande) → très possible ici, la réf est gérée au code-barres, regarder les mouvements « Barcode » de la fiche ${k} ;` : '';
       nouvelles.push({
         origine: 'pointage', destinataire: 'à vérifier', type_exception: 'réception non détaillée',
         be_id: info.beId, reference_article: k,
-        motif: `⚠ Il manque ${surplus.toFixed(0)} ${k} dans Centralink → sur ${manqueTexte(k)}. À CONTRÔLER : soit ces ${surplus.toFixed(0)} sont saisis sous un AUTRE n° de bon (juste mal rangé → rien à faire), soit la log a oublié de les saisir ou Colombi a sur-livré (à corriger dans Centralink). Le comptage physique du bon tranche.`,
+        motif: `⚠ Il manque ${surplus.toFixed(0)} ${k} dans Centralink → sur ${manqueTexte(k)}. À CONTRÔLER, quelle est l'explication : soit saisis sous un AUTRE n° de bon (mal rangé → rien à faire) ;${bcND} soit un oubli de saisie (la log les saisit) ; soit une sur-livraison Colombi / un manquant. Le comptage physique du bon tranche.`,
         valeur_attendue: pap, valeur_obtenue: saisi, ecart: -surplus,
         statut_exception: 'ouverte', niveau_priorite: 'moyenne',
-        suggestion_action_ia: `Regarde le bon en rayon vs Centralink : si les ${surplus.toFixed(0)} ${k} sont physiquement là ET déjà saisis sous un autre n° de bon → juste mal rangé, rien à faire (ou la log re-rattache pour un détail propre). Si physiquement là mais ABSENTS de Centralink → la log doit les saisir (oubli, ou sur-livraison Colombi à régulariser). Si pas là du tout → réclamer à Colombi.`,
+        suggestion_action_ia: `Regarde le bon en rayon + la fiche Centralink de ${k} : ${stockByRef.get(k)?.has_barcode ? 'd\'abord les mouvements « Barcode » (réf gérée au code-barres → souvent entrée au scan sans commande, rien à faire) ; ' : ''}si présents et saisis sous un autre bon → mal rangé, rien à faire ; si présents mais absents de Centralink → la log saisit (oubli / sur-livraison à régulariser) ; si absents du rayon → réclamer Colombi.`,
       });
       continue;
     }
