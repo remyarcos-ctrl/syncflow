@@ -610,14 +610,26 @@ export async function POST(req: Request) {
   //   surplus = papier − saisi(sur nos bons) − avoir − régule
   // Ex. 19803 : 29 − 14 − 8 − 3 = 4.
   const papierTotParRef = new Map<string, { qte: number; desig: string | null; beId: string }>();
+  const bonsParRef = new Map<string, { numBe: string; qte: number }[]>();  // répartition du papier par bon
   for (const [beId, refs] of lbByBe) {
     for (const [k, info] of refs) {
       const cur = papierTotParRef.get(k) ?? { qte: 0, desig: info.desig, beId };
       cur.qte += info.qte;
       if (!cur.desig && info.desig) cur.desig = info.desig;
       papierTotParRef.set(k, cur);
+      const arr = bonsParRef.get(k) ?? [];
+      arr.push({ numBe: beNumById.get(beId) ?? '', qte: info.qte });
+      bonsParRef.set(k, arr);
     }
   }
+  // Le papier d'une réf peut être RÉPARTI sur plusieurs bons (ex. CFT36 : 10 sur BE-…-1362 +
+  // 3 sur BE-…-0289 = 13). L'anomalie est « par référence » mais la colonne BE de l'écran n'en
+  // montre qu'UN → on liste la répartition dans le motif pour que le total colle à ce qu'on voit.
+  const repartBons = (k: string): string => {
+    const bons = (bonsParRef.get(k) ?? []).filter((b) => b.qte > 0);
+    if (bons.length <= 1) return '';
+    return ` · réparti sur ${bons.length} bons : ${bons.map((b) => `${b.numBe} (${b.qte})`).join(', ')}`;
+  };
   // Saisi sur les bons SCANNÉS, par réf (saisieByBeRef est déjà restreint à nos BE).
   const saisieScanParRef = new Map<string, number>();
   for (const [kk, v] of saisieByBeRef) {
@@ -675,7 +687,7 @@ export async function POST(req: Request) {
         nouvelles.push({
           origine: 'pointage', destinataire: 'à vérifier', type_exception: 'réception non détaillée',
           be_id: info.beId, reference_article: k,
-          motif: `Réception non détaillée ${k} : commande(s) ${[...cdes].map((c) => '#' + c).join(', ')} soldée(s) et Livré (${livreScope.toFixed(0)}) couvre le papier (${pap}) — reçu mais pas ventilé sous ce bon (saisi ${saisi}) → PAS un manque.`,
+          motif: `Réception non détaillée ${k} : commande(s) ${[...cdes].map((c) => '#' + c).join(', ')} soldée(s) et Livré (${livreScope.toFixed(0)}) couvre le papier (${pap}) — reçu mais pas ventilé sous ce bon (saisi ${saisi}) → PAS un manque.${repartBons(k)}`,
           valeur_attendue: pap, valeur_obtenue: saisi, ecart: -surplus,
           statut_exception: 'ouverte', niveau_priorite: 'faible',
           suggestion_action_ia: `Info ${k} : réception bien enregistrée sur ${[...cdes].map((c) => '#' + c).join(', ')} (Livré ${livreScope.toFixed(0)}, soldée) mais non ventilée sous ce bon → rien à réclamer ; au besoin ventiler la saisie sous le bon pour un détail propre.`,
@@ -696,7 +708,7 @@ export async function POST(req: Request) {
       nouvelles.push({
         origine: 'pointage', destinataire: 'à vérifier', type_exception: 'réception incomplète',
         be_id: info.beId, reference_article: k,
-        motif: `Écart réception ${k} : le BL papier déclare ${pap} sur nos bons, CL n'en a détaillé que ${saisi} (${detail}) et il reste ${reste.toFixed(0)} à recevoir sur commande → à contrôler physiquement (livraison courte Colombi, saisie sous un autre bon, ou reliquat en cours).`,
+        motif: `Écart réception ${k} : le BL papier déclare ${pap} sur nos bons, CL n'en a détaillé que ${saisi} (${detail}) et il reste ${reste.toFixed(0)} à recevoir sur commande → à contrôler physiquement (livraison courte Colombi, saisie sous un autre bon, ou reliquat en cours).${repartBons(k)}`,
         valeur_attendue: pap, valeur_obtenue: saisi, ecart: -surplus,
         statut_exception: 'ouverte', niveau_priorite: 'moyenne',
         suggestion_action_ia: `Contrôler physiquement ${k} (${detail}, ${reste.toFixed(0)} en reliquat CL) : si la marchandise est là mais saisie ailleurs / non ventilée → OK ; si elle manque au colis → manquant Colombi à réclamer, ou reliquat à attendre. Ne rien réclamer avant le contrôle.`,
@@ -711,7 +723,7 @@ export async function POST(req: Request) {
       nouvelles.push({
         origine: 'pointage', destinataire: 'à vérifier', type_exception: 'réception non détaillée',
         be_id: info.beId, reference_article: k,
-        motif: `Réception non détaillée ${k} : ${pap} au papier (nos bons scannés) vs ${saisi} détaillé(s) dans CL — commande soldée et reçu réel (Livré ${recuReel.toFixed(0)}) couvre le papier → reçu mais non ventilé dans le détail, PAS un surplus.`,
+        motif: `Réception non détaillée ${k} : ${pap} au papier (nos bons scannés) vs ${saisi} détaillé(s) dans CL — commande soldée et reçu réel (Livré ${recuReel.toFixed(0)}) couvre le papier → reçu mais non ventilé dans le détail, PAS un surplus.${repartBons(k)}`,
         valeur_attendue: pap, valeur_obtenue: saisi, ecart: -surplus,
         statut_exception: 'ouverte', niveau_priorite: 'faible',
         suggestion_action_ia: `Info ${k} : réception bien enregistrée dans CL (Livré ${recuReel.toFixed(0)}, commande soldée) mais pas ventilée sous ce bon → rien à réclamer ; au besoin ventiler la saisie sous le bon pour un détail propre.`,
@@ -724,7 +736,7 @@ export async function POST(req: Request) {
     nouvelles.push({
       origine: 'pointage', destinataire: 'Colombi', type_exception: 'sur-livraison',
       be_id: info.beId, reference_article: k,
-      motif: `Surplus Colombi ${k} : ${surplus.toFixed(0)} livré(s) en plus, ni saisi(s) ni rendu(s) ni régularisé(s) (${detail}, commandes soldées, Livré ${recuReel.toFixed(0)} < papier) → à régulariser`,
+      motif: `Surplus Colombi ${k} : ${surplus.toFixed(0)} livré(s) en plus, ni saisi(s) ni rendu(s) ni régularisé(s) (${detail}, commandes soldées, Livré ${recuReel.toFixed(0)} < papier) → à régulariser${repartBons(k)}`,
       valeur_attendue: pap, valeur_obtenue: saisi, ecart: -surplus,
       statut_exception: 'ouverte', niveau_priorite: 'moyenne',
       suggestion_action_ia: `Surplus Colombi à régulariser : ${k} → ${surplus.toFixed(0)} en trop (${detail}), commandes déjà soldées. Action : commande de régule (avec le n° de BL) pour les encaisser, ou réclamer/retourner à Colombi.`,
