@@ -410,8 +410,8 @@ export async function POST(req: Request) {
   // post-pass bar-code. Clé ALIASÉE : le stock CL porte le code CL (ex. LTLPK03) alors que
   // les anomalies portent le code Colombi (LTL014) — sans alias, le croisement est aveugle.
   const stkR = await selectAll(() =>
-    sb.from('stocks_cl').select('reference_article, stock_cl, floating, has_barcode, ventes, stock_source, entrees_barcode, mvts_barcode'));
-  const stockByRef = new Map<string, { stock_cl: number | null; floating: number | null; has_barcode: boolean | null; ventes: number | null; stock_source: string | null; entrees_barcode: number | null; mvts_barcode: { date: string; delta: number }[] | null }>();
+    sb.from('stocks_cl').select('reference_article, stock_cl, floating, has_barcode, ventes, stock_source, entrees_barcode, mvts_barcode, mvts_reception'));
+  const stockByRef = new Map<string, { stock_cl: number | null; floating: number | null; has_barcode: boolean | null; ventes: number | null; stock_source: string | null; entrees_barcode: number | null; mvts_barcode: { date: string; delta: number }[] | null; mvts_reception: { date: string; delta: number }[] | null }>();
   for (const s of (stkR.data ?? [])) {
     const k = aliasRef(s.reference_article as string);
     if (k && !stockByRef.has(k)) stockByRef.set(k, s as never);
@@ -427,21 +427,29 @@ export async function POST(req: Request) {
   // vérifiable → on la remonte comme PISTE concrète (à confirmer, jamais un « bien reçu » auto).
   const bcHint = (k: string, moisBon: number[], manque: number): string => {
     const st = stockByRef.get(k);
-    if (!st?.has_barcode) return '';
-    const moves = Array.isArray(st.mvts_barcode) ? st.mvts_barcode : [];
+    if (!st) return '';
     const mois = new Set((moisBon ?? []).filter(Boolean));
-    // GARDE-FOU magnitude : un scan qui « explique le manque » est du MÊME ORDRE que le manque,
-    // pas 1000× (cf PR004 : delta 306954 = correction d'inventaire aberrante, pas une réception).
-    // On ne retient donc que les mouvements du bon mois dont le delta reste ≤ ~3× le manque.
+    // GARDE-FOU magnitude : un mouvement qui « explique le manque » est du MÊME ORDRE que le
+    // manque, pas 1000× (cf PR004 : delta 306954 = correction d'inventaire aberrante).
     const plafond = Math.max(manque * 3 + 5, 0);
-    const hit = mois.size
+    const pick = (moves: { date: string; delta: number }[] | null | undefined) => (mois.size && Array.isArray(moves)
       ? moves.filter((mv) => Number(mv.delta) > 0 && Number(mv.delta) <= plafond && mois.has(moveYM(mv.date))).sort((a, b) => Number(b.delta) - Number(a.delta)).slice(0, 3)
-      : [];
-    if (hit.length) {
-      const parts = hit.map((mv) => `+${Number(mv.delta).toFixed(0)} le ${mv.date}`).join(', ');
+      : []);
+    // 1) Mouvement RÉCEPTION daté du même mois que le bon = probable « reçu sans n° de bon »
+    //    (cas REM005 : Réception +2 le 06/05 = pile les 2 du bon de mai, invisibles au pointage
+    //    par bon). Prioritaire sur la piste bar-code : c'est une réception, pas un scan.
+    const rec = pick(st.mvts_reception);
+    if (rec.length) {
+      const parts = rec.map((mv) => `+${Number(mv.delta).toFixed(0)} le ${mv.date}`).join(', ');
+      return ` 🧾 PISTE RÉCEPTION SANS N° DE BON : la fiche ${k} porte un mouvement « Réception » (${parts}) dans le MÊME MOIS que le bon → probablement reçu et compté SANS n° de bon rattaché (invisible au pointage par bon — cas REM005). ⚠ Indice, PAS une preuve : vérifier la fiche (mouvements) ; si le compte colle → rien à réclamer.`;
+    }
+    const bc = st.has_barcode ? pick(st.mvts_barcode) : [];
+    if (bc.length) {
+      const parts = bc.map((mv) => `+${Number(mv.delta).toFixed(0)} le ${mv.date}`).join(', ');
       return ` 🏷 PISTE BAR-CODE : la fiche ${k} porte un mouvement douchette (${parts}) dans le MÊME MOIS que le bon → probablement entré au scan au lieu d'être saisi sous le bon. ⚠ Indice, PAS une preuve : RECOMPTAGE PHYSIQUE conseillé avant de solder — si le compte colle → rien à réclamer, sinon → manquant Colombi à réclamer.`;
     }
-    return ` 🏷 Réf gérée au code-barres : la fiche porte des mouvements « Barcode » (entrées au scan / corrections de stock, NON rattachées à un bon) mais aucun ne colle nettement au manque ce mois-là. Une entrée au scan reste possible — regarder les mouvements « Barcode » de la fiche ${k} ; en cas de doute, RECOMPTAGE PHYSIQUE conseillé (seul juge).`;
+    if (st.has_barcode) return ` 🏷 Réf gérée au code-barres : la fiche porte des mouvements « Barcode » (entrées au scan / corrections de stock, NON rattachées à un bon) mais aucun ne colle nettement au manque ce mois-là. Une entrée au scan reste possible — regarder les mouvements « Barcode » de la fiche ${k} ; en cas de doute, RECOMPTAGE PHYSIQUE conseillé (seul juge). ⚠ Rappel : rayon = stock CL ne prouve rien si un inventaire est passé depuis — les mouvements DATÉS de la fiche font foi.`;
+    return '';
   };
 
   // ── 3g) DOUBLE SAISIE DE RÉCEPTION (lignes saisie STRICTEMENT identiques) ──────
