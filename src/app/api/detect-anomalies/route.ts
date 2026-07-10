@@ -45,6 +45,7 @@ async function selectAll<T = Record<string, unknown>>(
 interface NewExc {
   origine: string; destinataire: string; type_exception: string;
   be_id?: string | null; facture_id?: string | null; commande_id?: string | null; reference_article: string;
+  numero_be_libre?: string | null;   // n° de BE en texte (bon importé OU bon CL jamais importé) → affichage + tri
   motif: string; valeur_attendue: number | null; valeur_obtenue: number | null; ecart: number | null;
   statut_exception: string; niveau_priorite: string;
   suggestion_action_ia?: string | null;
@@ -476,7 +477,7 @@ export async function POST(req: Request) {
       const recent = beYYMM(d.numBe) >= 2512;          // flux (≥ déc 2025) → moyenne ; historique → faible
       nouvelles.push({
         origine: 'réception', destinataire: 'à vérifier', type_exception: 'sur-saisie log',
-        commande_id: cmdId, reference_article: kd,
+        commande_id: cmdId, reference_article: kd, numero_be_libre: d.numBe,
         motif: `Saisie ×${d.n} STRICTEMENT identique de ${kd} sous ${d.numBe} (qté ${d.qte} chacune, ${d.cmd}) — bon NON importé dans syncflow : impossible de vérifier contre le papier. Si c'est un doublon, le reçu est gonflé de ${(d.qte * (d.n - 1)).toFixed(0)} (risque facturation).`,
         valeur_attendue: d.qte, valeur_obtenue: d.qte * d.n, ecart: d.qte * (d.n - 1),
         statut_exception: 'ouverte', niveau_priorite: recent ? 'moyenne' : 'faible',
@@ -1236,6 +1237,11 @@ export async function POST(req: Request) {
 
   let inserted = 0;
   if (nouvelles.length > 0) {
+    // n° de BE en texte sur CHAQUE anomalie (affichage colonne BE + tri par bon) :
+    // celui du bon importé (be_id), sinon celui déjà posé (bon CL jamais importé, §3g).
+    for (const n of nouvelles) {
+      if (!n.numero_be_libre && n.be_id) n.numero_be_libre = beNumById.get(n.be_id) ?? null;
+    }
     const { error, count } = await sb.from('exceptions').insert(nouvelles, { count: 'exact' });
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     inserted = count ?? nouvelles.length;

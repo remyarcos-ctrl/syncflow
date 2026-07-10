@@ -44,6 +44,8 @@ type Exc = Exception & {
   assigne_a?: string | null;
   echeance?: string | null;
   suggestion_action_ia?: string | null;
+  // n° de BE en texte (bon importé OU bon CL jamais importé) → affichage colonne BE + tri
+  numero_be_libre?: string | null;
 };
 
 const DEST_CONFIG: Record<string, string> = {
@@ -94,6 +96,9 @@ export default function ExceptionsPage() {
   const [filterDest, setFilterDest] = useState('all');
   const [filterBe, setFilterBe] = useState('all');
   const [filterRef, setFilterRef] = useState('');
+  // Tri : par défaut les plus récentes ; « be » = par n° de bon (desc = bons les plus récents
+  // d'abord, le n° BE-AA-MM-NNNN est chronologique) — demandé pour la revue bon par bon.
+  const [sortBy, setSortBy] = useState<'recent' | 'be'>('recent');
   const [genBon, setGenBon] = useState(false);
   // Deep-link depuis le « Bon de vérification » (/stock) : /exceptions?ref=XXX → pré-filtre la réf
   // (le panneau de réconciliation s'affiche aussi, quel que soit le statut de l'anomalie).
@@ -109,12 +114,15 @@ export default function ExceptionsPage() {
   const [updating, setUpdating] = useState<string | null>(null);
 
   const { data: exceptionsResult = { exceptions: [], total: 0 }, isError } = useQuery<{ exceptions: Exc[]; total: number }>({
-    queryKey: ['exceptions', page, filterStatut, filterType, filterPriorite, filterOrigine, filterDest, filterBe, filterRef],
+    queryKey: ['exceptions', page, filterStatut, filterType, filterPriorite, filterOrigine, filterDest, filterBe, filterRef, sortBy],
     queryFn: async () => {
       let query = supabase
         .from('exceptions')
-        .select('*', { count: 'exact' })
-        .order('created_at', { ascending: false });
+        .select('*', { count: 'exact' });
+      // Tri par n° de bon : nulls en dernier (anomalies de commande sans bon), puis récentes.
+      query = sortBy === 'be'
+        ? query.order('numero_be_libre', { ascending: false, nullsFirst: false }).order('created_at', { ascending: false })
+        : query.order('created_at', { ascending: false });
 
       if (filterStatut === 'actives') query = query.in('statut_exception', ['ouverte', 'en cours']);
       else if (filterStatut === 'à analyser') query = query.eq('statut_exception', 'ouverte').eq('destinataire', 'Colombi');
@@ -654,7 +662,7 @@ export default function ExceptionsPage() {
       filterOrigine !== 'all' ? `Origine : ${filterOrigine}` : null,
     ].filter(Boolean).join(' · ');
     const trs = rows.map(e => {
-      const be = e.be_id ? (beMap[e.be_id]?.numero_be ?? '') : (e.commande_id ? (cmdMap[e.commande_id]?.numero_commande_interne ?? '') : '');
+      const be = e.be_id ? (beMap[e.be_id]?.numero_be ?? '') : (e.numero_be_libre ?? (e.commande_id ? (cmdMap[e.commande_id]?.numero_commande_interne ?? '') : ''));
       const ec = e.ecart != null && Number(e.ecart) !== 0 ? `${Number(e.ecart) > 0 ? '+' : ''}${e.ecart}` : '';
       return `<tr><td>${esc(labelType(e))}</td><td class="ref">${esc(e.reference_article)}</td>`
         + `<td class="num">${e.valeur_attendue ?? ''}</td><td class="num">${e.valeur_obtenue ?? ''}</td>`
@@ -798,6 +806,12 @@ export default function ExceptionsPage() {
           title="Filtrer sur un BE → prépare un message de correction par BL">
           <option value="all">Tous les BE</option>
           {beOptions.map(o => <option key={o.id} value={o.id}>{o.numero}</option>)}
+        </select>
+        <select value={sortBy} onChange={e => { setSortBy(e.target.value as 'recent' | 'be'); setPage(1); }}
+          className="h-9 rounded-lg border border-gray-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          title="Ordre d'affichage de la liste">
+          <option value="recent">Tri : plus récentes</option>
+          <option value="be">Tri : n° de BE</option>
         </select>
         <div className="relative">
           <input value={filterRef} onChange={e => { setFilterRef(e.target.value); setPage(1); }}
@@ -1006,8 +1020,17 @@ export default function ExceptionsPage() {
                           title="Vérifier la saisie dans Centralink" className="text-gray-400 hover:text-indigo-600">↗</a>
                       </div>
                     )}
-                    {!exc.be_id && exc.commande_id && cmdMap[exc.commande_id] && (
+                    {/* Bon CL jamais importé (pas de be_id) : montrer le VRAI n° de bon (texte),
+                        pas la commande — sinon un n° de commande apparaît en colonne BE (confus). */}
+                    {!exc.be_id && exc.numero_be_libre && (
                       <div className="flex items-center gap-1.5">
+                        <span className="font-mono text-gray-700" title="Bon connu de Centralink mais jamais importé dans syncflow (pas de papier)">{exc.numero_be_libre}</span>
+                        <a href={lienCentralinkBE(exc.numero_be_libre)} target="_blank" rel="noreferrer"
+                          title="Ouvrir ce bon dans Centralink (vue comptable)" className="text-gray-400 hover:text-indigo-600">↗</a>
+                      </div>
+                    )}
+                    {!exc.be_id && !exc.numero_be_libre && exc.commande_id && cmdMap[exc.commande_id] && (
+                      <div className="flex items-center gap-1.5" title="Anomalie au niveau commande (pas de bon associé)">
                         <Link href={`/commandes/${exc.commande_id}`} className="text-indigo-600 hover:underline">{cmdMap[exc.commande_id].numero_commande_interne}</Link>
                         <a href={lienCentralinkCmd(cmdMap[exc.commande_id].numero_commande_interne)} target="_blank" rel="noreferrer"
                           title="Ouvrir la commande dans Centralink (corriger le n° de BL)" className="text-gray-400 hover:text-indigo-600">↗</a>
