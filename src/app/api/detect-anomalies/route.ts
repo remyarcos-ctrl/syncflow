@@ -663,23 +663,31 @@ export async function POST(req: Request) {
     }
   }
   // ÉMISSION des écarts expliqués-par-le-total (ex-continue silencieux). Deux formes :
-  //  • BON ENTIER jamais saisi sous ce n° (0 saisie sur le bon, ≥ 3 réfs concernées, ex.
-  //    BE-26-06-0768 : 27 réfs, aucune saisie) → UNE anomalie de bon, destinataire log —
-  //    la log a probablement saisi le bon sous un autre n° (ou l'a oublié) ;
+  //  • ≥ 3 réfs du MÊME bon concernées → UNE anomalie de bon (pas N lignes : premier jet =
+  //    43 anomalies par réf, illisible — l'histoire est par BON : « ces réfs du bon sont
+  //    rangées ailleurs dans CL ») ; motif durci si le bon n'a AUCUNE saisie du tout ;
   //  • sinon, par réf → « à vérifier », faible (Livré non ventilé couvre = probable détail
   //    perdu par CL) ou moyenne (juste « reçue ailleurs » = mal numéroté OU oubli masqué).
+  const refsExoEmises = new Set<string>();   // dédup §3c-bis : pas de « compensé » en plus sur la même réf
   for (const [beId, items] of exoSilencieuses) {
     const numBe = items[0]?.numBe ?? (beNumById.get(beId) ?? '');
-    if (!bonsAvecSaisie.has(beId) && items.length >= 3) {
+    for (const x of items) refsExoEmises.add(x.k);
+    if (items.length >= 3) {
       if (seen.has(key('pointage', beId, '', 'réception non détaillée'))) continue;
-      const unites = items.reduce((s, x) => s + x.papier, 0);
+      const unites = items.reduce((s, x) => s + x.manque, 0);
+      const bonVide = !bonsAvecSaisie.has(beId);
+      const refsTxt = `${items.slice(0, 10).map((x) => `${x.k} (${x.manque.toFixed(0)})`).join(', ')}${items.length > 10 ? '…' : ''}`;
       nouvelles.push({
         origine: 'pointage', destinataire: 'log', type_exception: 'réception non détaillée',
         be_id: beId, reference_article: '',
-        motif: `⚠ Bon ${numBe} JAMAIS saisi sous ce n° dans Centralink (${items.length} réfs papier, ${unites.toFixed(0)} unités) — les réfs se retrouvent ailleurs dans CL (autres bons / Livré non ventilé) → la log a probablement saisi ce bon sous un AUTRE n° (ou oublié de le saisir). Réfs : ${items.slice(0, 10).map((x) => x.k).join(', ')}${items.length > 10 ? '…' : ''}.`,
+        motif: bonVide
+          ? `⚠ Bon ${numBe} JAMAIS saisi sous ce n° dans Centralink (${items.length} réfs papier, ${unites.toFixed(0)} unités) — les réfs se retrouvent ailleurs dans CL (autres bons / Livré non ventilé) → la log a probablement saisi ce bon sous un AUTRE n° (ou oublié de le saisir). Réfs : ${refsTxt}.`
+          : `⚠ ${items.length} réfs du bon ${numBe} (${unites.toFixed(0)} unités) sans saisie complète sous ce n° MAIS retrouvées ailleurs dans CL (autres bons / Livré non ventilé) → probable saisie sous un autre n° ou détail perdu par CL — l'histoire se vérifie par bon, pas réf par réf. Réfs : ${refsTxt}.`,
         valeur_attendue: unites, valeur_obtenue: 0, ecart: -unites,
         statut_exception: 'ouverte', niveau_priorite: 'moyenne',
-        suggestion_action_ia: `Chercher dans Centralink sous quel n° la log a saisi le bon ${numBe} (réceptions du même jour, mêmes réfs). Si trouvé → recoller le n° ; si introuvable → faire saisir le bon par la log (oubli entier).`,
+        suggestion_action_ia: bonVide
+          ? `Chercher dans Centralink sous quel n° la log a saisi le bon ${numBe} (réceptions du même jour, mêmes réfs). Si trouvé → recoller le n° ; si introuvable → faire saisir le bon par la log (oubli entier).`
+          : `Comparer le bon ${numBe} papier aux réceptions CL de la même période : les réfs listées sont probablement saisies sous un autre n° de bon. Si oui → rien à faire (mal numéroté) ; sinon → oubli(s) de saisie à faire corriger par la log.`,
       });
       continue;
     }
@@ -794,6 +802,9 @@ export async function POST(req: Request) {
       // (audit 10/07 : 11319 ②60③58, VES004 ②42③38, 491033 avoir 6 — invisibles avant).
       // Faible : la marchandise est expliquée, seul le rangement par bon diffère.
       const mb = manqueParBon(k).filter((b) => b.manque >= 1);
+      // Dédup : si la réf a déjà son anomalie « expliqué par le total » (par réf ou via
+      // l'anomalie de bon), pas de « compensé » en plus — même histoire, deux fois = bruit.
+      if (refsExoEmises.has(k)) continue;
       if (mb.length && !seen.has(key('pointage', info.beId, k, 'réception non détaillée'))) {
         const detailNet = `papier ${pap}, saisi ${saisi}${avoir > 0 ? `, avoir ${avoir}` : ''}${regule > 0 ? `, régule ${regule}` : ''}`;
         nouvelles.push({

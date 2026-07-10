@@ -118,14 +118,20 @@ const nbe = (s: string | null | undefined) => String(s ?? '').toUpperCase().repl
   // ── PÉRIMÈTRE 2 : bons importés inconnus de CL (0 saisie sous ce numéro) ──
   const sansSaisie = bes.filter(b => !bonsCL.has(nbe(b.numero_be)));
   console.log(`\n═══ PÉRIMÈTRE : bons importés SANS AUCUNE saisie CL sous ce n° : ${sansSaisie.length} ═══`);
+  let perim2Suspects = 0;
   for (const b of sansSaisie) {
     const lg = lignesByBe.get(b.id) ?? [];
-    const q = lg.reduce((s, l) => s + (Number(l.quantite_receptionnee) || 0), 0);
-    // couvert si : anomalie de BON ENTIER sur ce be_id, ou toutes les réfs (+qté) portées au Centre
+    const actives = lg.filter(l => !l.hors_systeme && (Number(l.quantite_receptionnee) || 0) > 0);
+    const q = actives.reduce((s, l) => s + (Number(l.quantite_receptionnee) || 0), 0);
+    // couvert si : bon 100% SAV (hors système → 0 saisie NORMAL), avoir/retour (qté ≤ 0),
+    // anomalie de BON ENTIER sur ce be_id, ou toutes les réfs actives portées au Centre.
     const bonEntier = excBonEntier.has(b.id);
-    const refsOk = lg.filter(l => (Number(l.quantite_receptionnee) || 0) > 0).every(l => (excByRef.get(aliasRef(l.reference_article)) ?? []).length > 0);
-    const etat = bonEntier ? '→ couvert (anomalie de bon entier)' : q <= 0 ? '→ avoir/retour (pas de saisie attendue)' : refsOk ? '→ réfs portées au Centre' : '→ ⚠ VÉRIFIER : réfs pas toutes au Centre';
-    console.log(`  ${b.numero_be} (${lg.length} lignes, ${q} unités) ${etat}`);
+    const refsOk = actives.every(l => (excByRef.get(aliasRef(l.reference_article)) ?? []).length > 0);
+    const etat = !actives.length ? '→ SAV/avoir (hors système, pas de saisie attendue)'
+      : bonEntier ? '→ couvert (anomalie de bon entier)'
+      : refsOk ? '→ réfs portées au Centre'
+      : (perim2Suspects++, '→ ⚠ VÉRIFIER : réfs pas toutes au Centre');
+    console.log(`  ${b.numero_be} (${lg.length} lignes, ${q} unités actives) ${etat}`);
   }
 
   // ── PÉRIMÈTRE 3 : doubles saisies strictement identiques (échantillon de contrôle) ──
