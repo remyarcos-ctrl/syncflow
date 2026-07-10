@@ -65,6 +65,9 @@ export interface ParsedBE {
   fournisseur: string | null;
   date_bl: string | null;
   lignes: ParsedLigneBE[];
+  // Contrôles d'import à FAIRE REMONTER (pas de correction silencieuse) : quantité corrigée
+  // par l'argent, lignes sans filet arithmétique… Affichés dans le résultat d'import.
+  avertissements?: string[];
 }
 
 export interface ParsedLigneFacture {
@@ -292,11 +295,20 @@ export function verifierQuantiteBE(qte: number, net: number, montantHt: number):
 
 export function processBERaw(raw: Record<string, unknown>): ParsedDocument {
   const be = raw as unknown as ParsedBE;
+  const avertissements: string[] = [];
+  let sansFilet = 0; // lignes sans Total HT ou prix → l'auto-vérif par l'argent n'a pas pu jouer
   const lignes = (be.lignes ?? [])
     .filter((l) => l.reference_article && !isPositionCode(l.reference_article) && !isEanBarcode(l.reference_article))
     .map((l) => {
       const net = prixNetLigneBE(l);
-      const qte = verifierQuantiteBE(Number(l.quantite_receptionnee) || 0, net, Number(l.montant_ht) || 0);
+      const qteLue = Number(l.quantite_receptionnee) || 0;
+      const qte = verifierQuantiteBE(qteLue, net, Number(l.montant_ht) || 0);
+      // On corrige (l'argent fait foi) mais on FAIT REMONTER : la correction doit se voir
+      // dans le résultat d'import, pas s'appliquer en douce (cf. 16559 lu 16, corrigé 12).
+      if (qte !== qteLue) {
+        avertissements.push(`${l.reference_article} : quantité lue ${qteLue} corrigée à ${qte} par l'argent (Total HT ${Number(l.montant_ht).toFixed(2)} ÷ prix net ${net.toFixed(2)}) → vérifier sur le PDF`);
+      }
+      if (!(net > 0) || !(Number(l.montant_ht) > 0)) sansFilet++;
       return {
         ...l,
         quantite_receptionnee: qte,
@@ -304,6 +316,9 @@ export function processBERaw(raw: Record<string, unknown>): ParsedDocument {
         designation: l.designation ?? null,
       };
     });
+  if (sansFilet > 0) {
+    avertissements.push(`${sansFilet} ligne${sansFilet > 1 ? 's' : ''} sans prix/Total HT lisible${sansFilet > 1 ? 's' : ''} → quantité non recoupée par l'argent, à vérifier d'un œil`);
+  }
 
   const aggregated = new Map<string, ParsedLigneBE>();
   for (const l of lignes) {
@@ -329,6 +344,7 @@ export function processBERaw(raw: Record<string, unknown>): ParsedDocument {
       fournisseur: be.fournisseur ?? null,
       date_bl: be.date_bl ?? null,
       lignes: finalLignes,
+      avertissements,
     },
   };
 }
@@ -512,9 +528,10 @@ function fusionnerDocs(listes: ParsedDocument[][]): ParsedDocument[] {
         const num = normalizeRef(d.data.numero_be) || String(d.data.numero_be ?? '');
         if (!num) continue;
         const cur = bes.get(num);
-        if (!cur) bes.set(num, { ...d.data, lignes: [...d.data.lignes] });
+        if (!cur) bes.set(num, { ...d.data, lignes: [...d.data.lignes], avertissements: [...(d.data.avertissements ?? [])] });
         else {
           cur.lignes.push(...d.data.lignes);
+          (cur.avertissements ??= []).push(...(d.data.avertissements ?? []));
           if (!cur.fournisseur && d.data.fournisseur) cur.fournisseur = d.data.fournisseur;
           if (!cur.date_bl && d.data.date_bl) cur.date_bl = d.data.date_bl;
         }

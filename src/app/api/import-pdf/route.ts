@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { parsePdfDocuments, normalizeRef } from '@/lib/document-parser';
+import { chargerCatalogue, controlerRefsCatalogue } from '@/lib/catalogue';
 
 export const maxDuration = 60;
 function adminSb() {
@@ -86,6 +87,14 @@ export async function POST(req: NextRequest) {
 
     console.log(`[import-pdf] ${fileName} → ${docs.length} document(s) détecté(s)`);
 
+    // Catalogue des réfs connues (commandes ∪ stock ∪ saisies) : chargé une fois s'il y a
+    // au moins un BE, pour signaler les réfs jamais vues (probable coquille de scan).
+    let catalogue: Set<string> | null = null;
+    if (docs.some((d) => d.type === 'be')) {
+      try { catalogue = await chargerCatalogue(sb); }
+      catch (e) { console.warn('[import-pdf] catalogue indisponible :', e instanceof Error ? e.message : e); }
+    }
+
     for (const doc of docs) {
       if (doc.type === 'inconnu') {
         result.erreurs.push(`${fileName} : ${doc.raison}`);
@@ -138,6 +147,20 @@ export async function POST(req: NextRequest) {
 
         result.bes_importes++;
         result.details.push(`✓ BE importé : ${doc.data.numero_be} (${doc.data.lignes.length} ligne${doc.data.lignes.length > 1 ? 's' : ''})`);
+
+        // FAIRE REMONTER les contrôles d'import (aucune correction silencieuse) :
+        // quantités corrigées par l'argent, lignes sans filet, réfs inconnues du catalogue.
+        for (const a of doc.data.avertissements ?? []) {
+          result.details.push(`⚠ BE ${doc.data.numero_be} : ${a}`);
+        }
+        if (catalogue) {
+          for (const a of controlerRefsCatalogue(
+            doc.data.lignes.map((l) => ({ reference_article: l.reference_article, quantite: l.quantite_receptionnee })),
+            catalogue,
+          )) {
+            result.details.push(`⚠ BE ${doc.data.numero_be} : ${a}`);
+          }
+        }
       }
 
       if (doc.type === 'facture') {

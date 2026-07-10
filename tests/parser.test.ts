@@ -76,5 +76,49 @@ test('conditionnement X500 : quantité NON multipliée (45 reste 45)', () => {
   assert.equal(ligne(b, 'P00001').quantite_receptionnee, 45);
 });
 
-console.log(`\n═══ ${n} tests, ${n - ko} OK, ${ko} KO ═══`);
-if (ko > 0) process.exit(1);
+console.log('══ Avertissements d\'import (faire remonter, pas corriger en silence) ══');
+type BeDocAv = { data: { lignes: ParsedLigneBE[]; avertissements?: string[] } };
+test('quantité corrigée par l\'argent → avertissement remonté (16559 : 16→12)', () => {
+  const b = be([{ reference_article: '16559', quantite_receptionnee: 16, prix_uht_brut: 99.99, remise_r3: 20, montant_ht: 959.88 }]) as BeDocAv;
+  const av = b.data.avertissements ?? [];
+  assert.ok(av.some((a) => a.includes('16559') && a.includes('16') && a.includes('12')), `attendu un avertissement 16→12, reçu : ${JSON.stringify(av)}`);
+});
+test('quantité confirmée par l\'argent → AUCUN avertissement', () => {
+  const b = be([{ reference_article: '16559', quantite_receptionnee: 12, prix_uht_brut: 99.99, remise_r3: 20, montant_ht: 959.88 }]) as BeDocAv;
+  assert.ok(!(b.data.avertissements ?? []).some((a) => a.includes('corrigée')));
+});
+test('ligne sans prix/Total HT → avertissement « sans filet »', () => {
+  const b = be([{ reference_article: 'CFT36', quantite_receptionnee: 10 }]) as BeDocAv;
+  assert.ok((b.data.avertissements ?? []).some((a) => a.includes('sans prix')), JSON.stringify(b.data.avertissements));
+});
+
+console.log('══ Croisement catalogue (réfs inconnues → coquille de scan probable) ══');
+void (async () => {
+  const { distance1, controlerRefsCatalogue } = await import('../src/lib/catalogue');
+  test('distance1 : RGA4412 vs RGA4712 (1 substitution) → vrai', () =>
+    assert.ok(distance1('RGA4412', 'RGA4712')));
+  test('distance1 : 16553 vs 16533 (1 substitution) → vrai', () =>
+    assert.ok(distance1('16553', '16533')));
+  test('distance1 : identiques après normalisation (RGAO012 vs RGA0012) → faux (alias, pas coquille)', () =>
+    assert.ok(!distance1('RGAO012', 'RGA0012')));
+  test('distance1 : 2 caractères d\'écart → faux', () =>
+    assert.ok(!distance1('CFT36', 'CFT58')));
+  const catalogue = new Set(['CFT36', '16559', 'RGA4412']);
+  test('réf connue → aucun avertissement', () =>
+    assert.equal(controlerRefsCatalogue([{ reference_article: 'CFT36', quantite: 10 }], catalogue).length, 0));
+  test('réf inconnue à 1 caractère d\'une connue → signale la réf proche', () => {
+    const av = controlerRefsCatalogue([{ reference_article: 'CFT56', quantite: 10 }], catalogue);
+    assert.equal(av.length, 1);
+    assert.ok(av[0].includes('CFT36'), av[0]);
+  });
+  test('réf inconnue sans voisine → signale « jamais commandée »', () => {
+    const av = controlerRefsCatalogue([{ reference_article: 'ZZTOP99', quantite: 1 }], catalogue);
+    assert.equal(av.length, 1);
+    assert.ok(av[0].includes('jamais commandée'), av[0]);
+  });
+  test('catalogue vide (indisponible) → aucun faux positif', () =>
+    assert.equal(controlerRefsCatalogue([{ reference_article: 'CFT36', quantite: 1 }], new Set()).length, 0));
+
+  console.log(`\n═══ ${n} tests, ${n - ko} OK, ${ko} KO ═══`);
+  if (ko > 0) process.exit(1);
+})();

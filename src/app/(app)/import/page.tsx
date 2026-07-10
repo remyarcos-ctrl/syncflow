@@ -297,7 +297,10 @@ export default function ImportPage() {
           </p>
         </div>
         <div className="bg-gray-50 rounded-xl p-4 max-w-sm w-full text-xs text-gray-600 space-y-1">
-          {importResult.details.map((d, i) => <p key={i}>{d}</p>)}
+          {/* les ⚠ (contrôles d'import : qté corrigée par l'argent, réf inconnue du catalogue…) ressortent en ambre */}
+          {importResult.details.map((d, i) => (
+            <p key={i} className={d.startsWith('⚠') ? 'text-amber-700 font-medium' : undefined}>{d}</p>
+          ))}
         </div>
         <button
           onClick={() => router.push('/be-receptions')}

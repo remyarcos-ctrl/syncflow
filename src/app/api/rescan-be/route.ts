@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { parsePdfDocuments, normalizeRef } from '@/lib/document-parser';
+import { chargerCatalogue, controlerRefsCatalogue } from '@/lib/catalogue';
 
 export const maxDuration = 60;
 function adminSb() {
@@ -66,10 +67,21 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // Contrôles d'import à FAIRE REMONTER : corrections par l'argent, lignes sans filet,
+  // réfs inconnues du catalogue (probable coquille de scan).
+  const avertissements: string[] = [...(beDoc.data.avertissements ?? [])];
+  try {
+    const catalogue = await chargerCatalogue(sb);
+    avertissements.push(...controlerRefsCatalogue(
+      beDoc.data.lignes.map((l) => ({ reference_article: l.reference_article, quantite: l.quantite_receptionnee })),
+      catalogue,
+    ));
+  } catch (e) { console.warn('[rescan-be] catalogue indisponible :', e instanceof Error ? e.message : e); }
+
   await sb.from('journal_activite').insert({
     type_action: 'rescan_be', entite_type: 'be_reception', entite_id: beId,
     details_action: JSON.stringify({ numero_be: be.numero_be, corrigees: changes.length, moteur }),
   });
 
-  return NextResponse.json({ ok: true, corrigees: changes.length, changes, nonTrouvees, moteur, coutEUR });
+  return NextResponse.json({ ok: true, corrigees: changes.length, changes, nonTrouvees, avertissements, moteur, coutEUR });
 }
