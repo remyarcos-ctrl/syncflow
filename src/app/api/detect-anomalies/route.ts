@@ -441,7 +441,7 @@ export async function POST(req: Request) {
     const rec = pick(st.mvts_reception);
     if (rec.length) {
       const parts = rec.map((mv) => `+${Number(mv.delta).toFixed(0)} le ${mv.date}`).join(', ');
-      return ` 🧾 PISTE RÉCEPTION SANS N° DE BON : la fiche ${k} porte un mouvement « Réception » (${parts}) dans le MÊME MOIS que le bon → probablement reçu et compté SANS n° de bon rattaché (invisible au pointage par bon — cas REM005). ⚠ Indice, PAS une preuve : vérifier la fiche (mouvements) ; si le compte colle → rien à réclamer.`;
+      return ` 🧾 PISTE RÉCEPTION : la fiche ${k} porte un mouvement « Réception » (${parts}) dans le MÊME MOIS que le bon. ⚠ ATTENTION, deux lectures possibles : soit reçu-compté SANS n° de bon rattaché (rien à réclamer), soit la SAISIE TARDIVE d'un bon ANTÉRIEUR (une date de mouvement = date de saisie, pas date du bon — cas REM005 : le +2 de mai était le bon d'avril). Trancher via delivery_note?q=<n° du bon> (qui montre ce que CL a rattaché à QUEL bon), pas au mois seul.`;
     }
     const bc = st.has_barcode ? pick(st.mvts_barcode) : [];
     if (bc.length) {
