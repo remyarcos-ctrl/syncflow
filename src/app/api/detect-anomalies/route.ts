@@ -663,55 +663,9 @@ export async function POST(req: Request) {
       }
     }
   }
-  // ÉMISSION des écarts expliqués-par-le-total (ex-continue silencieux). Deux formes :
-  //  • ≥ 3 réfs du MÊME bon concernées → UNE anomalie de bon (pas N lignes : premier jet =
-  //    43 anomalies par réf, illisible — l'histoire est par BON : « ces réfs du bon sont
-  //    rangées ailleurs dans CL ») ; motif durci si le bon n'a AUCUNE saisie du tout ;
-  //  • sinon, par réf → « à vérifier », faible (Livré non ventilé couvre = probable détail
-  //    perdu par CL) ou moyenne (juste « reçue ailleurs » = mal numéroté OU oubli masqué).
-  const refsExoEmises = new Set<string>();   // dédup §3c-bis : pas de « compensé » en plus sur la même réf
-  for (const [beId, items] of exoSilencieuses) {
-    const numBe = items[0]?.numBe ?? (beNumById.get(beId) ?? '');
-    for (const x of items) refsExoEmises.add(x.k);
-    if (items.length >= 3) {
-      // La réf de l'anomalie de bon = la LISTE des réfs (triée, stable) : la colonne
-      // Référence n'est pas vide et la recherche par réf retrouve l'anomalie du bon.
-      const refsListe = items.map((x) => x.k).sort().join(', ');
-      if (seen.has(key('pointage', beId, refsListe, 'réception non détaillée'))) continue;
-      const unites = items.reduce((s, x) => s + x.manque, 0);
-      const bonVide = !bonsAvecSaisie.has(beId);
-      const refsTxt = `${items.slice(0, 10).map((x) => `${x.k} (${x.manque.toFixed(0)})`).join(', ')}${items.length > 10 ? '…' : ''}`;
-      nouvelles.push({
-        origine: 'pointage', destinataire: 'log', type_exception: 'réception non détaillée',
-        be_id: beId, reference_article: refsListe,
-        motif: bonVide
-          ? `⚠ Bon ${numBe} JAMAIS saisi sous ce n° dans Centralink (${items.length} réfs papier, ${unites.toFixed(0)} unités) — les réfs se retrouvent ailleurs dans CL (autres bons / Livré non ventilé) → la log a probablement saisi ce bon sous un AUTRE n° (ou oublié de le saisir). Réfs : ${refsTxt}.`
-          : `⚠ ${items.length} réfs du bon ${numBe} (${unites.toFixed(0)} unités) sans saisie complète sous ce n° MAIS retrouvées ailleurs dans CL (autres bons / Livré non ventilé) → probable saisie sous un autre n° ou détail perdu par CL — l'histoire se vérifie par bon, pas réf par réf. Réfs : ${refsTxt}.`,
-        valeur_attendue: unites, valeur_obtenue: 0, ecart: -unites,
-        statut_exception: 'ouverte', niveau_priorite: 'moyenne',
-        suggestion_action_ia: bonVide
-          ? `Chercher dans Centralink sous quel n° la log a saisi le bon ${numBe} (réceptions du même jour, mêmes réfs). Si trouvé → recoller le n° ; si introuvable → faire saisir le bon par la log (oubli entier).`
-          : `Comparer le bon ${numBe} papier aux réceptions CL de la même période : les réfs listées sont probablement saisies sous un autre n° de bon. Si oui → rien à faire (mal numéroté) ; sinon → oubli(s) de saisie à faire corriger par la log.`,
-      });
-      continue;
-    }
-    for (const x of items) {
-      if (seen.has(key('pointage', beId, x.k, 'réception non détaillée'))) continue;
-      const estNV = x.via === 'non ventilé';
-      nouvelles.push({
-        origine: 'pointage', destinataire: 'à vérifier', type_exception: 'réception non détaillée',
-        be_id: beId, reference_article: x.k,
-        motif: estNV
-          ? `${x.manque.toFixed(0)} ${x.k} manquants sur ${x.numBe} (papier ${x.papier}, saisi ${x.saisie}) MAIS couverts par du Livré NON VENTILÉ par bon (${x.nd.toFixed(0)} comptés au niveau commande sans n° de bon) → probablement reçus et comptés, juste pas rattachés à ce bon. À confirmer d'un œil.${bcHint(x.k, [beYYMM(x.numBe)], x.manque)}`
-          : `⚠ RIEN saisi sous ${x.numBe} pour ${x.k} (papier ${x.papier}) mais la réf est reçue AILLEURS dans Centralink → soit saisie sous un autre n° de bon (mal numéroté → rien à faire), soit oubli sur CE bon masqué par le total. Le total ne prouve jamais CE bon → à vérifier.${bcHint(x.k, [beYYMM(x.numBe)], x.manque)}`,
-        valeur_attendue: x.papier, valeur_obtenue: x.saisie, ecart: -x.manque,
-        statut_exception: 'ouverte', niveau_priorite: estNV ? 'faible' : 'moyenne',
-        suggestion_action_ia: estNV
-          ? `Vérifier la vue comptable (delivery_note) de la commande pour ${x.k} : les ${x.manque.toFixed(0)} non rattachés à ${x.numBe} y figurent probablement sans n° de bon. Si oui → rien à faire (détail perdu par order/view) ; sinon → contrôler physiquement.`
-          : `Chercher ${x.k} dans les autres bons de Centralink (même période que ${x.numBe}) : si saisie sous un autre n° → rien à faire ; sinon → oubli de saisie sur ce bon (la log saisit) ou manquant à contrôler physiquement.`,
-      });
-    }
-  }
+  // (L'ÉMISSION des écarts expliqués-par-le-total collectés ci-dessus se fait APRÈS §3c-bis :
+  //  une réf déjà jugée au niveau réf — réception incomplète, non détaillée, compensé… — ne
+  //  doit pas re-figurer dans l'anomalie de bon. UNE réf = UNE histoire, cf. doublon CFT36.)
 
   // ── 3c-bis) SURPLUS COLOMBI EXACT, PAR RÉFÉRENCE ──────────────────────────────
   // Surplus = ce que Colombi a livré sur NOS bons scannés (papier) mais qui n'est ni saisi
@@ -806,9 +760,6 @@ export async function POST(req: Request) {
       // (audit 10/07 : 11319 ②60③58, VES004 ②42③38, 491033 avoir 6 — invisibles avant).
       // Faible : la marchandise est expliquée, seul le rangement par bon diffère.
       const mb = manqueParBon(k).filter((b) => b.manque >= 1);
-      // Dédup : si la réf a déjà son anomalie « expliqué par le total » (par réf ou via
-      // l'anomalie de bon), pas de « compensé » en plus — même histoire, deux fois = bruit.
-      if (refsExoEmises.has(k)) continue;
       if (mb.length && !seen.has(key('pointage', info.beId, k, 'réception non détaillée'))) {
         const detailNet = `papier ${pap}, saisi ${saisi}${avoir > 0 ? `, avoir ${avoir}` : ''}${regule > 0 ? `, régule ${regule}` : ''}`;
         nouvelles.push({
@@ -917,6 +868,64 @@ export async function POST(req: Request) {
       statut_exception: 'ouverte', niveau_priorite: 'moyenne',
       suggestion_action_ia: `Surplus Colombi à régulariser : ${k} → ${surplus.toFixed(0)} en trop (${detail}), commandes déjà soldées. Action : commande de régule (avec le n° de BL) pour les encaisser, ou réclamer/retourner à Colombi.`,
     });
+  }
+
+  // ÉMISSION des écarts expliqués-par-le-total (collectés en §3c, ex-continue silencieux).
+  // UNE RÉF = UNE HISTOIRE : une réf déjà portée au niveau réf (réception incomplète §3c-bis,
+  // non détaillée, compensé, ou une anomalie existante/travaillée) est EXCLUE — sinon le même
+  // manque sort deux fois (doublon CFT36 : bon-agg + réception incomplète reliquat). Puis :
+  //  • ≥ 3 réfs restantes du MÊME bon → UNE anomalie de bon (l'histoire est par bon) ;
+  //  • sinon par réf → faible (Livré non ventilé couvre) ou moyenne (juste « reçue ailleurs »).
+  const refsDejaPortees = new Set<string>();
+  for (const e of (exR.data ?? [])) {
+    for (const t of String(e.reference_article ?? '').split(', ')) { const a = aliasRef(t); if (a) refsDejaPortees.add(a); }
+  }
+  for (const n of nouvelles) {
+    if (n.origine !== 'pointage' || !n.reference_article || n.reference_article.includes(', ')) continue;
+    const a = aliasRef(n.reference_article); if (a) refsDejaPortees.add(a);
+  }
+  for (const [beId, items0] of exoSilencieuses) {
+    const items = items0.filter((x) => !refsDejaPortees.has(x.k));
+    if (!items.length) continue;
+    const numBe = items[0]?.numBe ?? (beNumById.get(beId) ?? '');
+    if (items.length >= 3) {
+      // La réf de l'anomalie de bon = la LISTE des réfs (triée, stable) : la colonne
+      // Référence n'est pas vide et la recherche par réf retrouve l'anomalie du bon.
+      const refsListe = items.map((x) => x.k).sort().join(', ');
+      if (seen.has(key('pointage', beId, refsListe, 'réception non détaillée'))) continue;
+      const unites = items.reduce((s, x) => s + x.manque, 0);
+      const bonVide = !bonsAvecSaisie.has(beId);
+      const refsTxt = `${items.slice(0, 10).map((x) => `${x.k} (${x.manque.toFixed(0)})`).join(', ')}${items.length > 10 ? '…' : ''}`;
+      nouvelles.push({
+        origine: 'pointage', destinataire: 'log', type_exception: 'réception non détaillée',
+        be_id: beId, reference_article: refsListe,
+        motif: bonVide
+          ? `⚠ Bon ${numBe} JAMAIS saisi sous ce n° dans Centralink (${items.length} réfs papier, ${unites.toFixed(0)} unités) — les réfs se retrouvent ailleurs dans CL (autres bons / Livré non ventilé) → la log a probablement saisi ce bon sous un AUTRE n° (ou oublié de le saisir). Réfs : ${refsTxt}.`
+          : `⚠ ${items.length} réfs du bon ${numBe} (${unites.toFixed(0)} unités) sans saisie complète sous ce n° MAIS retrouvées ailleurs dans CL (autres bons / Livré non ventilé) → probable saisie sous un autre n° ou détail perdu par CL — l'histoire se vérifie par bon, pas réf par réf. Réfs : ${refsTxt}.`,
+        valeur_attendue: unites, valeur_obtenue: 0, ecart: -unites,
+        statut_exception: 'ouverte', niveau_priorite: 'moyenne',
+        suggestion_action_ia: bonVide
+          ? `Chercher dans Centralink sous quel n° la log a saisi le bon ${numBe} (réceptions du même jour, mêmes réfs). Si trouvé → recoller le n° ; si introuvable → faire saisir le bon par la log (oubli entier).`
+          : `Comparer le bon ${numBe} papier aux réceptions CL de la même période : les réfs listées sont probablement saisies sous un autre n° de bon. Si oui → rien à faire (mal numéroté) ; sinon → oubli(s) de saisie à faire corriger par la log.`,
+      });
+      continue;
+    }
+    for (const x of items) {
+      if (seen.has(key('pointage', beId, x.k, 'réception non détaillée'))) continue;
+      const estNV = x.via === 'non ventilé';
+      nouvelles.push({
+        origine: 'pointage', destinataire: 'à vérifier', type_exception: 'réception non détaillée',
+        be_id: beId, reference_article: x.k,
+        motif: estNV
+          ? `${x.manque.toFixed(0)} ${x.k} manquants sur ${x.numBe} (papier ${x.papier}, saisi ${x.saisie}) MAIS couverts par du Livré NON VENTILÉ par bon (${x.nd.toFixed(0)} comptés au niveau commande sans n° de bon) → probablement reçus et comptés, juste pas rattachés à ce bon. À confirmer d'un œil.${bcHint(x.k, [beYYMM(x.numBe)], x.manque)}`
+          : `⚠ RIEN saisi sous ${x.numBe} pour ${x.k} (papier ${x.papier}) mais la réf est reçue AILLEURS dans Centralink → soit saisie sous un autre n° de bon (mal numéroté → rien à faire), soit oubli sur CE bon masqué par le total. Le total ne prouve jamais CE bon → à vérifier.${bcHint(x.k, [beYYMM(x.numBe)], x.manque)}`,
+        valeur_attendue: x.papier, valeur_obtenue: x.saisie, ecart: -x.manque,
+        statut_exception: 'ouverte', niveau_priorite: estNV ? 'faible' : 'moyenne',
+        suggestion_action_ia: estNV
+          ? `Vérifier la vue comptable (delivery_note) de la commande pour ${x.k} : les ${x.manque.toFixed(0)} non rattachés à ${x.numBe} y figurent probablement sans n° de bon. Si oui → rien à faire (détail perdu par order/view) ; sinon → contrôler physiquement.`
+          : `Chercher ${x.k} dans les autres bons de Centralink (même période que ${x.numBe}) : si saisie sous un autre n° → rien à faire ; sinon → oubli de saisie sur ce bon (la log saisit) ou manquant à contrôler physiquement.`,
+      });
+    }
   }
 
   // Lignes marquées SAV au papier (hors_systeme) + la commande sous laquelle CL les a saisies.
