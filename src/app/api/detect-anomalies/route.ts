@@ -674,13 +674,16 @@ export async function POST(req: Request) {
     const numBe = items[0]?.numBe ?? (beNumById.get(beId) ?? '');
     for (const x of items) refsExoEmises.add(x.k);
     if (items.length >= 3) {
-      if (seen.has(key('pointage', beId, '', 'réception non détaillée'))) continue;
+      // La réf de l'anomalie de bon = la LISTE des réfs (triée, stable) : la colonne
+      // Référence n'est pas vide et la recherche par réf retrouve l'anomalie du bon.
+      const refsListe = items.map((x) => x.k).sort().join(', ');
+      if (seen.has(key('pointage', beId, refsListe, 'réception non détaillée'))) continue;
       const unites = items.reduce((s, x) => s + x.manque, 0);
       const bonVide = !bonsAvecSaisie.has(beId);
       const refsTxt = `${items.slice(0, 10).map((x) => `${x.k} (${x.manque.toFixed(0)})`).join(', ')}${items.length > 10 ? '…' : ''}`;
       nouvelles.push({
         origine: 'pointage', destinataire: 'log', type_exception: 'réception non détaillée',
-        be_id: beId, reference_article: '',
+        be_id: beId, reference_article: refsListe,
         motif: bonVide
           ? `⚠ Bon ${numBe} JAMAIS saisi sous ce n° dans Centralink (${items.length} réfs papier, ${unites.toFixed(0)} unités) — les réfs se retrouvent ailleurs dans CL (autres bons / Livré non ventilé) → la log a probablement saisi ce bon sous un AUTRE n° (ou oublié de le saisir). Réfs : ${refsTxt}.`
           : `⚠ ${items.length} réfs du bon ${numBe} (${unites.toFixed(0)} unités) sans saisie complète sous ce n° MAIS retrouvées ailleurs dans CL (autres bons / Livré non ventilé) → probable saisie sous un autre n° ou détail perdu par CL — l'histoire se vérifie par bon, pas réf par réf. Réfs : ${refsTxt}.`,
@@ -1241,6 +1244,34 @@ export async function POST(req: Request) {
     // celui du bon importé (be_id), sinon celui déjà posé (bon CL jamais importé, §3g).
     for (const n of nouvelles) {
       if (!n.numero_be_libre && n.be_id) n.numero_be_libre = beNumById.get(n.be_id) ?? null;
+    }
+    // GRAPHIE RÉELLE des réfs : le moteur travaille sur des clés normalisées (O→0 : PO0022
+    // devient P00022) — imbattable pour matcher, mais INTROUVABLE en recherche Centralink.
+    // À l'insertion, on remet la graphie telle qu'elle s'écrit (papier en priorité — côté
+    // alias Colombi — sinon saisie CL), dans la réf ET les textes. Garde-fou : uniquement si
+    // même réf à normalisation près (O↔0) — on ne remplace JAMAIS un code par son alias
+    // (LTL014 reste LTL014, pas LTLPK03). Idempotence intacte : key() normalise déjà.
+    const rawByKey = new Map<string, string>();
+    for (const s of saisies) {
+      const k2 = aliasRef(s.reference_article); const raw = String(s.reference_article ?? '').trim();
+      if (k2 && raw && !rawByKey.has(k2)) rawByKey.set(k2, raw);
+    }
+    for (const l of lignesBe) {
+      const k2 = aliasRef(l.reference_article); const raw = String(l.reference_article ?? '').trim();
+      if (k2 && raw) rawByKey.set(k2, raw);   // le papier écrase (graphie de référence)
+    }
+    for (const n of nouvelles) {
+      if (!n.reference_article) continue;
+      // anomalie de BON : la réf est une LISTE « A, B, C » → graphie réelle réf par réf
+      for (const k2 of n.reference_article.split(', ')) {
+        if (!k2) continue;
+        const raw = rawByKey.get(aliasRef(k2));
+        if (raw && raw !== k2 && normalizeRef(raw) === normalizeRef(k2)) {
+          n.motif = n.motif.split(k2).join(raw);
+          if (n.suggestion_action_ia) n.suggestion_action_ia = n.suggestion_action_ia.split(k2).join(raw);
+          n.reference_article = n.reference_article.split(k2).join(raw);
+        }
+      }
     }
     const { error, count } = await sb.from('exceptions').insert(nouvelles, { count: 'exact' });
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });

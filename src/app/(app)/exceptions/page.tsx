@@ -970,7 +970,18 @@ export default function ExceptionsPage() {
                     <span className="text-xs text-gray-600">{exc.origine ?? '—'}</span>
                   </td>
                   <td className="px-4 py-3 text-xs text-gray-700 max-w-[360px]">
-                    {exc.reference_article && <div className="font-mono font-bold text-sm text-gray-900 mb-0.5">{exc.reference_article}</div>}
+                    {/* Anomalie de BON : la réf est une liste « A, B, C » → affichage compact
+                        (1re réf + badge « +N »), la liste complète est dans le motif + l'infobulle. */}
+                    {exc.reference_article && (exc.reference_article.includes(', ') ? (
+                      <div className="flex items-center gap-1.5 mb-0.5" title={exc.reference_article}>
+                        <span className="font-mono font-bold text-sm text-gray-900">{exc.reference_article.split(', ')[0]}</span>
+                        <span className="text-[11px] px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 font-medium whitespace-nowrap">
+                          +{exc.reference_article.split(', ').length - 1} réfs
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="font-mono font-bold text-sm text-gray-900 mb-0.5">{exc.reference_article}</div>
+                    ))}
                     {(exc.valeur_attendue != null || exc.valeur_obtenue != null) && (
                       <div className="mb-1 flex flex-wrap items-center gap-1">
                         {exc.valeur_attendue != null && valLabels(exc).att && (
