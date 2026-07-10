@@ -7,6 +7,7 @@ import GlobalSearch from '@/components/shared/GlobalSearch';
 import ChatAssistant from '@/components/shared/ChatAssistant';
 import TeddyWatcher from '@/components/shared/TeddyWatcher';
 import NotificationBell from '@/components/shared/NotificationBell';
+import SyncCLButton from '@/components/shared/SyncCLButton';
 import { DisplayCurrencyProvider } from '@/contexts/DisplayCurrencyContext';
 import { useQueryClient } from '@tanstack/react-query';
 
@@ -56,7 +57,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             <Menu className="w-5 h-5 text-gray-600" />
           </button>
           <GlobalSearch />
-          <div className="ml-auto">
+          <div className="ml-auto flex items-center gap-2">
+            <SyncCLButton />
             <NotificationBell />
           </div>
         </header>
