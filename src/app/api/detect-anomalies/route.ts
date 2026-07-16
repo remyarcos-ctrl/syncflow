@@ -81,7 +81,7 @@ export async function POST(req: Request) {
     selectAll(() => sb.from('lignes_facture').select('id, facture_id, ligne_no, reference_article, designation, quantite_facturee, pu_facture, montant_ht, numero_be_detecte')),
     selectAll(() => sb.from('factures').select('id')),
     selectAll(() => sb.from('commandes').select('id, numero_commande_interne, bls_centralink')),
-    selectAll(() => sb.from('exceptions').select('be_id, facture_id, commande_id, reference_article, type_exception, origine')
+    selectAll(() => sb.from('exceptions').select('be_id, facture_id, commande_id, reference_article, type_exception, origine, statut_exception')
       .in('origine', ['réception', 'pointage', 'facturation'])),
     selectAll(() => sb.from('refs_sav').select('reference_article')),
     selectAll(() => sb.from('reception_resolution').select('be_id, reference_article, classement')),
@@ -215,28 +215,10 @@ export async function POST(req: Request) {
   //     la comparaison par n° de BE est structurellement bruitée. Il reste
   //     consultable dans l'écran « Rappro. pointage ».) ──────────────────────────
 
-  // ── 3) FACTURATION → Colombi ────────────────────────────────────────────────
-  const factControles = controlerLignesFacture(
-    lignesFact, lignesCmd as LigneCommandeInput[], commandes, saisies as SaisieInput[],
-  );
-  const TYPE_F: Record<string, string> = { sur_facturation: 'surfacturation quantité', ecart_prix: 'écart prix' };
-  for (const c of factControles) {
-    if (c.verdict !== 'sur_facturation' && c.verdict !== 'ecart_prix') continue;
-    const type = TYPE_F[c.verdict];
-    const ref = c.lf.reference_article ?? '';
-    if (seen.has(key('facturation', c.lf.facture_id, ref, type))) continue;
-    nouvelles.push({
-      origine: 'facturation', destinataire: 'Colombi', type_exception: type, facture_id: c.lf.facture_id, reference_article: ref,
-      motif: `${ref} : ${c.problemes.join(' · ')}`,
-      valeur_attendue: c.verdict === 'ecart_prix' ? c.puCommande : c.qteRecue,
-      valeur_obtenue: c.verdict === 'ecart_prix' ? c.lf.pu_facture : c.lf.quantite_facturee,
-      ecart: c.verdict === 'ecart_prix' ? c.ecartPrixPct : c.ecartQteRecu,
-      statut_exception: 'ouverte', niveau_priorite: c.verdict === 'sur_facturation' ? 'haute' : 'moyenne',
-      suggestion_action_ia: c.verdict === 'ecart_prix'
-        ? `Réclamation Colombi : ${ref} facturé ${c.lf.pu_facture} € au lieu de ${c.puCommande} € commandé (écart ${c.ecartPrixPct}%) → demander avoir / facture rectificative au prix commande.`
-        : `Réclamation Colombi : ${ref} facturé ${c.lf.quantite_facturee} pour ${c.qteRecue} reçu (écart ${c.ecartQteRecu}) → demander avoir sur le surplus facturé.`,
-    });
-  }
+  // ── 3) FACTURATION → déplacé APRÈS les sections pointage (voir plus bas) ─────
+  // Le contrôle facture a besoin des anomalies de pointage FRAÎCHES de ce run
+  // (refsRecuConteste : un reçu gonflé par une double saisie rendrait « conforme »
+  // une facture qui paie du non-livré, cf 17655).
 
   // ── 3b) DOUBLE SAISIE (reçu = multiple exact du commandé) → log ──────────────
   const cmdNum = new Map((cmdR.data ?? []).map((c) => [c.id, c.numero_commande_interne]));
@@ -1253,6 +1235,64 @@ export async function POST(req: Request) {
   }
   if (aRetirer.size) {
     for (let i = nouvelles.length - 1; i >= 0; i--) if (aRetirer.has(nouvelles[i])) nouvelles.splice(i, 1);
+  }
+
+  // ── 3) FACTURATION ④ → Colombi ────────────────────────────────────────────────
+  // Placé APRÈS tout le pointage : le contrôle facture s'appuie sur les anomalies de
+  // pointage OUVERTES (existantes + fraîches de ce run) pour savoir quand le reçu ③
+  // est CONTESTÉ — un reçu gonflé par une double saisie non apurée rendrait « conforme »
+  // une facture qui paie du non-livré (17655 : papier 10, Livré 30 → facture de 30 OK ?!).
+  const TYPES_CONTESTE = new Set(['sur-saisie log', 'réception non détaillée']);
+  const refsRecuConteste = new Set<string>();
+  for (const e of (exR.data ?? [])) {
+    if (!['ouverte', 'en cours'].includes(String(e.statut_exception)) || !TYPES_CONTESTE.has(String(e.type_exception))) continue;
+    for (const t of String(e.reference_article ?? '').split(', ')) { const a = aliasRef(t); if (a) refsRecuConteste.add(a); }
+  }
+  for (const n of nouvelles) {
+    if (!TYPES_CONTESTE.has(n.type_exception)) continue;
+    for (const t of String(n.reference_article ?? '').split(', ')) { const a = aliasRef(t); if (a) refsRecuConteste.add(a); }
+  }
+  const factControles = controlerLignesFacture(
+    lignesFact, lignesCmd as LigneCommandeInput[], commandes, saisies as SaisieInput[],
+    { refsRecuConteste },
+  );
+  // n° de bon lisible depuis numero_be_detecte (stocké normalisé BE26031735) → BE-26-03-1735
+  const beLibre = (n: string | null | undefined): string | null => {
+    const m = String(n ?? '').match(/^BE(\d{2})(\d{2})(\d{3,5})$/i);
+    return m ? `BE-${m[1]}-${m[2]}-${m[3]}` : (n || null);
+  };
+  const TYPE_F: Record<string, string> = { sur_facturation: 'surfacturation quantité', ecart_prix: 'écart prix' };
+  for (const c of factControles) {
+    const ref = c.lf.reference_article ?? '';
+    // Facture conforme au reçu MAIS reçu contesté par le pointage → à apurer AVANT paiement
+    // (le « conforme » s'appuie peut-être sur un reçu gonflé). Jamais silencieux.
+    if (c.verdict === 'conforme' && c.recuConteste) {
+      if (seen.has(key('facturation', c.lf.facture_id, ref, 'quantité incohérente'))) continue;
+      nouvelles.push({
+        origine: 'facturation', destinataire: 'à vérifier', type_exception: 'quantité incohérente',
+        facture_id: c.lf.facture_id, reference_article: ref, numero_be_libre: beLibre(c.lf.numero_be_detecte),
+        motif: `⚠ ${ref} : la facture (${c.lf.quantite_facturee}) colle au reçu CL (${c.qteRecue ?? '?'}) MAIS ce reçu est CONTESTÉ par une anomalie de pointage ouverte (probable saisie en double / détail non rattaché) → le « conforme » ne vaut rien tant que le pointage n'est pas apuré. Risque : payer du non-livré.`,
+        valeur_attendue: c.qteRecue, valeur_obtenue: c.lf.quantite_facturee, ecart: 0,
+        statut_exception: 'ouverte', niveau_priorite: 'moyenne',
+        suggestion_action_ia: `Apurer d'abord l'anomalie de pointage sur ${ref} (Centre → filtre réf), puis re-vérifier cette ligne de facture : si le reçu corrigé devient < facturé → demander un avoir Colombi ; sinon → payer.`,
+      });
+      continue;
+    }
+    if (c.verdict !== 'sur_facturation' && c.verdict !== 'ecart_prix') continue;
+    const type = TYPE_F[c.verdict];
+    if (seen.has(key('facturation', c.lf.facture_id, ref, type))) continue;
+    nouvelles.push({
+      origine: 'facturation', destinataire: 'Colombi', type_exception: type,
+      facture_id: c.lf.facture_id, reference_article: ref, numero_be_libre: beLibre(c.lf.numero_be_detecte),
+      motif: `${ref} : ${c.problemes.join(' · ')}${c.commandesRattachees.length ? ` (commande ${c.commandesRattachees.join(', ')})` : ''}`,
+      valeur_attendue: c.verdict === 'ecart_prix' ? c.puCommande : c.qteRecue,
+      valeur_obtenue: c.verdict === 'ecart_prix' ? c.lf.pu_facture : c.lf.quantite_facturee,
+      ecart: c.verdict === 'ecart_prix' ? c.ecartPrixPct : c.ecartQteRecu,
+      statut_exception: 'ouverte', niveau_priorite: c.verdict === 'sur_facturation' ? 'haute' : 'moyenne',
+      suggestion_action_ia: c.verdict === 'ecart_prix'
+        ? `Réclamation Colombi : ${ref} facturé ${c.lf.pu_facture} € au lieu de ${c.puCommande} € commandé (écart ${c.ecartPrixPct?.toFixed(1)}%) → demander avoir / facture rectificative au prix commande.${c.recuConteste ? ' ⚠ Reçu contesté par le pointage — apurer aussi.' : ''}`
+        : `Réclamation Colombi : ${ref} facturé ${c.lf.quantite_facturee} pour ${c.qteRecue} reçu (écart ${c.ecartQteRecu?.toFixed(0)}) → demander avoir sur le surplus facturé. Vérifier d'abord le pointage de la réf (le reçu CL doit être juste avant de réclamer).`,
+    });
   }
 
   let inserted = 0;
