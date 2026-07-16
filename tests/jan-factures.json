@@ -1,0 +1,102 @@
+{
+  "_source": "Extraction manuelle par Claude (session 16/07/2026) — 6 factures Colombi de janvier 2026 lues page par page depuis les PDF Pennylane (crédit API épuisé). Chaque facture VÉRIFIÉE : somme des lignes = Total H.T. imprimé, au centime. Lignes SAV/échange facturées 0 € exclues (aucun enjeu financier ; le flux marchandise SAV est hors contrôle par doctrine).",
+  "factures": [
+    {
+      "numero_facture": "FA-26-01-1467", "date_facture": "2026-01-30", "total_ht": 77.49, "total_ttc": 92.99,
+      "pdf_local": "FA26011467.pdf",
+      "lignes": [
+        { "ref": "KI0001", "designation": "PISTOLET 92 AUTO C9MM PA BRONZE (REGUL N SETRIE MAIL DU 30012026)", "qte": 1, "montant_ht": 72.99, "be": "BE26011691" }
+      ]
+    },
+    {
+      "numero_facture": "FA-26-01-0994", "date_facture": "2026-01-22", "total_ht": 279.44, "total_ttc": 335.33,
+      "pdf_local": "FA26010994.pdf",
+      "_note": "17 lignes Echange SAV à 0 € exclues (PR004×7, SN0014, PR013, PR006×3, 490089, PR005, PR009×3, 490145, CR00021×4, CR00013×2, LTLPK03×2, LTL006×2, 5334, RO44475, 70, KI0001, CR00005)",
+      "lignes": [
+        { "ref": "16553", "designation": "PISTOLET GNB STEYR M9-A1 BICOLORE 4.5 CO2-BBS — METTRE 16533 SUITE ERREUR BE25121641", "qte": 6, "montant_ht": 263.94, "be": "BE26011110" },
+        { "ref": "80630", "designation": "SNOWPEAK SR1200S REAR SIGHT #5", "qte": 2, "montant_ht": 6.00, "be": "BE26011110" },
+        { "ref": "80629", "designation": "SNOWPEAK SR1200S REAR SIGHT SCREW M3X6 #4", "qte": 4, "montant_ht": 2.00, "be": "BE26011110" },
+        { "ref": "80628", "designation": "SNOWPEAK SR1200S H-L ADJUST SCREW #3", "qte": 2, "montant_ht": 2.00, "be": "BE26011110" },
+        { "ref": "80631", "designation": "SNOWPEAK SR1200S H-L ADJUST SPRING #6", "qte": 2, "montant_ht": 1.00, "be": "BE26011110" }
+      ]
+    },
+    {
+      "numero_facture": "FA-26-01-1061", "date_facture": "2026-01-23", "total_ht": 14314.50, "total_ttc": 17177.40,
+      "pdf_local": "FA26011061.pdf",
+      "lignes": [
+        { "ref": "VES003", "designation": "PISTOLET SENTINEL C50 + EXTENSION DE CANON TACHYON-S", "qte": 200, "montant_ht": 14310.00, "be": "BE26011182" }
+      ]
+    },
+    {
+      "numero_facture": "FA-26-01-1389", "date_facture": "2026-01-29", "total_ht": 12354.50, "total_ttc": 14825.40,
+      "pdf_local": "FA26011389.pdf",
+      "lignes": [
+        { "ref": "PO0003", "designation": "PLOMBS PLATS C4.5 X500", "qte": 5000, "montant_ht": 12350.00, "be": "BE26011559" }
+      ]
+    },
+    {
+      "numero_facture": "FA-26-01-1237", "date_facture": "2026-01-27", "total_ht": 41703.82, "total_ttc": 50044.58,
+      "pdf_local": "FA26011237.pdf",
+      "lignes": [
+        { "ref": "REM008", "designation": "CARABINE TYRANT CAMO C4.5 19.9J + LUNETTE 4X32", "qte": 3, "montant_ht": 333.60, "be": "BE26011446" },
+        { "ref": "491024", "designation": "REVOLVER 357 BB C4.5MM SNR 4.5J", "qte": 10, "montant_ht": 872.00, "be": "BE26011446" },
+        { "ref": "857000", "designation": "EMBASE BAR 1 PIECE LONGUE 12.5 CM", "qte": 15, "montant_ht": 298.50, "be": "BE26011446" },
+        { "ref": "18615", "designation": "REVOLVER GNB DAN WESSON DW715 2.5'' SILVER 4.5 CO2-PLOMBS", "qte": 8, "montant_ht": 697.60, "be": "BE26011446" },
+        { "ref": "CR00005", "designation": "CARABINE MAG FIRE EXTREM NP 4.5 19.9J + LUNETTE 3-9X40", "qte": 5, "montant_ht": 836.00, "be": "BE26011446" },
+        { "ref": "490121", "designation": "CARABINE DPMS SBR CO2 FULL AUTO BB'S 3.2J", "qte": 20, "montant_ht": 3824.00, "be": "BE26011446" },
+        { "ref": "490041", "designation": "REVOLVER VIGILANTE CO2 C4.5 4.4J", "qte": 7, "montant_ht": 447.93, "be": "BE26011446" },
+        { "ref": "2227", "designation": "NECESSAIRE NETTOYAGE BOITE PLASTIQUE LAITON C4.5MM", "qte": 40, "montant_ht": 305.60, "be": "BE26011446" },
+        { "ref": "2446", "designation": "CHARGE POUDRE C44 X48", "qte": 23, "montant_ht": 1076.17, "be": "BE26011446" },
+        { "ref": "6000", "designation": "BALLE 9MM PA A BLANC X50-400BARS", "qte": 40, "montant_ht": 287.60, "be": "BE26011446" },
+        { "ref": "CB00002", "designation": "BOMBE GAZ DEFENSE CS PRO NG 100ML", "qte": 132, "montant_ht": 1569.48, "be": "BE26011446" },
+        { "ref": "CB00003", "designation": "BOMBE GEL DEFENSE CS PRO NG 100ML", "qte": 133, "montant_ht": 1750.28, "be": "BE26011446" },
+        { "ref": "11310", "designation": "BOMBE RED PEPPER CAPOT CLAPET 75ML", "qte": 200, "montant_ht": 994.00, "be": "BE26011446" },
+        { "ref": "11307", "designation": "BOMBE GAZ DEFENSE CS CAPOT CLAPET 50ML", "qte": 50, "montant_ht": 173.50, "be": "BE26011446" },
+        { "ref": "2001", "designation": "VERROU DE PONTET A CLE", "qte": 233, "montant_ht": 1088.11, "be": "BE26011446" },
+        { "ref": "SN0026", "designation": "CARABINE T-REX PCP C4.5 19.9J", "qte": 10, "montant_ht": 1496.00, "be": "BE26011446" },
+        { "ref": "SN0006", "designation": "CARABINE PR900W G2 PCP SYNTHETIQUE C4.5 19J", "qte": 13, "montant_ht": 1404.00, "be": "BE26011446" },
+        { "ref": "SN0000", "designation": "CARABINE SR1000X C4.5 19.9J", "qte": 25, "montant_ht": 2380.00, "be": "BE26011446" },
+        { "ref": "SN0018", "designation": "CARABINE T-REX PCP C5.5 19.9J", "qte": 22, "montant_ht": 3291.20, "be": "BE26011446" },
+        { "ref": "SN0021", "designation": "REVOLVER CP300 C50 13J", "qte": 110, "montant_ht": 3630.00, "be": "BE26011446" },
+        { "ref": "LTL006", "designation": "PACK PISTOLET ALFA 1.50 CO2 C50", "qte": 200, "montant_ht": 13800.00, "be": "BE26011446" },
+        { "ref": "CASB44", "designation": "REPLIQUE 1860 ARMY ACIER BLANC CROSSE IVOIRINE CAL 44 PN (sérialisés)", "qte": 3, "montant_ht": 897.75, "be": "BE26011446" },
+        { "ref": "EK0013", "designation": "REVOLVER VIPER 2.5'' BLACK 9MM R (sérialisés)", "qte": 4, "montant_ht": 246.00, "be": "BE26011446" }
+      ]
+    },
+    {
+      "numero_facture": "FA-26-01-0649", "date_facture": "2026-01-15", "total_ht": 32272.46, "total_ttc": 38726.95,
+      "pdf_local": "FA26010649.pdf",
+      "_note": "SN0001 ×2 'sav' à 0 € exclu. Sérialisés agrégés : EK0004×20, KI0001×20, EK0007×10, RNC44×18, RGA44×5, YANDL44STAG×5, PI00008×20, RGA4412×5, REB44×20. Somme lignes = 32 267.96 = Total HT produits imprimé ✓",
+      "lignes": [
+        { "ref": "11307", "designation": "BOMBE GAZ DEFENSE CS CAPOT CLAPET 50ML", "qte": 100, "montant_ht": 347.00, "be": "BE26010712" },
+        { "ref": "11312", "designation": "BOMBE RED PEPPER CAPOT CLAPET 50ML", "qte": 100, "montant_ht": 419.00, "be": "BE26010712" },
+        { "ref": "490072", "designation": "CARABINE SHOCKWAVE NP 4.5 19.9J + LUNETTE 4X32", "qte": 20, "montant_ht": 2224.00, "be": "BE26010712" },
+        { "ref": "SN0018", "designation": "CARABINE T-REX PCP C5.5 19.9J", "qte": 10, "montant_ht": 1496.00, "be": "BE26010712" },
+        { "ref": "4891", "designation": "CLE DEMONTE CHEMINEE + 6 CHEMINEES", "qte": 30, "montant_ht": 314.70, "be": "BE26010712" },
+        { "ref": "5334", "designation": "LANCE PIERRE TARGET REPOSE POIGNEE", "qte": 43, "montant_ht": 328.52, "be": "BE26010712" },
+        { "ref": "SN0023", "designation": "PISTOLET PP20 GEN2 PCP C4.5 7.5J", "qte": 1, "montant_ht": 319.20, "be": "BE26010712" },
+        { "ref": "490051", "designation": "CARABINE VANTAGE BOIS NP 4.5 19.9J + LUNETTE 4X32", "qte": 20, "montant_ht": 2224.00, "be": "BE26010712" },
+        { "ref": "16086", "designation": "PISTOLET GNB CZ 75D COMPACT 4.5 CO2-BBS", "qte": 10, "montant_ht": 399.90, "be": "BE26010712" },
+        { "ref": "REM007", "designation": "CARABINE TYRANT BOIS C4.5 19.9J + LUNETTE 4X32", "qte": 10, "montant_ht": 992.00, "be": "BE26010712" },
+        { "ref": "16200", "designation": "PISTOLET GNB CZ 75D COMPACT BICOLORE 4.5 CO2-BBS", "qte": 10, "montant_ht": 495.90, "be": "BE26010712" },
+        { "ref": "19818", "designation": "PISTOLET GBB 1911 US CO2 4.5-BBS", "qte": 5, "montant_ht": 399.95, "be": "BE26010712" },
+        { "ref": "VE00110", "designation": "POINT ROUGE MAVERICK III 1X22 SOP 3MOA GRIS", "qte": 10, "montant_ht": 509.90, "be": "BE26010712" },
+        { "ref": "BB002", "designation": "CARABINE BM8 NOIR C4.5 19.9J", "qte": 5, "montant_ht": 718.25, "be": "BE26010712" },
+        { "ref": "549500", "designation": "DOUILLE AMORTISSEUR PLASTIQUE C12 BLISTER X2", "qte": 47, "montant_ht": 115.62, "be": "BE26010712" },
+        { "ref": "18614", "designation": "REVOLVER GNB DAN WESSON DW715 2.5'' SILVER 4.5 CO2-BBS", "qte": 5, "montant_ht": 436.00, "be": "BE26010712" },
+        { "ref": "PR021", "designation": "BILLES EN CAOUTCHOUC ACIER CAL.50 X50", "qte": 486, "montant_ht": 2561.22, "be": "BE26010712" },
+        { "ref": "EK0004", "designation": "PISTOLET FIRAT MAGNUM CHROME 9MM PA (sérialisés)", "qte": 20, "montant_ht": 1185.00, "be": "BE26010712" },
+        { "ref": "KI0001", "designation": "PISTOLET 92 AUTO C9MM PA BRONZE (sérialisés)", "qte": 20, "montant_ht": 1094.80, "be": "BE26010712" },
+        { "ref": "EK0007", "designation": "PISTOLET BOTAN NOIR 9MM PA (sérialisés)", "qte": 10, "montant_ht": 465.00, "be": "BE26010712" },
+        { "ref": "RNC44", "designation": "REPLIQUE 1851 NAVY LAITON CARBINE CAL 44 PN (sérialisés)", "qte": 18, "montant_ht": 3361.50, "be": "BE26010712" },
+        { "ref": "RO00034", "designation": "CARABINE PUMA TACTICAL 44MAG INOX (sérialisés)", "qte": 3, "montant_ht": 1620.00, "be": "BE26010712" },
+        { "ref": "RGA44", "designation": "REPLIQUE 1858 RM ACIER CAL 44 PN (sérialisés)", "qte": 5, "montant_ht": 1196.25, "be": "BE26010712" },
+        { "ref": "YANDL44STAG", "designation": "REPLIQUE 1851 NAVY YANK ACIER DELUXE STAG LIKE CAL 44 PN (sérialisés)", "qte": 5, "montant_ht": 1383.75, "be": "BE26010712" },
+        { "ref": "PI00008", "designation": "REPLIQUE 1851 NAVY MILLENIUM US MARTIAL LAITON CAL 44 PN CLAV (sérialisés)", "qte": 20, "montant_ht": 2685.00, "be": "BE26010712" },
+        { "ref": "RGSSH44LC", "designation": "REPLIQUE 1858 RM INOX SHERIFF QUADRILLEE CAL 44 PN", "qte": 1, "montant_ht": 344.25, "be": "BE26010712" },
+        { "ref": "RGA4412", "designation": "REPLIQUE 1858 RM BUFFALO ACIER 12 POUCES CAL 44 PN (sérialisés)", "qte": 5, "montant_ht": 1196.25, "be": "BE26010712" },
+        { "ref": "REB44", "designation": "REPLIQUE 1851 NAVY LAITON CAL 44 PN (promo, sérialisés)", "qte": 20, "montant_ht": 3435.00, "be": "BE26010712" }
+      ]
+    }
+  ]
+}
