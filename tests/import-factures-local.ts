@@ -59,6 +59,12 @@ const avecTimeout = <T,>(p: Promise<T>, ms: number): Promise<T> =>
   const colombi = await listeColombi();
   log(`${colombi.length} documents Colombi (relance : les déjà-importés seront des doublons)`);
   const catalogue = await chargerCatalogue(sb).catch(() => new Set<string>());
+  // Numéros déjà en base, NORMALISÉS (FA-26-06-0258 → FA26060258) : le pré-dédup par
+  // ilike ratait les n° à tirets → re-parsing payant de documents déjà importés.
+  const dejaImportes = new Set<string>();
+  for (const { data } of [await sb.from('factures').select('numero_facture'), await sb.from('be_receptions').select('numero_be')]) {
+    for (const r of (data ?? [])) dejaImportes.add(normNum(String(Object.values(r)[0] ?? '')));
+  }
   let factOk = 0, beOk = 0, dbl = 0, echecs = 0, coutTotal = 0;
   for (const [i, it] of colombi.entries()) {
     const label = `${it.date} ${it.invoice_number ?? '?'} (${it.amount} €)`;
@@ -67,7 +73,7 @@ const avecTimeout = <T,>(p: Promise<T>, ms: number): Promise<T> =>
       // PRÉ-DÉDUP par n° Pennylane : évite de re-parser (temps + argent) un document déjà
       // importé. Les n° non significatifs (« 003 ») passent au parsing (dédup post-parse).
       const num = String(it.invoice_number ?? '');
-      if (/^(FA|BE)/i.test(num) && (await isDuplicate('factures', 'numero_facture', num) || await isDuplicate('be_receptions', 'numero_be', num))) {
+      if (/^(FA|BE)/i.test(num) && dejaImportes.has(normNum(num))) {
         dbl++; log(`DÉJÀ  [${i + 1}/${colombi.length}] ${label} — importé, pas de re-parsing`); continue;
       }
       const fr = await avecTimeout(fetch(String(it.public_file_url)), 60_000);
