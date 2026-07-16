@@ -1242,14 +1242,20 @@ export async function POST(req: Request) {
   // pointage OUVERTES (existantes + fraîches de ce run) pour savoir quand le reçu ③
   // est CONTESTÉ — un reçu gonflé par une double saisie non apurée rendrait « conforme »
   // une facture qui paie du non-livré (17655 : papier 10, Livré 30 → facture de 30 OK ?!).
-  const TYPES_CONTESTE = new Set(['sur-saisie log', 'réception non détaillée']);
+  // « Contesté » = SEULEMENT les anomalies qui suggèrent un reçu GONFLÉ (le danger pour une
+  // facture « conforme ») : sur-saisie log (double saisie), et réception non détaillée CÔTÉ
+  // RÉCEPTION (§3h : Livré > détail = order/view perd des lignes, souvent double). Les
+  // « réception non détaillée » du POINTAGE (bien reçu, compensé, retrouvée ailleurs…) ne
+  // contestent PAS le reçu → les inclure noyait le Centre (114 fausses « à vérifier »).
+  const conteste = (type: string, origine: string | null | undefined) =>
+    type === 'sur-saisie log' || (type === 'réception non détaillée' && origine === 'réception');
   const refsRecuConteste = new Set<string>();
   for (const e of (exR.data ?? [])) {
-    if (!['ouverte', 'en cours'].includes(String(e.statut_exception)) || !TYPES_CONTESTE.has(String(e.type_exception))) continue;
+    if (!['ouverte', 'en cours'].includes(String(e.statut_exception)) || !conteste(String(e.type_exception), e.origine)) continue;
     for (const t of String(e.reference_article ?? '').split(', ')) { const a = aliasRef(t); if (a) refsRecuConteste.add(a); }
   }
   for (const n of nouvelles) {
-    if (!TYPES_CONTESTE.has(n.type_exception)) continue;
+    if (!conteste(n.type_exception, n.origine)) continue;
     for (const t of String(n.reference_article ?? '').split(', ')) { const a = aliasRef(t); if (a) refsRecuConteste.add(a); }
   }
   const factControles = controlerLignesFacture(
