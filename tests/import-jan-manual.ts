@@ -16,7 +16,9 @@ const SCRATCH = 'C:/Users/COMPTA~1/AppData/Local/Temp/claude/C--Users-Compta-02/
 
 interface Ligne { ref: string; designation: string; qte: number; montant_ht: number; be: string }
 interface Fact { numero_facture: string; date_facture: string; total_ht: number; total_ttc: number; pdf_local: string; lignes: Ligne[] }
-const data = JSON.parse(fs.readFileSync('C:/Users/Compta-02/syncflow/tests/jan-factures.json', 'utf8')) as { factures: Fact[] };
+// Fichier de données en argument (défaut : janvier). Ex : npx tsx tests/import-jan-manual.ts tests/dec-factures.json
+const DATA_PATH = process.argv[2] ?? 'C:/Users/Compta-02/syncflow/tests/jan-factures.json';
+const data = JSON.parse(fs.readFileSync(DATA_PATH, 'utf8')) as { factures: Fact[] };
 
 (async () => {
   let ok = 0, dbl = 0;

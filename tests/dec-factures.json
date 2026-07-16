@@ -1,0 +1,151 @@
+{
+  "_source": "Extraction manuelle par Claude (session 16/07/2026) — 8 factures Colombi de décembre 2025 (dont 2 AVOIRS) lues page par page depuis les PDF Pennylane. Chaque facture VÉRIFIÉE : somme des lignes = Total H.T. imprimé au centime. Lignes 0 € (gestes commerciaux litige be25111719, SAV, lignes info retour, franco) exclues. Avoirs = quantités et montants NÉGATIFS.",
+  "factures": [
+    {
+      "numero_facture": "FA-25-12-0149", "date_facture": "2025-12-02", "total_ht": 40.44, "total_ttc": 48.53,
+      "pdf_local": "dec-FA25120149.pdf",
+      "_note": "EK0004 SAV 0 € + ligne info retour + franco exclus. Ligne 305000 porte « mettre 325000 à la place — erreur be25111129 reçu 305000 à la place »",
+      "lignes": [
+        { "ref": "305000", "designation": "ETUI CARTOUCHIERE 10 BALLES TOILE — mettre 325000 à la place, erreur be25111129", "qte": 6, "montant_ht": 35.94, "be": "BE25120160" }
+      ]
+    },
+    {
+      "numero_facture": "FA-25-12-0247", "date_facture": "2025-12-04", "total_ht": -35.94, "total_ttc": -43.13,
+      "pdf_local": "dec-FA25120247.pdf",
+      "_note": "AVOIR — annule les 6× 305000 de FA-25-12-0149 (erreur de réf be25111129)",
+      "lignes": [
+        { "ref": "305000", "designation": "AVOIR — ETUI CARTOUCHIERE (erreur be25111129, remplacé par 325000)", "qte": -6, "montant_ht": -35.94, "be": "BE25120322" }
+      ]
+    },
+    {
+      "numero_facture": "FA-25-12-0440", "date_facture": "2025-12-08", "total_ht": 1833.30, "total_ttc": 2199.96,
+      "pdf_local": "dec-FA25120440.pdf",
+      "lignes": [
+        { "ref": "PR020", "designation": "BILLES EN CAOUTCHOUC CAL.50 X50", "qte": 300, "montant_ht": 1128.00, "be": "BE25120467" },
+        { "ref": "846410", "designation": "CARTOUCHES 9MM PA PV PEPPER A GAZ X10", "qte": 50, "montant_ht": 463.50, "be": "BE25120467" },
+        { "ref": "845410", "designation": "CARTOUCHES 9MM CS PA A GAZ X10", "qte": 30, "montant_ht": 237.30, "be": "BE25120467" }
+      ]
+    },
+    {
+      "numero_facture": "FA-25-12-0717", "date_facture": "2025-12-12", "total_ht": 12316.70, "total_ttc": 14780.04,
+      "pdf_local": "dec-FA25120717.pdf",
+      "lignes": [
+        { "ref": "REM003", "designation": "CARABINE T-REX PCP C5.5 19.9J + LUNETTE 3-9X40", "qte": 10, "montant_ht": 2120.00, "be": "BE25120787" },
+        { "ref": "490051", "designation": "CARABINE VANTAGE BOIS NP 4.5 19.9J + LUNETTE 4X32", "qte": 10, "montant_ht": 1112.00, "be": "BE25120787" },
+        { "ref": "CR00002", "designation": "CARABINE FIRE NP 4.5 19.9J + LUNETTE 4X32 (promo)", "qte": 16, "montant_ht": 1651.20, "be": "BE25120787" },
+        { "ref": "491011", "designation": "PISTOLET 1911 CO2 BBS C4.5 3.8J", "qte": 20, "montant_ht": 799.80, "be": "BE25120787" },
+        { "ref": "845410", "designation": "CARTOUCHES 9MM CS PA A GAZ X10", "qte": 200, "montant_ht": 1582.00, "be": "BE25120787" },
+        { "ref": "846410", "designation": "CARTOUCHES 9MM PA PV PEPPER A GAZ X10", "qte": 40, "montant_ht": 370.80, "be": "BE25120787" },
+        { "ref": "PO0001", "designation": "CARTOUCHES CO2 12GR X 500", "qte": 45, "montant_ht": 4676.40, "be": "BE25120787" }
+      ]
+    },
+    {
+      "numero_facture": "FA-25-12-0823", "date_facture": "2025-12-16", "total_ht": -78.88, "total_ttc": -94.66,
+      "pdf_local": "dec-FA25120823.pdf",
+      "_note": "AVOIR — EK0004 SAV 0 € exclu. MANQUANTS confirmés par Colombi sur be25111717 (avoirs).",
+      "lignes": [
+        { "ref": "538422LR", "designation": "AVOIR — manquant sur be25111717", "qte": -1, "montant_ht": -7.39, "be": "BE25120999" },
+        { "ref": "COU003", "designation": "AVOIR — manquants sur be25111717", "qte": -5, "montant_ht": -16.95, "be": "BE25120999" },
+        { "ref": "PR010", "designation": "AVOIR — manquants sur be25111717", "qte": -6, "montant_ht": -54.54, "be": "BE25120999" }
+      ]
+    },
+    {
+      "numero_facture": "FA-25-12-1100", "date_facture": "2025-12-19", "total_ht": 50988.94, "total_ttc": 61186.73,
+      "pdf_local": "dec-FA25121100.pdf",
+      "_note": "5 lignes « geste commercial litige be25111719 » à 0 € exclues (CR00031, CR00035, CR00034, CR00022, 490006 ×1 chacun). Somme lignes = 50 984.44 = Total HT produits ✓",
+      "lignes": [
+        { "ref": "490122", "designation": "CARABINE REMINGTON EXPRESS HUNTER NP 4.5 19.9J + LUNETTE 4X32", "qte": 254, "montant_ht": 19659.60, "be": "BE25121209" },
+        { "ref": "AC329", "designation": "VALISE NOIRE POUR REVOLVER", "qte": 30, "montant_ht": 449.70, "be": "BE25121209" },
+        { "ref": "11318", "designation": "BOMBE GAZ DEFENSE CS CAPOT ACCUSOL 100ML", "qte": 181, "montant_ht": 848.89, "be": "BE25121209" },
+        { "ref": "17611", "designation": "REVOLVER GNB DAN WESSON 6'' CHROME BRILLANT", "qte": 16, "montant_ht": 1523.20, "be": "BE25121209" },
+        { "ref": "18192", "designation": "REVOLVER GNB DAN WESSON DW715 6'' SILVER", "qte": 16, "montant_ht": 1651.20, "be": "BE25121209" },
+        { "ref": "18911", "designation": "REVOLVER SCHOFIELD 6'' CO2 BLACK FULL METAL", "qte": 5, "montant_ht": 516.00, "be": "BE25121209" },
+        { "ref": "5332", "designation": "LANCE PIERRE DRAGON", "qte": 20, "montant_ht": 220.80, "be": "BE25121209" },
+        { "ref": "19803", "designation": "PISTOLET GBB ISSC M22 4.5 CO2-BBS", "qte": 5, "montant_ht": 319.95, "be": "BE25121209" },
+        { "ref": "PO0028", "designation": "POMPE A MAINS HAUTE PRESSION", "qte": 10, "montant_ht": 639.90, "be": "BE25121209" },
+        { "ref": "SN0027", "designation": "CARABINE M60 C5.5 19.9J", "qte": 2, "montant_ht": 689.60, "be": "BE25121209" },
+        { "ref": "VE00166", "designation": "POINT ROUGE MAVERICK II PLUS 1X22 SOL", "qte": 5, "montant_ht": 269.95, "be": "BE25121209" },
+        { "ref": "SN0017", "designation": "CARABINE M25 PCP C5.5 19.9J", "qte": 40, "montant_ht": 7360.00, "be": "BE25121209" },
+        { "ref": "440036", "designation": "PISTOLET AG92 C4.5 - PLOMBS", "qte": 5, "montant_ht": 299.95, "be": "BE25121209" },
+        { "ref": "11328", "designation": "BOMBE GEL RED PEPPER POIGNEE STANDARD 100ML", "qte": 262, "montant_ht": 3979.78, "be": "BE25121209" },
+        { "ref": "COU008", "designation": "CENTRES DE CIBLES 21X21 X100", "qte": 50, "montant_ht": 305.50, "be": "BE25121209" },
+        { "ref": "PR022", "designation": "BILLES PHOSPHORESCENTES VERTES CAL.50 X50", "qte": 50, "montant_ht": 283.50, "be": "BE25121209" },
+        { "ref": "17302", "designation": "PISTOLET GNB BERSA THUNDER 9 PRO 4.5", "qte": 20, "montant_ht": 511.80, "be": "BE25121209" },
+        { "ref": "845410", "designation": "CARTOUCHES 9MM CS PA A GAZ X10", "qte": 35, "montant_ht": 276.85, "be": "BE25121209" },
+        { "ref": "11322", "designation": "BOMBE GEL DEFENSE CS POIGNEE STANDARD 100ML", "qte": 100, "montant_ht": 1512.00, "be": "BE25121209" },
+        { "ref": "11309", "designation": "BOMBE RED PEPPER CAPOT 1/4 DE TOUR 25ML", "qte": 504, "montant_ht": 1406.16, "be": "BE25121209" },
+        { "ref": "11300", "designation": "BOMBE GAZ DEFENSE CS CAPOT 1/4 DE TOUR 25ML", "qte": 1000, "montant_ht": 2520.00, "be": "BE25121209" },
+        { "ref": "SN0006", "designation": "CARABINE PR900W G2 PCP SYNTHETIQUE C4.5", "qte": 7, "montant_ht": 756.00, "be": "BE25121209" },
+        { "ref": "845001", "designation": "CARTOUCHES 9MM PA FLASH DEFENCE A BLANC X10", "qte": 50, "montant_ht": 289.00, "be": "BE25121209" },
+        { "ref": "16086", "designation": "PISTOLET GNB CZ 75D COMPACT 4.5", "qte": 5, "montant_ht": 199.95, "be": "BE25121209" },
+        { "ref": "16533", "designation": "PISTOLET GBB MS DT CZ 75P-07 DUTY 4.5", "qte": 4, "montant_ht": 239.96, "be": "BE25121209" },
+        { "ref": "RO00034", "designation": "CARABINE PUMA TACTICAL 44MAG INOX (sérialisés)", "qte": 2, "montant_ht": 1080.00, "be": "BE25121209" },
+        { "ref": "RO00004", "designation": "CARABINE RIO BRAVO BOIS 22LR (sérialisés)", "qte": 2, "montant_ht": 484.20, "be": "BE25121209" },
+        { "ref": "RO00032", "designation": "FUSIL A POMPE SR-12 TACTICAL C12 BLACK (sérialisés)", "qte": 9, "montant_ht": 2691.00, "be": "BE25121209" }
+      ]
+    },
+    {
+      "numero_facture": "FA-25-12-1185", "date_facture": "2025-12-22", "total_ht": 363.50, "total_ttc": 436.20,
+      "pdf_local": "dec-FA25121185.pdf",
+      "_note": "80672 (pièce détachée SAV) 0 € exclu",
+      "lignes": [
+        { "ref": "16928A", "designation": "CIBLE 14X14 MARQUAGE NOIR AVEC SCORE X100", "qte": 100, "montant_ht": 359.00, "be": "BE25121305" }
+      ]
+    },
+    {
+      "numero_facture": "FA-25-12-1441", "date_facture": "2025-12-31", "total_ht": 32668.38, "total_ttc": 39202.06,
+      "pdf_local": "dec-FA25121441.pdf",
+      "_note": "Tout le bon BE25121641 (le dossier Steyr/17655). Sérialisés agrégés : CA00167×20, EK0003×10, INT0007×2, RO00025×2, RO00031×2. Somme lignes = 32 663.88 = Total HT produits ✓",
+      "lignes": [
+        { "ref": "16088", "designation": "PISTOLET GNB STEYR M9-A1 4.5 CO2-BBS", "qte": 6, "montant_ht": 191.94, "be": "BE25121641" },
+        { "ref": "16183", "designation": "REVOLVER GNB DAN WESSON 8'' BRONZE MAT", "qte": 6, "montant_ht": 407.94, "be": "BE25121641" },
+        { "ref": "16533", "designation": "PISTOLET GBB MS DT CZ 75P-07 DUTY 4.5", "qte": 6, "montant_ht": 359.94, "be": "BE25121641" },
+        { "ref": "17537", "designation": "PISTOLET GBB CZ P09-DUTY CO2 4.5", "qte": 6, "montant_ht": 479.94, "be": "BE25121641" },
+        { "ref": "17655", "designation": "PISTOLET 6MM SP 01 SHADOW RESSORT", "qte": 10, "montant_ht": 147.30, "be": "BE25121641" },
+        { "ref": "18047", "designation": "MALLETTE NOIRE PLASTIQUE 7X19X31CM", "qte": 8, "montant_ht": 64.00, "be": "BE25121641" },
+        { "ref": "18524", "designation": "PISTOLET GBB CZ P-09 DT FDE 4.5", "qte": 5, "montant_ht": 399.95, "be": "BE25121641" },
+        { "ref": "18612", "designation": "REVOLVER GNB DAN WESSON DW715 4'' SILVER", "qte": 5, "montant_ht": 516.00, "be": "BE25121641" },
+        { "ref": "18615", "designation": "REVOLVER GNB DAN WESSON DW715 2.5'' SILVER", "qte": 6, "montant_ht": 523.20, "be": "BE25121641" },
+        { "ref": "18911", "designation": "REVOLVER SCHOFIELD 6'' CO2 BLACK", "qte": 3, "montant_ht": 309.60, "be": "BE25121641" },
+        { "ref": "19310", "designation": "CHARGEUR AEG H15 180 COUPS BOITE DE 3", "qte": 1, "montant_ht": 24.41, "be": "BE25121641" },
+        { "ref": "11308", "designation": "BOMBE GEL DEFENSE CS CAPOT CLAPET 50ML", "qte": 150, "montant_ht": 619.50, "be": "BE25121641" },
+        { "ref": "5397", "designation": "COFFRET NETTOYAGE UNIVERSEL 27P", "qte": 10, "montant_ht": 169.90, "be": "BE25121641" },
+        { "ref": "490041", "designation": "REVOLVER VIGILANTE CO2 C4.5 (promo)", "qte": 20, "montant_ht": 1279.80, "be": "BE25121641" },
+        { "ref": "490072", "designation": "CARABINE SHOCKWAVE NP 4.5 + LUNETTE (promo)", "qte": 25, "montant_ht": 2780.00, "be": "BE25121641" },
+        { "ref": "490089", "designation": "CARABINE INFERNO C4.5 10J (promo)", "qte": 12, "montant_ht": 575.88, "be": "BE25121641" },
+        { "ref": "490107", "designation": "CARABINE OPTIMUS 4.5 19.9J + LUNETTE", "qte": 8, "montant_ht": 953.60, "be": "BE25121641" },
+        { "ref": "490144", "designation": "CARABINE AK1 CO2 FULL AUTO (promo)", "qte": 5, "montant_ht": 756.00, "be": "BE25121641" },
+        { "ref": "491024", "designation": "REVOLVER 357 BB C4.5MM SNR", "qte": 9, "montant_ht": 784.80, "be": "BE25121641" },
+        { "ref": "491033", "designation": "PISTOLET TRAIL MARK II NP C4.5 6J", "qte": 6, "montant_ht": 479.94, "be": "BE25121641" },
+        { "ref": "CR00005", "designation": "CARABINE MAG FIRE EXTREM NP (promo)", "qte": 6, "montant_ht": 1003.20, "be": "BE25121641" },
+        { "ref": "CR00021", "designation": "CARABINE MAG FIRE TRAILHAWK NP (promo)", "qte": 10, "montant_ht": 1592.00, "be": "BE25121641" },
+        { "ref": "440036", "designation": "PISTOLET AG92 C4.5 - PLOMBS", "qte": 10, "montant_ht": 599.90, "be": "BE25121641" },
+        { "ref": "8444", "designation": "BOURRE FEUTRE C44 X200", "qte": 20, "montant_ht": 389.80, "be": "BE25121641" },
+        { "ref": "PO0007", "designation": "CARTOUCHES CO2 88GR X 1", "qte": 50, "montant_ht": 236.00, "be": "BE25121641" },
+        { "ref": "PR004", "designation": "SHOCKER LAMPE W6 10 000 000 V", "qte": 100, "montant_ht": 909.00, "be": "BE25121641" },
+        { "ref": "PR011", "designation": "SHOCKER LAMPE SCORPIO 3 800 000 V", "qte": 35, "montant_ht": 293.65, "be": "BE25121641" },
+        { "ref": "PR007", "designation": "SHOCKER GLOSS PINK 2 000 000 V", "qte": 50, "montant_ht": 419.50, "be": "BE25121641" },
+        { "ref": "PR020", "designation": "BILLES EN CAOUTCHOUC CAL.50 X50", "qte": 100, "montant_ht": 356.00, "be": "BE25121641" },
+        { "ref": "PR021", "designation": "BILLES EN CAOUTCHOUC ACIER CAL.50 X50", "qte": 14, "montant_ht": 73.78, "be": "BE25121641" },
+        { "ref": "REM006", "designation": "CARABINE TYRANT C4.5 19.9J + LUNETTE 4X32", "qte": 5, "montant_ht": 496.00, "be": "BE25121641" },
+        { "ref": "690013", "designation": "CARABINE B3-3PP C4.5 10J", "qte": 20, "montant_ht": 640.00, "be": "BE25121641" },
+        { "ref": "690029", "designation": "PISTOLET PP700S-A PCP C4.5", "qte": 2, "montant_ht": 259.20, "be": "BE25121641" },
+        { "ref": "SN0000", "designation": "CARABINE SR1000X C4.5 19.9J", "qte": 30, "montant_ht": 2856.00, "be": "BE25121641" },
+        { "ref": "SN0006", "designation": "CARABINE PR900W G2 PCP SYNTHETIQUE", "qte": 4, "montant_ht": 432.00, "be": "BE25121641" },
+        { "ref": "SN0018", "designation": "CARABINE T-REX PCP C5.5 19.9J", "qte": 15, "montant_ht": 2244.00, "be": "BE25121641" },
+        { "ref": "SN0023", "designation": "PISTOLET PP20 GEN2 PCP C4.5 7.5J", "qte": 6, "montant_ht": 1915.20, "be": "BE25121641" },
+        { "ref": "SN0026", "designation": "CARABINE T-REX PCP C4.5 19.9J", "qte": 6, "montant_ht": 897.60, "be": "BE25121641" },
+        { "ref": "590012", "designation": "LUNETTE 3-7X20 + MONTAGE", "qte": 20, "montant_ht": 175.80, "be": "BE25121641" },
+        { "ref": "VE00020", "designation": "POINT ROUGE SCRAPPER 1X29", "qte": 3, "montant_ht": 254.97, "be": "BE25121641" },
+        { "ref": "933507", "designation": "PLOMBS PREMIER HOLLOW POINT C4.5 X500", "qte": 20, "montant_ht": 111.80, "be": "BE25121641" },
+        { "ref": "490006", "designation": "CARABINE M4-177 BB'S 6.9J", "qte": 6, "montant_ht": 431.94, "be": "BE25121641" },
+        { "ref": "933502", "designation": "PLOMBS POINTED C5.5 X500", "qte": 50, "montant_ht": 239.50, "be": "BE25121641" },
+        { "ref": "CA00167", "designation": "PISTOLET CANIK SFX COMPETITION CO2 C50 (sérialisés)", "qte": 20, "montant_ht": 1962.00, "be": "BE25121641" },
+        { "ref": "EK0003", "designation": "PISTOLET FIRAT MAGNUM NOIR 9MM PA (sérialisés)", "qte": 10, "montant_ht": 570.00, "be": "BE25121641" },
+        { "ref": "INT0007", "designation": "FUSIL SUPERPOSE INTEGRA SLUG SYNT CAL12 (sérialisés)", "qte": 2, "montant_ht": 772.20, "be": "BE25121641" },
+        { "ref": "RO00025", "designation": "CARABINE 8122 22LR CAMO (sérialisés)", "qte": 2, "montant_ht": 387.00, "be": "BE25121641" },
+        { "ref": "RO00031", "designation": "CARABINE 8122 22LR TACTICAL (promo, sérialisés)", "qte": 2, "montant_ht": 322.20, "be": "BE25121641" }
+      ]
+    }
+  ]
+}
