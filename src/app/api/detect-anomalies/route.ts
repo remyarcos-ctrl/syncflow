@@ -77,7 +77,7 @@ export async function POST(req: Request) {
     selectAll(() => sb.from('lignes_be').select('be_id, reference_article, designation, quantite_receptionnee, hors_systeme, statut_retour, ref_cde_client')),
     selectAll(() => sb.from('lignes_commande').select('commande_id, reference_article, quantite_commandee, pu_commande, quantite_receptionnee_reelle, quantite_restante_a_recevoir')),
     selectAll(() => sb.from('saisies_cl').select('numero_be, reference_article, quantite_recue, commande_ref')),
-    selectAll(() => sb.from('be_receptions').select('id, numero_be')),
+    selectAll(() => sb.from('be_receptions').select('id, numero_be, date_bl')),
     selectAll(() => sb.from('lignes_facture').select('id, facture_id, ligne_no, reference_article, designation, quantite_facturee, pu_facture, montant_ht, numero_be_detecte')),
     selectAll(() => sb.from('factures').select('id')),
     selectAll(() => sb.from('commandes').select('id, numero_commande_interne, bls_centralink')),
@@ -1299,6 +1299,23 @@ export async function POST(req: Request) {
         ? `Réclamation Colombi : ${ref} facturé ${c.lf.pu_facture} € au lieu de ${c.puCommande} € commandé (écart ${c.ecartPrixPct?.toFixed(1)}%) → demander avoir / facture rectificative au prix commande.${c.recuConteste ? ' ⚠ Reçu contesté par le pointage — apurer aussi.' : ''}`
         : `Réclamation Colombi : ${ref} facturé ${c.lf.quantite_facturee} pour ${c.qteRecue} reçu (écart ${c.ecartQteRecu?.toFixed(0)}) → demander avoir sur le surplus facturé. Vérifier d'abord le pointage de la réf (le reçu CL doit être juste avant de réclamer).`,
     });
+  }
+
+  // ── AMORTISSEUR « BON RÉCENT » ────────────────────────────────────────────────
+  // Un bon de moins de 10 jours est très probablement EN COURS DE SAISIE par la log
+  // (vécu : bon 0549 du 10/07, à moitié saisi le 17/07 — les « manques » étaient juste
+  // le déballage en cours). On n'efface rien (l'écart est réel tant que la saisie n'est
+  // pas finie) mais on DÉDRAMATISE : priorité faible + motif explicite. Si le bon a
+  // toujours des manques après 10 jours, il repasse naturellement en priorité normale.
+  const beDateById = new Map((beR.data ?? []).map((b) => [b.id, b.date_bl as string | null]));
+  const DIX_JOURS = 10 * 24 * 3600 * 1000;
+  for (const n of nouvelles) {
+    if (n.origine !== 'pointage' || !n.be_id) continue;
+    if (!['réception incomplète', 'réception non détaillée'].includes(n.type_exception)) continue;
+    const d = beDateById.get(n.be_id);
+    if (!d || (Date.now() - new Date(d).getTime()) > DIX_JOURS) continue;
+    n.niveau_priorite = 'faible';
+    n.motif = `🕐 Bon récent (${d}) — saisie log probablement EN COURS, re-vérifier dans quelques jours. · ${n.motif}`;
   }
 
   let inserted = 0;
