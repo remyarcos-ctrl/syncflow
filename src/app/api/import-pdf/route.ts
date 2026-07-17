@@ -19,9 +19,12 @@ async function isDuplicate(sb: ReturnType<typeof adminSb>, table: string, field:
   const norm = normalizeDocNum(value);
   const { data: exact } = await sb.from(table).select('id').eq(field, value).limit(1);
   if ((exact?.length ?? 0) > 0) return true;
-  const suffix = norm.slice(-8);
-  if (suffix.length < 4) return false;
-  const { data } = await sb.from(table).select(field).ilike(field, `%${suffix}%`);
+  // Comparaison NORMALISÉE sur tous les numéros : l'ancien filtre ilike sur le suffixe
+  // ratait les graphies à tirets (« BE26031095 » ne matche pas « BE-26-03-1095 ») →
+  // les scans de bons joints aux factures créaient des BONS EN DOUBLE au papier fantôme
+  // (vécu 17/07 : 1094/1095/1125 dupliqués, +1008 VES001 fantômes). Tables petites
+  // (≤ quelques centaines de lignes) → un scan complet normalisé est trivial et sûr.
+  const { data } = await sb.from(table).select(field).limit(5000);
   return (data ?? []).some((row) => normalizeDocNum(String((row as unknown as Record<string, unknown>)[field] ?? '')) === norm);
 }
 
